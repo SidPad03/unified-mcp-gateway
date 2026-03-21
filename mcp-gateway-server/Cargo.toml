@@ -1,0 +1,57 @@
+[package]
+name = "mcp-gateway-server"
+version = "1.0.0"
+edition = "2021"
+description = "MCP Gateway - MCP aggregation, routing, and security layer"
+license = "Apache-2.0"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web framework
+axum = { version = "0.7", features = ["macros", "ws"] }
+tower = { version = "0.4", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Auth
+jsonwebtoken = "10"
+argon2 = "0.5"
+
+# IDs and time
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Crypto
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+
+# Config
+dotenvy = "0.15"
+anyhow = "1"
+regex = "1"
+semver = "1"
+
+# HTTP client (for remote backends)
+reqwest = { version = "0.12", features = ["json", "native-tls"] }
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"

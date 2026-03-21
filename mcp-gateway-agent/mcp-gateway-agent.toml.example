@@ -1,0 +1,47 @@
+[agent]
+agent_id = "my-machine"
+gateway_url = "wss://mcp-gateway.example.com/agent/ws"
+api_key = "mcpgw_YOUR_API_KEY_HERE"
+dashboard_url = "https://mcp-gateway.example.com"
+tls_skip_verify = false
+
+[[backends]]
+name = "serena"
+transport = "stdio"
+command = "uvx"
+args = [
+    "--from",
+    "git+https://github.com/oraios/serena",
+    "serena",
+    "start-mcp-server"
+]
+
+[backends.env]
+
+[backends.headers]
+
+[[backends]]
+name = "playwright"
+transport = "stdio"
+command = "npx"
+args = [
+    "@playwright/mcp@latest",
+]
+
+[backends.env]
+
+[backends.headers]
+
+[[backends]]
+name = "obsidian"
+transport = "stdio"
+command = "npx"
+args = ["obsidian-mcp-server"]
+
+[backends.env]
+OBSIDIAN_API_KEY = "YOUR_OBSIDIAN_API_KEY_HERE"
+OBSIDIAN_BASE_URL = "http://localhost:27123/"
+OBSIDIAN_VERIFY_SSL = "false"
+OBSIDIAN_ENABLE_CACHE = "true"
+
+[backends.headers]

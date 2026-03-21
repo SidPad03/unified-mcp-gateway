@@ -1,0 +1,54 @@
+# MCP Gateway - Configuration File
+# Copy to mcp-gateway.toml and modify as needed
+
+[gateway]
+listen_addr = "127.0.0.1:3100"
+transport = "streamable-http"       # "streamable-http" | "sse" | "stdio"
+dashboard_port = 3200
+log_level = "info"                  # "trace" | "debug" | "info" | "warn" | "error"
+
+[storage]
+db_path = "~/.mcp-gateway/mcp-gateway.db"
+audit_retention_days = 90
+full_capture = false                # Enable encrypted payload storage
+encryption_key_path = ""            # Path to AES-256 key file
+
+[auth]
+enabled = true
+jwt_secret = ""                     # Auto-generated on first run if empty
+token_expiry_hours = 24
+
+[[backends]]
+name = "github"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
+risk_category = "external-api"
+enabled = true
+health_check_interval_secs = 30
+restart_policy = "on-failure"
+max_restarts = 3
+
+[[backends]]
+name = "filesystem"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"]
+risk_category = "filesystem"
+enabled = true
+
+[[backends]]
+name = "remote-db"
+transport = "streamable-http"
+url = "http://localhost:8080/mcp"
+risk_category = "write"
+enabled = true
+
+# Agent backends are registered dynamically when an MCP Gateway Agent connects.
+# You can pre-create one to set risk_category, or let the agent auto-register.
+# [[backends]]
+# name = "macbook-sid"            # Must match the agent_id in mcp-gateway-agent.toml
+# transport = "agent"
+# risk_category = "external-api"
+# enabled = true

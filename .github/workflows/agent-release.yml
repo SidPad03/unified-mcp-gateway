@@ -1,0 +1,110 @@
+name: Build Agent
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mcp-gateway-agent/**'
+  workflow_dispatch:
+
+jobs:
+  build-agent:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute agent version
+        id: version
+        run: |
+          BASE=$(grep '^version' mcp-gateway-agent/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          MAJOR_MINOR=$(echo "$BASE" | cut -d. -f1-2)
+
+          # Count agent releases matching this major.minor to auto-increment patch
+          EXISTING=$(gh release list --limit 100 --json tagName -q '.[].tagName' \
+            | grep "^agent-v${MAJOR_MINOR}\." \
+            | sed "s/agent-v${MAJOR_MINOR}\.//" \
+            | sort -n | tail -1 || true)
+
+          if [ -z "$EXISTING" ]; then
+            PATCH=0
+          else
+            PATCH=$((EXISTING + 1))
+          fi
+
+          VERSION="${MAJOR_MINOR}.${PATCH}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Agent version: ${VERSION}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Add Rust targets
+        run: |
+          rustup target add \
+            aarch64-apple-darwin x86_64-apple-darwin \
+            x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+            x86_64-pc-windows-gnu
+
+      - name: Install cargo-zigbuild and cross-compilation tools
+        run: |
+          pip3 install --break-system-packages ziglang
+          cargo install cargo-zigbuild --locked
+          sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Patch agent version in Cargo.toml
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i "0,/^version = \".*\"/s//version = \"${VERSION}\"/" mcp-gateway-agent/Cargo.toml
+          echo "Patched Cargo.toml to version ${VERSION}"
+          head -5 mcp-gateway-agent/Cargo.toml
+
+      - name: Build all targets
+        run: |
+          cd mcp-gateway-agent
+          cargo zigbuild --release --target aarch64-apple-darwin
+          cargo zigbuild --release --target x86_64-apple-darwin
+          cargo zigbuild --release --target x86_64-unknown-linux-gnu
+          cargo zigbuild --release --target aarch64-unknown-linux-gnu
+          cargo zigbuild --release --target x86_64-pc-windows-gnu
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="agent-v${VERSION}"
+          mkdir -p release-assets
+
+          # Copy binaries
+          cp mcp-gateway-agent/target/aarch64-apple-darwin/release/mcp-gateway-agent \
+             release-assets/mcp-gateway-agent-aarch64-apple-darwin
+          cp mcp-gateway-agent/target/x86_64-apple-darwin/release/mcp-gateway-agent \
+             release-assets/mcp-gateway-agent-x86_64-apple-darwin
+          cp mcp-gateway-agent/target/x86_64-unknown-linux-gnu/release/mcp-gateway-agent \
+             release-assets/mcp-gateway-agent-x86_64-unknown-linux-gnu
+          cp mcp-gateway-agent/target/aarch64-unknown-linux-gnu/release/mcp-gateway-agent \
+             release-assets/mcp-gateway-agent-aarch64-unknown-linux-gnu
+          cp mcp-gateway-agent/target/x86_64-pc-windows-gnu/release/mcp-gateway-agent.exe \
+             release-assets/mcp-gateway-agent-x86_64-pc-windows-gnu.exe
+
+          # Generate checksums
+          cd release-assets
+          sha256sum * > checksums.sha256
+          cd ..
+
+          # Create GitHub release with assets
+          gh release create "$TAG" \
+            --title "Agent v${VERSION}" \
+            --notes "MCP Gateway Agent v${VERSION}
+          Platforms: macOS (arm64, x86_64), Linux (x86_64, arm64), Windows (x86_64)" \
+            --target main \
+            release-assets/*

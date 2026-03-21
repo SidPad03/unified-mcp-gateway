@@ -1,0 +1,41 @@
+# Rust
+debug/
+target/
+**/*.rs.bk
+*.pdb
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Environment
+.env
+.env.local
+*.pem
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+
+# Docker
+.docker/
+
+# Certificates (private CA certs)
+certs/
+
+# Other
+.serena
+.claude

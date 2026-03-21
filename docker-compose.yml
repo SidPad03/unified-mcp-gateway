@@ -1,0 +1,52 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mcpgateway
+      POSTGRES_USER: mcpgateway
+      POSTGRES_PASSWORD: mcpgateway
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcpgateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mcp-gateway-server:
+    build:
+      context: ./mcp-gateway-server
+      dockerfile: Dockerfile
+    ports:
+      - "3200:3200"
+    environment:
+      DATABASE_URL: postgresql://mcpgateway:mcpgateway@postgres:5432/mcpgateway
+      JWT_SECRET: mcpgw-dev-secret-change-in-production
+      LISTEN_ADDR: "0.0.0.0:3200"
+      RUST_LOG: mcp_gateway_server=info,tower_http=debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3200/metrics || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  mcp-gateway-dashboard:
+    build:
+      context: ./mcp-gateway-dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      mcp-gateway-server:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

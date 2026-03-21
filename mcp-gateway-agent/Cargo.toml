@@ -1,0 +1,62 @@
+[package]
+name = "mcp-gateway-agent"
+version = "1.0.0"
+edition = "2021"
+description = "MCP Gateway Agent - connects local MCP backends to a remote MCP Gateway"
+license = "Apache-2.0"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# WebSocket client
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false }
+rustls-pki-types = "1"
+
+# Futures utilities (for split, SinkExt, StreamExt)
+futures-util = { version = "0.3", features = ["sink"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# HTTP client (for local HTTP MCP backends like Obsidian)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream"] }
+
+# IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+
+# TUI
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Update mechanism
+semver = "1"
+sha2 = "0.10"
+hex = "0.4"
+self-replace = "1"
+
+# Utilities
+dirs = "5"
+hostname = "0.4"
+cfg-if = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"
