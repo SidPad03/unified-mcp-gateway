@@ -12,9 +12,7 @@ A self-hosted MCP-native aggregation, routing, and security layer for desktop AI
 
 ## Demo
 
-[https://github.com/user-attachments/assets/mcp-gateway-demo.mp4](https://github.com/user-attachments/assets/9e14c653-28a4-44d4-8388-491d361aa680)
-
-<video src="mcp-gateway-demo.mp4" width="100%" autoplay loop muted></video>
+https://github.com/user-attachments/assets/d34467d1-8485-45d3-847f-7f9274142f7f
 
 ## Architecture
 
