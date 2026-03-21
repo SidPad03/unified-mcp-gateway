@@ -192,7 +192,7 @@ async fn connect_and_run(
         backends: sub_backends,
     };
     let register_json = serde_json::to_string(&register)?;
-    write.send(Message::Text(register_json)).await?;
+    write.send(Message::Text(register_json.into())).await?;
 
     tracing::info!(tool_count = tools.len(), "Sent register message");
     emit(events, AgentEvent::Log {
@@ -258,7 +258,7 @@ async fn connect_and_run(
 
                 let ping = AgentMessage::Ping;
                 let text = serde_json::to_string(&ping).unwrap();
-                if write_tx.send(Message::Text(text)).await.is_err() {
+                if write_tx.send(Message::Text(text.into())).await.is_err() {
                     break;
                 }
             }
@@ -304,7 +304,7 @@ async fn connect_and_run(
                                         },
                                     };
                                     let text = serde_json::to_string(&response).unwrap();
-                                    let _ = tx.send(Message::Text(text)).await;
+                                    let _ = tx.send(Message::Text(text.into())).await;
 
                                     emit(&events_tx, AgentEvent::ToolCallCompleted {
                                         request_id: req_id,
@@ -341,7 +341,7 @@ async fn connect_and_run(
                                     backends: sub_backends,
                                 };
                                 let text = serde_json::to_string(&register).unwrap();
-                                if write_tx.send(Message::Text(text)).await.is_err() {
+                                if write_tx.send(Message::Text(text.into())).await.is_err() {
                                     break;
                                 }
                                 emit(events, AgentEvent::Log {
