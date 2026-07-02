@@ -4,7 +4,16 @@ import { api, User } from '@/lib/api';
 export function useAuth() {
   const [user, setUser] = useState<User | null>(() => {
     const stored = localStorage.getItem('mcpgw_user');
-    return stored ? JSON.parse(stored) : null;
+    if (!stored) return null;
+    try {
+      return JSON.parse(stored);
+    } catch {
+      // Corrupt/partial value in storage — drop it instead of crashing the app
+      // (an unhandled throw here white-screens the whole dashboard on load).
+      localStorage.removeItem('mcpgw_user');
+      localStorage.removeItem('mcpgw_token');
+      return null;
+    }
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +41,19 @@ export function useAuth() {
     setUser(null);
   }, []);
 
-  const isAdmin = user?.roles?.includes('owner') ?? false;
+  // Clear the first-login "must change password" flag once the user has set a
+  // new password, persisting the change so a page reload doesn't re-prompt.
+  const completePasswordChange = useCallback(() => {
+    setUser(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev, must_change_password: false };
+      localStorage.setItem('mcpgw_user', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
 
-  return { user, login, logout, isLoading, error, isAdmin };
+  const isAdmin = user?.roles?.includes('owner') ?? false;
+  const mustChangePassword = user?.must_change_password ?? false;
+
+  return { user, login, logout, isLoading, error, isAdmin, mustChangePassword, completePasswordChange };
 }

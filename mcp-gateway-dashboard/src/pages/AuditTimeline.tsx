@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { api, AuditEvent } from '@/lib/api';
+import React, { useState, useEffect } from 'react';
+import { api, AuditEvent, User } from '@/lib/api';
 import { Search, Download, ChevronLeft, ChevronRight, Clock, CheckCircle, XCircle, ShieldOff, X, Filter, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { SUPPORTED_APPS } from '@/lib/connectors';
@@ -16,13 +16,13 @@ const POLICY_DECISIONS = ['allow', 'deny', 'conditional'];
 
 const APP_COLORS: Record<string, string> = {
   claude: 'bg-orange-500/10 text-orange-400',
-  claudedesktop: 'bg-amber-500/10 text-amber-400',
-  cursor: 'bg-blue-500/10 text-blue-400',
-  vscode: 'bg-cyan-500/10 text-cyan-400',
-  openwebui: 'bg-green-500/10 text-green-400',
+  claudedesktop: 'bg-orange-500/10 text-orange-400',
+  cursor: 'bg-gray-500/10 text-gray-400',
+  vscode: 'bg-blue-500/10 text-blue-400',
+  openwebui: 'bg-gray-400/10 text-gray-300',
   clawbot: 'bg-purple-500/10 text-purple-400',
-  codex: 'bg-pink-500/10 text-pink-400',
-  lmstudio: 'bg-yellow-500/10 text-yellow-400',
+  codex: 'bg-emerald-500/10 text-emerald-400',
+  lmstudio: 'bg-violet-500/10 text-violet-400',
 };
 
 export default function AuditTimeline() {
@@ -47,6 +47,7 @@ export default function AuditTimeline() {
 
   const [selectedEvent, setSelectedEvent] = useState<AuditEvent | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [users, setUsers] = useState<User[]>([]);
   const limit = 20;
 
   // Derived filter values from events for autocomplete
@@ -62,6 +63,12 @@ export default function AuditTimeline() {
     // Load initial set to extract filter values
     loadFilterOptions();
   }, []);
+
+  useEffect(() => {
+    api.getUsers().then(setUsers).catch(() => {});
+  }, []);
+
+  const userMap = new Map(users.map(u => [u.user_id, u.username]));
 
   const loadFilterOptions = async () => {
     try {
@@ -269,7 +276,7 @@ export default function AuditTimeline() {
                 className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
               >
                 <option value="">All Users</option>
-                {knownUsers.map(u => <option key={u} value={u}>{u.slice(0, 8)}...</option>)}
+                {knownUsers.map(u => <option key={u} value={u}>{userMap.get(u) || u.slice(0, 8)}</option>)}
               </select>
             </div>
             <div>
@@ -349,87 +356,97 @@ export default function AuditTimeline() {
         </div>
       )}
 
-      {/* Timeline */}
-      <div className="space-y-1">
-        {loading ? (
-          <div className="bg-surface border border-border rounded-xl p-12 text-center text-gray-500 text-sm">Loading events...</div>
-        ) : events.length === 0 ? (
-          <div className="bg-surface border border-border rounded-xl p-12 text-center text-gray-500 text-sm">No audit events found</div>
-        ) : (
-          events.map(event => {
-            const config = STATUS_CONFIG[event.status] || STATUS_CONFIG.success;
-            const Icon = config.icon;
-            const isSelected = selectedEvent?.event_id === event.event_id;
-            return (
-              <div key={event.event_id}>
-                <div
-                  className={clsx(
-                    'flex items-center gap-4 px-4 py-3 bg-surface border rounded-lg cursor-pointer transition-all',
-                    isSelected ? 'border-accent/30 bg-accent/5' : 'border-border hover:border-border-hover'
-                  )}
-                  onClick={() => setSelectedEvent(isSelected ? null : event)}
-                >
-                  <div className={clsx('w-8 h-8 rounded-lg flex items-center justify-center shrink-0', config.bg)}>
-                    <Icon className={clsx('w-4 h-4', config.color)} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-white">{event.tool_name}</span>
-                      <span className="text-xs text-gray-600">via {event.backend_name}</span>
-                      {event.user_id && (
-                        <span className="text-xs text-gray-600 bg-surface-active px-1.5 py-0.5 rounded">user:{event.user_id.slice(0, 6)}</span>
+      {/* Table */}
+      <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-border">
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Timestamp</th>
+              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Tool</th>
+              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Backend</th>
+              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">App</th>
+              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Risk</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-500 text-sm">Loading events...</td></tr>
+            ) : events.length === 0 ? (
+              <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-500 text-sm">No audit events found</td></tr>
+            ) : (
+              events.map(event => {
+                const config = STATUS_CONFIG[event.status] || STATUS_CONFIG.success;
+                const Icon = config.icon;
+                const isSelected = selectedEvent?.event_id === event.event_id;
+                const username = event.user_id ? (userMap.get(event.user_id) || event.user_id.slice(0, 8)) : 'anonymous';
+                return (
+                  <React.Fragment key={event.event_id}>
+                    <tr
+                      className={clsx(
+                        'border-b border-border/50 hover:bg-surface-hover transition-colors cursor-pointer',
+                        isSelected && 'bg-accent/5'
                       )}
-                      {event.application && (
-                        <span className={clsx('text-xs px-1.5 py-0.5 rounded', APP_COLORS[event.application] || 'bg-gray-500/10 text-gray-400')}>
-                          {event.application}
+                      onClick={() => setSelectedEvent(isSelected ? null : event)}
+                    >
+                      <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">{new Date(event.timestamp).toLocaleString()}</td>
+                      <td className="px-3 py-2.5">
+                        <span className={clsx('inline-flex items-center gap-1.5 text-xs font-medium', config.color)}>
+                          <Icon className="w-3.5 h-3.5" />
+                          {event.status}
                         </span>
-                      )}
-                      {event.client_id && (
-                        <span className="text-xs text-cyan-500/70 bg-cyan-500/10 px-1.5 py-0.5 rounded">{event.client_id}</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 mt-0.5">
-                      <span className="text-xs text-gray-500">{new Date(event.timestamp).toLocaleString()}</span>
-                      {event.duration_ms && <span className="text-xs text-gray-500">{event.duration_ms.toFixed(1)}ms</span>}
-                      {event.policy_decision && event.policy_decision !== 'allow' && (
-                        <span className="text-xs text-warning">Policy: {event.policy_decision}</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    {event.risk_category && (
-                      <span className="text-xs text-gray-500 bg-surface-active px-2 py-0.5 rounded">{event.risk_category}</span>
+                      </td>
+                      <td className="px-3 py-2.5 text-sm font-medium text-white">{event.tool_name}</td>
+                      <td className="px-3 py-2.5 text-xs text-gray-400">{event.backend_name}</td>
+                      <td className="px-3 py-2.5 text-xs text-gray-300">{username}</td>
+                      <td className="px-3 py-2.5">
+                        {event.application ? (
+                          <span className={clsx('text-xs px-1.5 py-0.5 rounded', APP_COLORS[event.application] || 'bg-gray-500/10 text-gray-400')}>
+                            {event.application}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-600">-</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-gray-400 tabular-nums">{event.duration_ms ? `${event.duration_ms.toFixed(1)}ms` : '-'}</td>
+                      <td className="px-3 py-2.5">
+                        {event.risk_category ? (
+                          <span className="text-xs text-gray-500 bg-surface-active px-2 py-0.5 rounded">{event.risk_category}</span>
+                        ) : (
+                          <span className="text-xs text-gray-600">-</span>
+                        )}
+                      </td>
+                    </tr>
+                    {isSelected && (
+                      <tr>
+                        <td colSpan={8} className="px-4 py-4 bg-surface-hover border-b border-border/50">
+                          <div className="grid grid-cols-4 gap-4 text-sm">
+                            <div><span className="text-gray-500">Event ID:</span><br /><span className="text-gray-300 text-xs font-mono">{event.event_id}</span></div>
+                            <div><span className="text-gray-500">Trace ID:</span><br /><span className="text-gray-300 text-xs font-mono">{event.trace_id}</span></div>
+                            <div><span className="text-gray-500">Session:</span><br /><span className="text-gray-300 text-xs font-mono">{event.session_id || 'N/A'}</span></div>
+                            <div><span className="text-gray-500">User ID:</span><br /><span className="text-gray-300 text-xs">{event.user_id || 'anonymous'}</span></div>
+                            <div><span className="text-gray-500">Application:</span><br /><span className={clsx('text-xs', event.application ? (APP_COLORS[event.application] || 'text-gray-300') : 'text-gray-500')}>{event.application || 'unknown'}</span></div>
+                            <div><span className="text-gray-500">Client / AI Agent:</span><br /><span className="text-gray-300 text-xs">{event.client_id || 'N/A'}</span></div>
+                            <div><span className="text-gray-500">Policy:</span><br /><span className="text-gray-300 text-xs">{event.policy_decision || 'default'} {event.policy_id ? `(${event.policy_id.slice(0, 8)})` : ''}</span></div>
+                            <div><span className="text-gray-500">Backend:</span><br /><span className="text-gray-300 text-xs">{event.backend_name}</span></div>
+                            {event.request_hash && (
+                              <div className="col-span-4"><span className="text-gray-500">Request Hash:</span><br /><span className="text-gray-300 text-xs font-mono">{event.request_hash}</span></div>
+                            )}
+                            {event.error_message && (
+                              <div className="col-span-4"><span className="text-danger">Error:</span><br /><span className="text-gray-300 text-xs">{event.error_message}</span></div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
                     )}
-                    <span className={clsx('text-xs font-medium', config.color)}>{event.status}</span>
-                  </div>
-                </div>
-
-                {isSelected && (
-                  <div className="mx-4 mb-1 bg-surface-hover border border-border/50 rounded-b-lg p-4 -mt-1">
-                    <div className="grid grid-cols-3 gap-4 text-sm">
-                      <div><span className="text-gray-500">Event ID:</span><br /><span className="text-gray-300 text-xs font-mono">{event.event_id}</span></div>
-                      <div><span className="text-gray-500">Trace ID:</span><br /><span className="text-gray-300 text-xs font-mono">{event.trace_id}</span></div>
-                      <div><span className="text-gray-500">Session:</span><br /><span className="text-gray-300 text-xs font-mono">{event.session_id || 'N/A'}</span></div>
-                      <div><span className="text-gray-500">User ID:</span><br /><span className="text-gray-300 text-xs">{event.user_id || 'anonymous'}</span></div>
-                      <div><span className="text-gray-500">Application:</span><br /><span className={clsx('text-xs', event.application ? (APP_COLORS[event.application] || 'text-gray-300') : 'text-gray-500')}>{event.application || 'unknown'}</span></div>
-                      <div><span className="text-gray-500">Client / AI Agent:</span><br /><span className="text-gray-300 text-xs">{event.client_id || 'N/A'}</span></div>
-                      <div><span className="text-gray-500">Policy:</span><br /><span className="text-gray-300 text-xs">{event.policy_decision || 'default'} {event.policy_id ? `(${event.policy_id.slice(0, 8)})` : ''}</span></div>
-                      <div><span className="text-gray-500">Backend:</span><br /><span className="text-gray-300 text-xs">{event.backend_name}</span></div>
-                      <div><span className="text-gray-500">Risk Category:</span><br /><span className="text-gray-300 text-xs">{event.risk_category || 'N/A'}</span></div>
-                      <div><span className="text-gray-500">Duration:</span><br /><span className="text-gray-300 text-xs">{event.duration_ms ? `${event.duration_ms.toFixed(1)}ms` : 'N/A'}</span></div>
-                      {event.request_hash && (
-                        <div className="col-span-3"><span className="text-gray-500">Request Hash:</span><br /><span className="text-gray-300 text-xs font-mono">{event.request_hash}</span></div>
-                      )}
-                      {event.error_message && (
-                        <div className="col-span-3"><span className="text-danger">Error:</span><br /><span className="text-gray-300 text-xs">{event.error_message}</span></div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
+                  </React.Fragment>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
 
       {/* Pagination */}

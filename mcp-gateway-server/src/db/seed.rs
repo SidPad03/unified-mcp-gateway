@@ -37,20 +37,31 @@ async fn seed_admin_user(pool: &PgPool) -> Result<(), sqlx::Error> {
         return Ok(());
     }
 
+    // Default to the well-known admin/admin so a fresh install is easy to log
+    // into, but flag must_change_password so the server forces a rotation on
+    // first login (enforced in the JWT extractor) — the default is never a
+    // lasting credential. If the operator presets MCPGW_ADMIN_PASSWORD they've
+    // chosen deliberately, so we don't force a change in that case.
+    let (password, force_change) = match std::env::var("MCPGW_ADMIN_PASSWORD") {
+        Ok(p) if !p.is_empty() => (p, false),
+        _ => ("admin".to_string(), true),
+    };
+
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
     let password_hash = argon2
-        .hash_password(b"admin", &salt)
+        .hash_password(password.as_bytes(), &salt)
         .expect("Failed to hash password")
         .to_string();
 
     let user_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO users (user_id, username, password_hash, email, is_active)
-         VALUES ($1, 'admin', $2, 'admin@mcp-gateway.local', TRUE)"
+        "INSERT INTO users (user_id, username, password_hash, email, is_active, must_change_password)
+         VALUES ($1, 'admin', $2, 'admin@mcp-gateway.local', TRUE, $3)"
     )
     .bind(user_id)
     .bind(&password_hash)
+    .bind(force_change)
     .execute(pool)
     .await?;
 
@@ -76,7 +87,14 @@ async fn seed_admin_user(pool: &PgPool) -> Result<(), sqlx::Error> {
         tracing::warn!("Failed to auto-generate app keys for admin: {}", e);
     }
 
-    tracing::info!("Created default admin user (username: admin, password: admin)");
+    if force_change {
+        tracing::warn!(
+            "Created default admin user (username: admin, password: admin). \
+             You will be required to change this password on first login."
+        );
+    } else {
+        tracing::info!("Created default admin user (username: admin) using MCPGW_ADMIN_PASSWORD.");
+    }
     Ok(())
 }
 
@@ -99,27 +117,10 @@ async fn seed_default_policies(pool: &PgPool) -> Result<(), sqlx::Error> {
 
     let owner_id = owner_role.map(|(id,)| id);
 
-    // Policy 1: Allow all tools for owner
-    let allow_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO policies (policy_id, name, priority, conditions, decision, reason, is_active, tool_pattern)
-         VALUES ($1, $2, $3, '{}'::jsonb, $4, $5, TRUE, $6)"
-    )
-    .bind(allow_id)
-    .bind("Allow all tools")
-    .bind(1)
-    .bind("allow")
-    .bind("Grant full tool access")
-    .bind("*")
-    .execute(pool)
-    .await?;
-
-    if let Some(role_id) = owner_id {
-        sqlx::query("INSERT INTO role_policies (role_id, policy_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
-            .bind(role_id).bind(allow_id).execute(pool).await?;
-    }
-
-    // Policy 2: Deny destructive operations
+    // Policy 1: Deny destructive operations. This must have a lower priority
+    // number than the broad allow rule below: the engine sorts ascending by
+    // priority and returns the first match, so a specific deny has to be
+    // evaluated before "allow *" or it would never fire.
     let deny_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO policies (policy_id, name, priority, conditions, decision, reason, is_active, tool_pattern)
@@ -127,7 +128,7 @@ async fn seed_default_policies(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .bind(deny_id)
     .bind("Deny destructive operations")
-    .bind(2)
+    .bind(1)
     .bind("deny")
     .bind("Block destructive operations like drop or delete")
     .bind("*drop_*")
@@ -137,6 +138,26 @@ async fn seed_default_policies(pool: &PgPool) -> Result<(), sqlx::Error> {
     if let Some(role_id) = owner_id {
         sqlx::query("INSERT INTO role_policies (role_id, policy_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
             .bind(role_id).bind(deny_id).execute(pool).await?;
+    }
+
+    // Policy 2: Allow everything else for owner (catch-all after the deny).
+    let allow_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO policies (policy_id, name, priority, conditions, decision, reason, is_active, tool_pattern)
+         VALUES ($1, $2, $3, '{}'::jsonb, $4, $5, TRUE, $6)"
+    )
+    .bind(allow_id)
+    .bind("Allow all tools")
+    .bind(2)
+    .bind("allow")
+    .bind("Grant full tool access")
+    .bind("*")
+    .execute(pool)
+    .await?;
+
+    if let Some(role_id) = owner_id {
+        sqlx::query("INSERT INTO role_policies (role_id, policy_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            .bind(role_id).bind(allow_id).execute(pool).await?;
     }
 
     tracing::info!("Seeded default policies (allow all + deny destructive)");

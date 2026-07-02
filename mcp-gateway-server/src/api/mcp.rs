@@ -115,13 +115,14 @@ async fn handle_tools_list(
     let tools = match tools {
         Ok(t) => t,
         Err(e) => {
+            tracing::error!(error = %e, "Failed to load tools for tools/list");
             return JsonRpcResponse {
                 jsonrpc: "2.0".into(),
                 id: req.id.clone(),
                 result: None,
                 error: Some(JsonRpcError {
                     code: -32603,
-                    message: format!("Internal error: {}", e),
+                    message: "Internal error".into(),
                     data: None,
                 }),
             };

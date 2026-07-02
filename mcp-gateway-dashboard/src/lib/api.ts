@@ -19,11 +19,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers,
   });
 
-  if (res.status === 401) {
+  // A 401 means the token is missing/invalid/expired — clear the session and
+  // bounce to login. Skip this for the login call itself (bad credentials are
+  // a 401 the Login page should surface inline, not a reason to hard-reload)
+  // and avoid a redirect loop if we're already on /login.
+  if (res.status === 401 && path !== '/auth/login') {
     localStorage.removeItem('mcpgw_token');
     localStorage.removeItem('mcpgw_user');
-    window.location.href = '/login';
-    throw new Error('Unauthorized');
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login';
+    }
+    const err = await res.json().catch(() => ({ error: 'Session expired' }));
+    throw new Error(err.error || 'Unauthorized');
   }
 
   if (!res.ok) {
@@ -139,6 +146,7 @@ export interface User {
   created_at: string;
   last_login?: string;
   roles: string[];
+  must_change_password?: boolean;
 }
 
 export interface Tool {
@@ -344,6 +352,13 @@ export interface CreateApiKeyResponse {
   application?: string;
 }
 
+export interface UserNode {
+  user_id: string;
+  username: string;
+  call_count: number;
+  last_seen?: string;
+}
+
 export interface AppNode {
   application: string;
   is_connected: boolean;
@@ -374,9 +389,11 @@ export interface GraphEdge {
 }
 
 export interface UsageGraph {
+  users: UserNode[];
   applications: AppNode[];
   backends: BackendNode[];
   tools: ToolNode[];
+  user_to_app: GraphEdge[];
   app_to_backend: GraphEdge[];
   backend_to_tool: GraphEdge[];
 }

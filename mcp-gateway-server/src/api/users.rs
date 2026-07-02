@@ -85,8 +85,27 @@ async fn create_user(
 ) -> Result<Json<UserResponse>, AppError> {
     require_admin(&claims)?;
 
+    // A role must be supplied explicitly. Previously an omitted role silently
+    // minted a full owner; require and validate it instead so a mistaken or
+    // malicious call can't accidentally create an admin (or a roleless user).
+    let role_name = req
+        .role
+        .filter(|r| !r.is_empty())
+        .ok_or_else(|| AppError::BadRequest("A role must be specified".into()))?;
+
     let password_hash = hash_password(&req.password)?;
     let user_id = Uuid::new_v4();
+
+    // Resolve the role up front so we never insert a user we can't assign.
+    let (role_id,): (Uuid,) = sqlx::query_as("SELECT role_id FROM roles WHERE name = $1")
+        .bind(&role_name)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::BadRequest(format!("Unknown role '{}'", role_name)))?;
+
+    // Insert the user and its role atomically so a failure partway through can
+    // never leave a roleless (locked-out) user behind.
+    let mut tx = state.db.begin().await?;
 
     sqlx::query(
         "INSERT INTO users (user_id, username, password_hash, email, is_active)
@@ -96,7 +115,7 @@ async fn create_user(
     .bind(&req.username)
     .bind(&password_hash)
     .bind(&req.email)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     .map_err(|e| {
         if e.to_string().contains("duplicate") {
@@ -106,21 +125,13 @@ async fn create_user(
         }
     })?;
 
-    let role_name = req.role.unwrap_or_else(|| "owner".into());
-    let role: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT role_id FROM roles WHERE name = $1"
-    )
-    .bind(&role_name)
-    .fetch_optional(&state.db)
-    .await?;
+    sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)")
+        .bind(user_id)
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
 
-    if let Some((role_id,)) = role {
-        sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)")
-            .bind(user_id)
-            .bind(role_id)
-            .execute(&state.db)
-            .await?;
-    }
+    tx.commit().await?;
 
     // Auto-generate per-app API keys
     if let Err(e) = generate_app_keys_for_user(&state.db, user_id).await {
@@ -151,6 +162,37 @@ async fn update_user(
         require_admin(&claims)?;
     }
 
+    // Guard against demoting or deactivating the last owner, which would lock
+    // everyone out of admin functions. Mirrors the check in delete_user.
+    let would_remove_owner = matches!(req.is_active, Some(false))
+        || req.role.as_deref().map(|r| r != "owner").unwrap_or(false);
+    if would_remove_owner {
+        let target_is_owner: bool = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+             WHERE ur.user_id = $1 AND r.name = 'owner'"
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?
+        .0 > 0;
+
+        if target_is_owner {
+            let owner_count: (i64,) = sqlx::query_as(
+                "SELECT COUNT(DISTINCT ur.user_id) FROM user_roles ur
+                 JOIN roles r ON r.role_id = ur.role_id
+                 WHERE r.name = 'owner'"
+            )
+            .fetch_one(&state.db)
+            .await?;
+
+            if owner_count.0 <= 1 {
+                return Err(AppError::BadRequest(
+                    "Cannot demote or deactivate the last owner user".into(),
+                ));
+            }
+        }
+    }
+
     if let Some(email) = &req.email {
         sqlx::query("UPDATE users SET email = $1 WHERE user_id = $2")
             .bind(email).bind(id).execute(&state.db).await?;
@@ -163,15 +205,14 @@ async fn update_user(
 
     if let Some(password) = &req.password {
         let password_hash = hash_password(password)?;
-        sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
+        // Setting a password clears the first-login "must change password" flag.
+        sqlx::query("UPDATE users SET password_hash = $1, must_change_password = FALSE WHERE user_id = $2")
             .bind(&password_hash).bind(id).execute(&state.db).await?;
     }
 
     if let Some(role_name) = &req.role {
-        // Remove existing roles and assign new one
-        sqlx::query("DELETE FROM user_roles WHERE user_id = $1")
-            .bind(id).execute(&state.db).await?;
-
+        // Resolve the target role first so an invalid name can't leave the
+        // user with no role at all.
         let role: Option<(Uuid,)> = sqlx::query_as(
             "SELECT role_id FROM roles WHERE name = $1"
         )
@@ -179,10 +220,17 @@ async fn update_user(
         .fetch_optional(&state.db)
         .await?;
 
-        if let Some((role_id,)) = role {
-            sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)")
-                .bind(id).bind(role_id).execute(&state.db).await?;
-        }
+        let (role_id,) = role.ok_or_else(|| {
+            AppError::BadRequest(format!("Unknown role '{}'", role_name))
+        })?;
+
+        // Swap roles atomically.
+        let mut tx = state.db.begin().await?;
+        sqlx::query("DELETE FROM user_roles WHERE user_id = $1")
+            .bind(id).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)")
+            .bind(id).bind(role_id).execute(&mut *tx).await?;
+        tx.commit().await?;
     }
 
     Ok(Json(serde_json::json!({ "status": "updated" })))

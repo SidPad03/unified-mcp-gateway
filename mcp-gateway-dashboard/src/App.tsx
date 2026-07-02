@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import Layout from '@/components/Layout';
 import Login from '@/pages/Login';
+import ForcePasswordSetup from '@/pages/ForcePasswordSetup';
 import ToolInventory from '@/pages/ToolInventory';
 import AuditTimeline from '@/pages/AuditTimeline';
 import MetricsOverview from '@/pages/MetricsOverview';
@@ -20,6 +21,17 @@ export default function App() {
         <Route path="/login" element={<Login auth={auth} />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
+    );
+  }
+
+  // First-login: force the user to set a real password before anything else.
+  if (auth.mustChangePassword) {
+    return (
+      <ForcePasswordSetup
+        user={auth.user}
+        onComplete={auth.completePasswordChange}
+        onLogout={auth.logout}
+      />
     );
   }
 

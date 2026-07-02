@@ -59,12 +59,13 @@ async fn handle_live_connection(state: AppState, mut socket: WebSocket, token: S
             &jsonwebtoken::Validation::default(),
         )
         .map(|data| data.claims)
-        .map_err(|e| crate::AppError::Unauthorized(format!("Invalid token: {}", e)))
+        .map_err(|_| crate::AppError::Unauthorized("Invalid or expired token".into()))
     };
 
-    if let Err(e) = auth_result {
-        let msg = format!(r#"{{"error":"{:?}"}}"#, e);
-        let _ = socket.send(Message::Text(msg)).await;
+    if let Err(_) = auth_result {
+        let _ = socket
+            .send(Message::Text(r#"{"error":"unauthorized"}"#.into()))
+            .await;
         let _ = socket.close().await;
         return;
     }

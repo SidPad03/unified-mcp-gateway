@@ -6,6 +6,7 @@ use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -47,10 +48,19 @@ async fn main() -> anyhow::Result<()> {
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgresql://mcpgateway:mcpgateway@localhost:5432/mcpgateway".into());
 
-    let jwt_secret = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_| "mcpgw-dev-secret-change-in-production".into());
-    if jwt_secret == "mcpgw-dev-secret-change-in-production" {
-        tracing::warn!("Using default JWT secret — set JWT_SECRET env var for production!");
+    // JWT_SECRET must be provided and must not be the well-known placeholder.
+    // Since tokens are HS256-signed with it, a known/default value lets anyone
+    // forge an owner token — so we refuse to boot rather than start insecure.
+    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_default();
+    const DEFAULT_JWT_SECRET: &str = "mcpgw-dev-secret-change-in-production";
+    if jwt_secret.is_empty() || jwt_secret == DEFAULT_JWT_SECRET {
+        anyhow::bail!(
+            "JWT_SECRET is unset or set to the known default. Set JWT_SECRET to a long, \
+             random, secret value before starting the server (e.g. `openssl rand -hex 32`)."
+        );
+    }
+    if jwt_secret.len() < 16 {
+        anyhow::bail!("JWT_SECRET is too short — use at least 16 characters (32+ recommended).");
     }
 
     let listen_addr = std::env::var("LISTEN_ADDR")
@@ -103,6 +113,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/ws/live", axum::routing::get(api::live::live_ws_handler))
         .nest("/api/v1", api::router())
         .route("/metrics", axum::routing::get(metrics::prometheus_handler))
+        // Cap request bodies at 8 MiB so a single oversized payload can't
+        // exhaust memory. WebSocket upgrades carry no body and are unaffected.
+        .layer(RequestBodyLimitLayer::new(8 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state);

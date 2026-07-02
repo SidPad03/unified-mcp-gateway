@@ -116,35 +116,45 @@ async fn create_policy(
         return Err(AppError::BadRequest("Decision must be 'allow' or 'deny'".into()));
     }
 
-    let next_priority: (i32,) = sqlx::query_as(
-        "SELECT COALESCE(MAX(priority), 0) + 1 FROM policies"
-    )
-    .fetch_one(&state.db)
-    .await?;
-    let priority = next_priority.0;
-
     let policy_id = Uuid::new_v4();
     let now = chrono::Utc::now();
     let user_id: Uuid = claims.sub.parse().map_err(|_| AppError::Internal("Invalid user ID".into()))?;
 
     let risk_cats: Vec<String> = req.risk_categories.clone().unwrap_or_default();
 
-    sqlx::query(
-        "INSERT INTO policies (policy_id, name, priority, conditions, decision, reason, is_active, created_by, created_at, updated_at, tool_pattern, risk_categories, application_match)
-         VALUES ($1, $2, $3, '{}'::jsonb, $4, $5, TRUE, $6, $7, $7, $8, $9, $10)"
-    )
-    .bind(policy_id)
-    .bind(&req.name)
-    .bind(priority)
-    .bind(&req.decision)
-    .bind(&req.reason)
-    .bind(user_id)
-    .bind(now)
-    .bind(&req.tool_pattern)
-    .bind(&risk_cats)
-    .bind(&req.application_match)
-    .execute(&state.db)
-    .await?;
+    // Assign the next priority as MAX+1 computed inside the INSERT, and retry on
+    // the unique-priority constraint so two concurrent creates can't both grab
+    // the same value and surface a raw Postgres 500 (TOCTOU on the unique index).
+    let mut priority = 0i32;
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let res = sqlx::query_as::<_, (i32,)>(
+            "INSERT INTO policies (policy_id, name, priority, conditions, decision, reason, is_active, created_by, created_at, updated_at, tool_pattern, risk_categories, application_match)
+             VALUES ($1, $2, (SELECT COALESCE(MAX(priority), 0) + 1 FROM policies), '{}'::jsonb, $3, $4, TRUE, $5, $6, $6, $7, $8, $9)
+             RETURNING priority"
+        )
+        .bind(policy_id)
+        .bind(&req.name)
+        .bind(&req.decision)
+        .bind(&req.reason)
+        .bind(user_id)
+        .bind(now)
+        .bind(&req.tool_pattern)
+        .bind(&risk_cats)
+        .bind(&req.application_match)
+        .fetch_one(&state.db)
+        .await;
+
+        match res {
+            Ok((p,)) => {
+                priority = p;
+                break;
+            }
+            Err(e) if e.to_string().contains("priority") && attempts < 5 => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
 
     // Bind roles
     let mut role_ids = Vec::new();

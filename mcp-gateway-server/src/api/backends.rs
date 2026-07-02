@@ -38,10 +38,23 @@ pub fn router() -> Router<AppState> {
         .route("/backends/:id/sync", post(sync_backend))
 }
 
+/// Strip secret-bearing fields (env vars, auth headers) from a backend config
+/// so they aren't exposed to non-admin callers. Admins keep the full config
+/// because they manage backends; everyone else only needs names/transport.
+fn redact_backend_config(mut config: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = config.as_object_mut() {
+        obj.remove("env");
+        obj.remove("headers");
+    }
+    config
+}
+
 async fn list_backends(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
 ) -> Result<Json<Vec<BackendResponse>>, AppError> {
+    let is_admin = claims.roles.iter().any(|r| r == "owner");
+
     let backends: Vec<(Uuid, String, String, serde_json::Value, Option<String>, bool, String, Option<chrono::DateTime<chrono::Utc>>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT backend_id, name, transport, config, risk_category, is_enabled, health_status, last_health_check, created_at FROM backends ORDER BY name"
     )
@@ -56,6 +69,8 @@ async fn list_backends(
         .bind(backend_id)
         .fetch_one(&state.db)
         .await?;
+
+        let config = if is_admin { config } else { redact_backend_config(config) };
 
         result.push(BackendResponse {
             backend_id: backend_id.to_string(),

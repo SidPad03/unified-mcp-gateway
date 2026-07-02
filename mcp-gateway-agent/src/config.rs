@@ -74,5 +74,24 @@ pub fn ensure_dirs() -> anyhow::Result<()> {
     for dir in [config_dir(), bin_dir(), logs_dir(), cache_dir()] {
         std::fs::create_dir_all(&dir)?;
     }
+    // The config dir holds the agent config (with its API key). Keep it
+    // owner-only so other local users can't read the credential.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(config_dir(), std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
+}
+
+/// Write the agent config to disk with owner-only permissions (0600 on unix)
+/// so the embedded gateway API key isn't left world-readable at umask default.
+pub fn write_config_file(path: &std::path::Path, contents: &str) -> anyhow::Result<()> {
+    std::fs::write(path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
     Ok(())
 }

@@ -44,6 +44,7 @@ pub struct UserInfo {
     pub username: String,
     pub email: Option<String>,
     pub roles: Vec<String>,
+    pub must_change_password: bool,
 }
 
 pub fn router() -> Router<AppState> {
@@ -56,15 +57,24 @@ async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, AppError> {
-    let user: Option<(Uuid, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT user_id, username, password_hash, email FROM users WHERE username = $1 AND is_active = TRUE"
+    let user: Option<(Uuid, String, String, Option<String>, bool)> = sqlx::query_as(
+        "SELECT user_id, username, password_hash, email, must_change_password FROM users WHERE username = $1 AND is_active = TRUE"
     )
     .bind(&req.username)
     .fetch_optional(&state.db)
     .await?;
 
-    let (user_id, username, password_hash, email) = user
-        .ok_or_else(|| AppError::Unauthorized("Invalid credentials".into()))?;
+    let (user_id, username, password_hash, email, must_change_password) = match user {
+        Some(u) => u,
+        None => {
+            // Burn equivalent Argon2 CPU so an unknown username takes about the
+            // same time as a wrong password, closing a user-enumeration timing
+            // side channel.
+            let salt = SaltString::generate(&mut OsRng);
+            let _ = Argon2::default().hash_password(req.password.as_bytes(), &salt);
+            return Err(AppError::Unauthorized("Invalid credentials".into()));
+        }
+    };
 
     let parsed_hash = PasswordHash::new(&password_hash)
         .map_err(|_| AppError::Internal("Password hash error".into()))?;
@@ -111,6 +121,7 @@ async fn login(
             username,
             email,
             roles: role_names,
+            must_change_password,
         },
     }))
 }
@@ -174,9 +185,64 @@ where
             &DecodingKey::from_secret(app_state.jwt_secret.as_bytes()),
             &Validation::default(),
         )
-        .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
+        .map_err(|_| AppError::Unauthorized("Invalid or expired token".into()))?;
 
-        Ok(token_data.claims)
+        let claims = token_data.claims;
+        let user_id: Uuid = claims
+            .sub
+            .parse()
+            .map_err(|_| AppError::Unauthorized("Invalid token subject".into()))?;
+
+        // Re-validate against the DB on every request so a revoked/deactivated
+        // user or a role change takes effect immediately instead of persisting
+        // for the token's lifetime (and surviving indefinitely via /refresh).
+        let user_row: Option<(bool, bool)> = sqlx::query_as(
+            "SELECT is_active, must_change_password FROM users WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(&app_state.db)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        let (is_active, must_change_password) =
+            user_row.ok_or_else(|| AppError::Unauthorized("User no longer exists".into()))?;
+        if !is_active {
+            return Err(AppError::Unauthorized("User account is disabled".into()));
+        }
+
+        // Load current roles from the DB rather than trusting the ones baked
+        // into the token.
+        let roles: Vec<(String,)> = sqlx::query_as(
+            "SELECT r.name FROM roles r JOIN user_roles ur ON r.role_id = ur.role_id WHERE ur.user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_all(&app_state.db)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+        let role_names: Vec<String> = roles.into_iter().map(|(n,)| n).collect();
+
+        // First-login gate: a user still flagged must_change_password may only
+        // call their own password-change endpoint until they rotate it. This
+        // enforces the gate server-side so it can't be bypassed by ignoring the
+        // dashboard screen and calling the API directly.
+        if must_change_password {
+            let is_self_password_change = parts.method == axum::http::Method::PATCH
+                && parts.uri.path() == format!("/api/v1/users/{}", user_id);
+            if !is_self_password_change {
+                return Err(AppError::Forbidden(
+                    "You must change your password before continuing".into(),
+                ));
+            }
+        }
+
+        Ok(Claims {
+            sub: claims.sub,
+            username: claims.username,
+            roles: role_names,
+            exp: claims.exp,
+            iat: claims.iat,
+            application: claims.application,
+        })
     }
 }
 
@@ -270,4 +336,46 @@ pub fn hash_password(password: &str) -> Result<String, AppError> {
         .map_err(|e| AppError::Internal(format!("Password hash error: {}", e)))?
         .to_string();
     Ok(hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for the login crash reported in GitHub issues #1/#2.
+    /// jsonwebtoken 10 defaults to the `aws_lc_rs` backend, which fails at
+    /// runtime without a process-wide rustls CryptoProvider the first time a
+    /// token is encoded/decoded — so login would 500/502 and the first
+    /// authenticated request's token decode would 401. With the `rust_crypto`
+    /// backend this HS256 round-trip must succeed with no extra setup.
+    #[test]
+    fn jwt_hs256_roundtrip_works_without_crypto_provider() {
+        let secret = b"test-secret-at-least-16-chars-long";
+        let now = Utc::now();
+        let claims = Claims {
+            sub: "00000000-0000-0000-0000-000000000000".into(),
+            username: "admin".into(),
+            roles: vec!["owner".into()],
+            exp: (now + Duration::hours(1)).timestamp() as usize,
+            iat: now.timestamp() as usize,
+            application: None,
+        };
+
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(secret),
+        )
+        .expect("HS256 encode should not require a CryptoProvider");
+
+        let decoded = decode::<Claims>(
+            &token,
+            &DecodingKey::from_secret(secret),
+            &Validation::default(),
+        )
+        .expect("HS256 decode should not require a CryptoProvider");
+
+        assert_eq!(decoded.claims.username, "admin");
+        assert_eq!(decoded.claims.roles, vec!["owner".to_string()]);
+    }
 }

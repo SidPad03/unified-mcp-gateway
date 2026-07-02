@@ -529,7 +529,7 @@ impl SetupWizard {
         let config = self.build_config();
         let toml_str = toml::to_string_pretty(&config)?;
         let path = crate::config::default_config_path();
-        std::fs::write(&path, toml_str)?;
+        crate::config::write_config_file(&path, &toml_str)?;
         Ok(())
     }
 

@@ -424,38 +424,24 @@ async fn register_agent_in_db(
         "sub_backends": sub_backends,
     });
 
-    let existing: Option<(Uuid,)> =
-        sqlx::query_as("SELECT backend_id FROM backends WHERE name = $1")
-            .bind(agent_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| format!("DB error: {}", e))?;
-
-    let backend_id = if let Some((id,)) = existing {
-        sqlx::query(
-            "UPDATE backends SET transport = 'agent', config = $1, is_enabled = TRUE, \
-             health_status = 'healthy', last_health_check = NOW() WHERE backend_id = $2",
-        )
-        .bind(&config)
-        .bind(id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| format!("DB error: {}", e))?;
-        id
-    } else {
-        let id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO backends (backend_id, name, transport, config, risk_category, is_enabled, health_status, last_health_check) \
-             VALUES ($1, $2, 'agent', $3, 'external-api', TRUE, 'healthy', NOW())",
-        )
-        .bind(id)
-        .bind(agent_id)
-        .bind(&config)
-        .execute(&state.db)
-        .await
-        .map_err(|e| format!("DB error: {}", e))?;
-        id
-    };
+    // Upsert by name in a single statement so two concurrent registrations of
+    // the same agent can't both pass a SELECT and then collide on the unique
+    // name constraint (which would surface a raw Postgres 500).
+    let new_id = Uuid::new_v4();
+    let (backend_id,): (Uuid,) = sqlx::query_as(
+        "INSERT INTO backends (backend_id, name, transport, config, risk_category, is_enabled, health_status, last_health_check) \
+         VALUES ($1, $2, 'agent', $3, 'external-api', TRUE, 'healthy', NOW()) \
+         ON CONFLICT (name) DO UPDATE SET \
+             transport = 'agent', config = EXCLUDED.config, is_enabled = TRUE, \
+             health_status = 'healthy', last_health_check = NOW() \
+         RETURNING backend_id",
+    )
+    .bind(new_id)
+    .bind(agent_id)
+    .bind(&config)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| format!("DB error: {}", e))?;
 
     // Convert to DiscoveredTool and register using existing helper
     let discovered: Vec<crate::backends::DiscoveredTool> = tools

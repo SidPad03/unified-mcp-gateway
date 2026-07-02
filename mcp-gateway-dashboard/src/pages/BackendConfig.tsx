@@ -41,6 +41,13 @@ export default function BackendConfig({ isAdmin }: Props) {
   const [error, setError] = useState('');
   const [pageError, setPageError] = useState('');
   const [selectedBackend, setSelectedBackend] = useState<Backend | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showJsonEditor, setShowJsonEditor] = useState(false);
+  const [jsonContent, setJsonContent] = useState('');
+  const [jsonError, setJsonError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [jsonSaving, setJsonSaving] = useState(false);
 
   // Connect modal state
   const [showConnectModal, setShowConnectModal] = useState(false);
@@ -61,6 +68,7 @@ export default function BackendConfig({ isAdmin }: Props) {
   };
   const [copied, setCopied] = useState(false);
   const [connectLoading, setConnectLoading] = useState(false);
+  const [connectSubmitting, setConnectSubmitting] = useState(false);
   const [connectError, setConnectError] = useState('');
   const [users, setUsers] = useState<User[]>([]);
   const [gatewayUrl, setGatewayUrl] = useState(() => localStorage.getItem('mcpgw_gateway_url') || '');
@@ -155,9 +163,16 @@ export default function BackendConfig({ isAdmin }: Props) {
   };
 
   const provisionKeys = async () => {
+    if (connectSubmitting) return;
     setConnectError('');
+    setConnectSubmitting(true);
     try {
-      const currentUser = JSON.parse(localStorage.getItem('mcpgw_user') || '{}');
+      let currentUser: any = {};
+      try {
+        currentUser = JSON.parse(localStorage.getItem('mcpgw_user') || '{}');
+      } catch {
+        currentUser = {};
+      }
       const targetUserId = (isAdmin && newKeyUserId) ? newKeyUserId : currentUser.user_id;
       if (!targetUserId) return;
       const result = await api.createApiKey({
@@ -170,12 +185,16 @@ export default function BackendConfig({ isAdmin }: Props) {
       setApiKeys(keys);
     } catch (e: any) {
       setConnectError(e.message || 'Failed to generate key');
+    } finally {
+      setConnectSubmitting(false);
     }
   };
 
   const generateApiKey = async () => {
+    if (connectSubmitting) return;
     const keyName = newKeyName.trim() || 'mcpgw-client-key';
     setConnectError('');
+    setConnectSubmitting(true);
     try {
       const result = await api.createApiKey({
         name: keyName,
@@ -188,11 +207,19 @@ export default function BackendConfig({ isAdmin }: Props) {
       setApiKeys(keys);
     } catch (e: any) {
       setConnectError(e.message || 'Failed to generate API key');
+    } finally {
+      setConnectSubmitting(false);
     }
   };
 
   const getAppKey = (app: string): ApiKey | undefined => {
-    const targetUserId = (isAdmin && newKeyUserId) ? newKeyUserId : JSON.parse(localStorage.getItem('mcpgw_user') || '{}').user_id;
+    let currentUserId: string | undefined;
+    try {
+      currentUserId = JSON.parse(localStorage.getItem('mcpgw_user') || '{}').user_id;
+    } catch {
+      currentUserId = undefined;
+    }
+    const targetUserId = (isAdmin && newKeyUserId) ? newKeyUserId : currentUserId;
     return apiKeys.find(k => k.application === app && (!targetUserId || k.user_id === targetUserId));
   };
 
@@ -306,11 +333,13 @@ export default function BackendConfig({ isAdmin }: Props) {
   };
 
   const saveBackend = async () => {
+    if (isSubmitting) return;
     setError('');
     if (!name.trim()) { setError('Name is required'); return; }
     if (transport === 'stdio' && !stdioForm.command.trim()) { setError('Command is required'); return; }
     if (transport !== 'stdio' && !httpForm.url.trim()) { setError('URL is required'); return; }
 
+    setIsSubmitting(true);
     try {
       if (editingBackend) {
         await api.updateBackend(editingBackend.backend_id, {
@@ -332,6 +361,8 @@ export default function BackendConfig({ isAdmin }: Props) {
       loadBackends();
     } catch (e: any) {
       setError(e.message || 'Failed to save backend');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -344,12 +375,15 @@ export default function BackendConfig({ isAdmin }: Props) {
     }
   };
 
-  const deleteBackend = async (id: string) => {
+  const confirmDeleteBackend = async () => {
+    if (!showDeleteConfirm) return;
     try {
-      await api.deleteBackend(id);
+      await api.deleteBackend(showDeleteConfirm);
+      setShowDeleteConfirm(null);
       loadBackends();
     } catch (e: any) {
       setPageError(e.message || 'Failed to delete backend');
+      setShowDeleteConfirm(null);
     }
   };
 
@@ -384,6 +418,63 @@ export default function BackendConfig({ isAdmin }: Props) {
     }
     loadBackends();
     setSyncingAll(false);
+  };
+
+  const openJsonEditor = () => {
+    const json = backends.map(b => ({
+      name: b.name,
+      transport: b.transport,
+      config: b.config,
+      risk_category: b.risk_category,
+      is_enabled: b.is_enabled,
+    }));
+    setJsonContent(JSON.stringify(json, null, 2));
+    setJsonError('');
+    setShowJsonEditor(true);
+  };
+
+  const saveJsonBackends = async () => {
+    if (jsonSaving) return;
+    setJsonError('');
+    setJsonSaving(true);
+    try {
+      const parsed = JSON.parse(jsonContent);
+      if (!Array.isArray(parsed)) {
+        setJsonError('JSON must be an array of backend objects');
+        return;
+      }
+      for (const entry of parsed) {
+        if (!entry.name || !entry.transport) {
+          setJsonError('Each backend must have "name" and "transport" fields');
+          return;
+        }
+        const existing = backends.find(b => b.name === entry.name);
+        if (existing) {
+          await api.updateBackend(existing.backend_id, {
+            transport: entry.transport,
+            config: entry.config || {},
+            risk_category: entry.risk_category,
+          });
+        } else {
+          await api.createBackend({
+            name: entry.name,
+            transport: entry.transport,
+            config: entry.config || {},
+            risk_category: entry.risk_category,
+          });
+        }
+      }
+      setShowJsonEditor(false);
+      loadBackends();
+    } catch (e: any) {
+      if (e instanceof SyntaxError) {
+        setJsonError('Invalid JSON syntax');
+      } else {
+        setJsonError(e.message || 'Failed to save backends');
+      }
+    } finally {
+      setJsonSaving(false);
+    }
   };
 
   // --- Stdio form helpers ---
@@ -508,13 +599,33 @@ export default function BackendConfig({ isAdmin }: Props) {
             {syncingAll ? 'Syncing...' : 'Refresh & Sync'}
           </button>
           {isAdmin && (
-            <button
-              onClick={openModal}
-              className="flex items-center gap-2 px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Add Backend
-            </button>
+            <div className="relative">
+              <button
+                onClick={() => setShowAddMenu(!showAddMenu)}
+                className="flex items-center gap-2 px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Add Backend
+              </button>
+              {showAddMenu && (
+                <div className="absolute right-0 mt-1 w-48 bg-surface border border-border rounded-lg shadow-xl z-10 overflow-hidden">
+                  <button
+                    onClick={() => { setShowAddMenu(false); openModal(); }}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-300 hover:bg-surface-hover hover:text-white transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    New Backend
+                  </button>
+                  <button
+                    onClick={() => { setShowAddMenu(false); openJsonEditor(); }}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-300 hover:bg-surface-hover hover:text-white transition-colors border-t border-border"
+                  >
+                    <Pencil className="w-4 h-4" />
+                    Edit JSON
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -536,7 +647,6 @@ export default function BackendConfig({ isAdmin }: Props) {
           <div className="bg-surface border border-border rounded-xl p-12 text-center text-gray-500 text-sm">No backends configured</div>
         ) : (
           backends.map(backend => {
-            const TransportIcon = TRANSPORT_ICONS[backend.transport] || Globe;
             const isSelected = selectedBackend?.backend_id === backend.backend_id;
             return (
               <div key={backend.backend_id}>
@@ -553,9 +663,15 @@ export default function BackendConfig({ isAdmin }: Props) {
                       <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center',
                         backend.health_status === 'healthy' ? 'bg-success/10' : backend.health_status === 'unhealthy' ? 'bg-danger/10' : backend.health_status === 'idle' ? 'bg-blue-500/10' : 'bg-surface-active'
                       )}>
-                        <Server className={clsx('w-5 h-5',
-                          backend.health_status === 'healthy' ? 'text-success' : backend.health_status === 'unhealthy' ? 'text-danger' : backend.health_status === 'idle' ? 'text-blue-400' : 'text-gray-500'
-                        )} />
+                        {backend.transport === 'agent' ? (
+                          <Laptop className={clsx('w-5 h-5',
+                            backend.health_status === 'healthy' ? 'text-success' : backend.health_status === 'unhealthy' ? 'text-danger' : backend.health_status === 'idle' ? 'text-blue-400' : 'text-gray-500'
+                          )} />
+                        ) : (
+                          <Server className={clsx('w-5 h-5',
+                            backend.health_status === 'healthy' ? 'text-success' : backend.health_status === 'unhealthy' ? 'text-danger' : backend.health_status === 'idle' ? 'text-blue-400' : 'text-gray-500'
+                          )} />
+                        )}
                       </div>
                       <div>
                         <div className="flex items-center gap-2.5">
@@ -571,14 +687,7 @@ export default function BackendConfig({ isAdmin }: Props) {
                           )}
                         </div>
                         <div className="flex items-center gap-3 mt-1">
-                          <span className="flex items-center gap-1 text-xs text-gray-500">
-                            <TransportIcon className="w-3 h-3" />
-                            {backend.transport}
-                          </span>
                           <span className="text-xs text-gray-500">{backend.tool_count} tools</span>
-                          {backend.risk_category && (
-                            <span className="text-xs text-gray-500">Risk: {backend.risk_category}</span>
-                          )}
                         </div>
                       </div>
                     </div>
@@ -613,7 +722,7 @@ export default function BackendConfig({ isAdmin }: Props) {
                           {backend.is_enabled ? 'Disable' : 'Enable'}
                         </button>
                         <button
-                          onClick={e => { e.stopPropagation(); deleteBackend(backend.backend_id); }}
+                          onClick={e => { e.stopPropagation(); setShowDeleteConfirm(backend.backend_id); }}
                           className="p-1.5 text-gray-500 hover:text-danger hover:bg-danger/10 rounded-md transition-colors"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -745,6 +854,50 @@ export default function BackendConfig({ isAdmin }: Props) {
         )}
       </div>
 
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-surface border border-border rounded-2xl p-6 w-full max-w-sm">
+            <h3 className="text-base font-semibold text-white mb-2">Delete Backend</h3>
+            <p className="text-sm text-gray-400 mb-4">Are you sure you want to delete this backend? This action cannot be undone.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setShowDeleteConfirm(null)} className="flex-1 py-2 bg-surface-hover border border-border text-gray-300 text-sm rounded-lg hover:bg-surface-active transition-colors">Cancel</button>
+              <button onClick={confirmDeleteBackend} className="flex-1 py-2 bg-danger hover:bg-danger/80 text-white text-sm font-medium rounded-lg transition-colors">Yes, Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showJsonEditor && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-surface border border-border rounded-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-white">Edit Backends JSON</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Edit all backend configurations as JSON. Existing backends are matched by name.</p>
+              </div>
+              <button onClick={() => setShowJsonEditor(false)} className="text-gray-500 hover:text-gray-300">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <textarea
+              value={jsonContent}
+              onChange={e => setJsonContent(e.target.value)}
+              className="w-full h-96 px-4 py-3 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 font-mono focus:outline-none focus:border-accent/50 resize-none"
+              spellCheck={false}
+            />
+            {jsonError && (
+              <div className="mt-2 px-3 py-2 bg-danger/10 border border-danger/20 rounded-lg">
+                <p className="text-xs text-danger">{jsonError}</p>
+              </div>
+            )}
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setShowJsonEditor(false)} className="flex-1 py-2 bg-surface-hover border border-border text-gray-300 text-sm rounded-lg hover:bg-surface-active transition-colors">Cancel</button>
+              <button onClick={saveJsonBackends} disabled={jsonSaving} className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50">{jsonSaving ? 'Saving…' : 'Save Changes'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Create / Edit modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -873,9 +1026,10 @@ export default function BackendConfig({ isAdmin }: Props) {
                 </button>
                 <button
                   onClick={saveBackend}
-                  className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
+                  disabled={isSubmitting}
+                  className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
                 >
-                  {editingBackend ? 'Save Changes' : 'Add Server'}
+                  {isSubmitting ? 'Saving…' : (editingBackend ? 'Save Changes' : 'Add Server')}
                 </button>
               </div>
             </div>
@@ -999,10 +1153,11 @@ export default function BackendConfig({ isAdmin }: Props) {
                         </div>
                         <button
                           onClick={provisionKeys}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/10 border border-accent/30 text-accent text-xs rounded-lg hover:bg-accent/20 transition-colors w-full justify-center"
+                          disabled={connectSubmitting}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/10 border border-accent/30 text-accent text-xs rounded-lg hover:bg-accent/20 transition-colors w-full justify-center disabled:opacity-50"
                         >
                           <Key className="w-3.5 h-3.5" />
-                          Provision App Keys
+                          {connectSubmitting ? 'Provisioning…' : 'Provision App Keys'}
                         </button>
                         {generatedKeys[connectTab] && (
                           <div className="px-3 py-2 bg-success/10 border border-success/20 rounded-lg">

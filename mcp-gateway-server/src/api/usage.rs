@@ -10,6 +10,14 @@ use crate::{AppError, AppState};
 use super::auth::Claims;
 
 #[derive(Serialize)]
+pub struct UserNode {
+    pub user_id: String,
+    pub username: String,
+    pub call_count: i64,
+    pub last_seen: Option<String>,
+}
+
+#[derive(Serialize)]
 pub struct AppNode {
     pub application: String,
     pub is_connected: bool,
@@ -44,9 +52,11 @@ pub struct GraphEdge {
 
 #[derive(Serialize)]
 pub struct UsageGraph {
+    pub users: Vec<UserNode>,
     pub applications: Vec<AppNode>,
     pub backends: Vec<BackendNode>,
     pub tools: Vec<ToolNode>,
+    pub user_to_app: Vec<GraphEdge>,
     pub app_to_backend: Vec<GraphEdge>,
     pub backend_to_tool: Vec<GraphEdge>,
 }
@@ -85,35 +95,120 @@ async fn usage_graph(
     Query(query): Query<UsageQuery>,
 ) -> Result<Json<UsageGraph>, AppError> {
     let is_admin = claims.roles.contains(&"owner".to_string());
-    let target_user_id: Uuid = if is_admin {
-        query.user_id.as_deref().unwrap_or(&claims.sub)
+
+    // Admins can request a specific user, or "all" (also the empty value) to
+    // aggregate across every user. Non-admins are always scoped to themselves.
+    // `target_user = None` means "all users"; every user-scoped query below uses
+    // the `($1::uuid IS NULL OR user_id = $1)` pattern so one code path serves
+    // both modes.
+    let target_user: Option<Uuid> = if is_admin {
+        match query.user_id.as_deref() {
+            Some("all") | Some("") => None,
+            Some(uid) => Some(
+                uid.parse()
+                    .map_err(|_| AppError::BadRequest("Invalid user_id".into()))?,
+            ),
+            None => Some(
+                claims
+                    .sub
+                    .parse()
+                    .map_err(|_| AppError::Internal("Invalid caller ID".into()))?,
+            ),
+        }
     } else {
-        &claims.sub
-    }
-    .parse()
-    .map_err(|_| AppError::BadRequest("Invalid user_id".into()))?;
+        Some(
+            claims
+                .sub
+                .parse()
+                .map_err(|_| AppError::Internal("Invalid caller ID".into()))?,
+        )
+    };
 
     let interval = range_to_interval(query.range.as_deref().unwrap_or("7d"));
-
-    // Applications from api_keys for this user
-    let app_rows: Vec<(Option<String>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT application, last_used FROM api_keys WHERE user_id = $1 AND application IS NOT NULL"
-    )
-    .bind(target_user_id)
-    .fetch_all(&state.db)
-    .await?;
 
     let now = chrono::Utc::now();
     let five_min_ago = now - chrono::Duration::minutes(5);
 
-    // Get call counts per application in range
-    let app_counts: Vec<(Option<String>, i64)> = sqlx::query_as(
+    // Users column: each user with activity in range. In single-user mode we
+    // keep the one selected user even with no calls (so the node still renders);
+    // in all-users mode we only surface users who were actually active.
+    let user_rows: Vec<(Uuid, String, i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         &format!(
-            "SELECT application, COUNT(*) FROM audit_events WHERE user_id = $1 AND timestamp > NOW() - INTERVAL '{}' GROUP BY application",
+            "SELECT u.user_id, u.username, COALESCE(cnt.total, 0) AS call_count, cnt.last_seen
+             FROM users u
+             LEFT JOIN (
+                 SELECT user_id, COUNT(*) AS total, MAX(timestamp) AS last_seen
+                 FROM audit_events
+                 WHERE timestamp > NOW() - INTERVAL '{}' AND user_id IS NOT NULL
+                 GROUP BY user_id
+             ) cnt ON cnt.user_id = u.user_id
+             WHERE ($1::uuid IS NULL OR u.user_id = $1)
+             ORDER BY call_count DESC, u.username",
             interval
         )
     )
-    .bind(target_user_id)
+    .bind(target_user)
+    .fetch_all(&state.db)
+    .await?;
+
+    let users: Vec<UserNode> = user_rows
+        .into_iter()
+        .filter(|(_, _, call_count, _)| target_user.is_some() || *call_count > 0)
+        .map(|(user_id, username, call_count, last_seen)| UserNode {
+            user_id: user_id.to_string(),
+            username,
+            call_count,
+            last_seen: last_seen.map(|t| t.to_rfc3339()),
+        })
+        .collect();
+
+    // user → application edges, from audit events.
+    let user_app_edges: Vec<(Uuid, Option<String>, i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        &format!(
+            "SELECT user_id, application, COUNT(*) AS cnt, MAX(timestamp) AS last_call
+             FROM audit_events
+             WHERE ($1::uuid IS NULL OR user_id = $1)
+               AND timestamp > NOW() - INTERVAL '{}'
+               AND application IS NOT NULL AND user_id IS NOT NULL
+             GROUP BY user_id, application",
+            interval
+        )
+    )
+    .bind(target_user)
+    .fetch_all(&state.db)
+    .await?;
+
+    let user_to_app: Vec<GraphEdge> = user_app_edges
+        .into_iter()
+        .filter_map(|(user_id, app, cnt, last)| {
+            Some(GraphEdge {
+                source: user_id.to_string(),
+                target: app?,
+                call_count: cnt,
+                last_call: last.map(|t| t.to_rfc3339()),
+            })
+        })
+        .collect();
+
+    // Applications from api_keys, deduped by application name (an app can belong
+    // to several users in all-users mode).
+    let app_rows: Vec<(Option<String>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        "SELECT application, MAX(last_used) FROM api_keys
+         WHERE ($1::uuid IS NULL OR user_id = $1) AND application IS NOT NULL
+         GROUP BY application"
+    )
+    .bind(target_user)
+    .fetch_all(&state.db)
+    .await?;
+
+    // Get call counts per application in range
+    let app_counts: Vec<(Option<String>, i64)> = sqlx::query_as(
+        &format!(
+            "SELECT application, COUNT(*) FROM audit_events WHERE ($1::uuid IS NULL OR user_id = $1) AND timestamp > NOW() - INTERVAL '{}' GROUP BY application",
+            interval
+        )
+    )
+    .bind(target_user)
     .fetch_all(&state.db)
     .await?;
 
@@ -156,7 +251,7 @@ async fn usage_graph(
              LEFT JOIN (
                  SELECT tool_name, COUNT(*) as cnt, MAX(timestamp) as last_call
                  FROM audit_events
-                 WHERE user_id = $1 AND timestamp > NOW() - INTERVAL '{}'
+                 WHERE ($1::uuid IS NULL OR user_id = $1) AND timestamp > NOW() - INTERVAL '{}'
                  GROUP BY tool_name
              ) ae ON ae.tool_name = t.tool_name
              WHERE t.is_enabled = TRUE AND b.is_enabled = TRUE
@@ -165,7 +260,7 @@ async fn usage_graph(
             interval
         )
     )
-    .bind(target_user_id)
+    .bind(target_user)
     .fetch_all(&state.db)
     .await?;
 
@@ -178,12 +273,12 @@ async fn usage_graph(
         &format!(
             "SELECT application, backend_name, COUNT(*) as cnt, MAX(timestamp) as last_call
              FROM audit_events
-             WHERE user_id = $1 AND timestamp > NOW() - INTERVAL '{}' AND application IS NOT NULL
+             WHERE ($1::uuid IS NULL OR user_id = $1) AND timestamp > NOW() - INTERVAL '{}' AND application IS NOT NULL
              GROUP BY application, backend_name",
             interval
         )
     )
-    .bind(target_user_id)
+    .bind(target_user)
     .fetch_all(&state.db)
     .await?;
 
@@ -206,7 +301,7 @@ async fn usage_graph(
              LEFT JOIN (
                  SELECT tool_name, COUNT(*) as cnt, MAX(timestamp) as last_call
                  FROM audit_events
-                 WHERE user_id = $1 AND timestamp > NOW() - INTERVAL '{}'
+                 WHERE ($1::uuid IS NULL OR user_id = $1) AND timestamp > NOW() - INTERVAL '{}'
                  GROUP BY tool_name
              ) ae ON ae.tool_name = t.tool_name
              WHERE t.is_enabled = TRUE AND b.is_enabled = TRUE
@@ -215,7 +310,7 @@ async fn usage_graph(
             interval
         )
     )
-    .bind(target_user_id)
+    .bind(target_user)
     .fetch_all(&state.db)
     .await?;
 
@@ -229,9 +324,11 @@ async fn usage_graph(
     }).collect();
 
     Ok(Json(UsageGraph {
+        users,
         applications,
         backends: backend_nodes,
         tools,
+        user_to_app,
         app_to_backend,
         backend_to_tool,
     }))
@@ -247,19 +344,40 @@ async fn usage_connections(
     claims: Claims,
     Query(query): Query<ConnectionQuery>,
 ) -> Result<Json<Vec<ConnectionStatus>>, AppError> {
+    // Same "all users" handling as usage_graph: admins may pass "all" (or the
+    // empty value) to aggregate across everyone; None means all users.
     let is_admin = claims.roles.contains(&"owner".to_string());
-    let target_user_id: Uuid = if is_admin {
-        query.user_id.as_deref().unwrap_or(&claims.sub)
+    let target_user: Option<Uuid> = if is_admin {
+        match query.user_id.as_deref() {
+            Some("all") | Some("") => None,
+            Some(uid) => Some(
+                uid.parse()
+                    .map_err(|_| AppError::BadRequest("Invalid user_id".into()))?,
+            ),
+            None => Some(
+                claims
+                    .sub
+                    .parse()
+                    .map_err(|_| AppError::Internal("Invalid caller ID".into()))?,
+            ),
+        }
     } else {
-        &claims.sub
-    }
-    .parse()
-    .map_err(|_| AppError::BadRequest("Invalid user_id".into()))?;
+        Some(
+            claims
+                .sub
+                .parse()
+                .map_err(|_| AppError::Internal("Invalid caller ID".into()))?,
+        )
+    };
 
+    // Dedupe by application (an app can belong to several users) and treat it as
+    // connected if any of those keys was used recently.
     let rows: Vec<(Option<String>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT application, last_used FROM api_keys WHERE user_id = $1 AND application IS NOT NULL"
+        "SELECT application, MAX(last_used) FROM api_keys
+         WHERE ($1::uuid IS NULL OR user_id = $1) AND application IS NOT NULL
+         GROUP BY application"
     )
-    .bind(target_user_id)
+    .bind(target_user)
     .fetch_all(&state.db)
     .await?;
 

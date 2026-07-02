@@ -61,6 +61,10 @@ MCP Gateway is a three-component system:
 git clone https://github.com/SidPad03/unified-mcp-gateway.git
 cd unified-mcp-gateway
 
+# A JWT secret is required — the server refuses to boot without one.
+cp .env.example .env
+echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
+
 # Start all services (server + dashboard + postgres)
 docker compose up --build
 ```
@@ -74,7 +78,9 @@ This starts three containers:
 
 Open http://localhost:8080 and log in with the default credentials: `admin` / `admin`.
 
-> **Change the admin password immediately** — the default is only for initial setup.
+You'll be **required to set a new password on first login** before you can use
+the dashboard — the default is only for initial setup. (To skip the default and
+set your own initial password, put `MCPGW_ADMIN_PASSWORD=...` in your `.env`.)
 
 ### 3. Add an MCP backend
 
@@ -112,24 +118,22 @@ Generate an API key from the dashboard's **Settings** page. All backends' tools 
 
 ### Production deployment
 
-For production, set a strong JWT secret and database password:
-
-```bash
-JWT_SECRET=$(openssl rand -hex 32)
-POSTGRES_PASSWORD=$(openssl rand -hex 16)
-
-docker compose up -d \
-  -e JWT_SECRET="$JWT_SECRET" \
-  -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  -e DATABASE_URL="postgresql://mcpgateway:${POSTGRES_PASSWORD}@postgres:5432/mcpgateway"
-```
-
-Or create a `.env` file (not committed to git):
+For production, put strong secrets in a `.env` file (git-ignored — Compose reads
+it automatically):
 
 ```env
+# Required — the server will not start without it
 JWT_SECRET=your-strong-random-secret
+# Optional — defaults to `mcpgateway` if unset
 POSTGRES_PASSWORD=your-strong-db-password
-DATABASE_URL=postgresql://mcpgateway:your-strong-db-password@postgres:5432/mcpgateway
+# Optional — if unset, a random admin password is generated and logged once
+MCPGW_ADMIN_PASSWORD=your-initial-admin-password
+```
+
+Then:
+
+```bash
+docker compose up -d
 ```
 
 Always deploy behind a TLS-terminating reverse proxy (nginx, Caddy, etc.) in production.
@@ -320,7 +324,8 @@ All endpoints under `/api/v1`. Auth via `Authorization: Bearer <jwt_or_api_key>`
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgresql://mcpgateway:mcpgateway@localhost:5432/mcpgateway` | PostgreSQL connection string |
-| `JWT_SECRET` | `mcpgw-dev-secret-change-in-production` | JWT signing secret |
+| `JWT_SECRET` | **required** | JWT signing secret (≥16 chars). The server refuses to boot if unset or left at the old dev default. Generate with `openssl rand -hex 32`. |
+| `MCPGW_ADMIN_PASSWORD` | `admin` | Initial `admin` password. If unset, defaults to `admin` and a password change is forced on first login. Set it to choose your own initial password (no forced change). |
 | `LISTEN_ADDR` | `0.0.0.0:3200` | Server listen address |
 | `RUST_LOG` | `mcp_gateway_server=info,tower_http=debug` | Log level filter |
 | `RELEASE_PROXY_URL` | — | Git forge URL for agent release proxy (e.g., Gitea, GitHub) |
@@ -353,6 +358,10 @@ The project includes CI/CD via GitHub Actions:
 - **Agent**: Cross-compiled for macOS, Linux, and Windows via `cargo-zigbuild`, published as GitHub Releases
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup and deployment details.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the list of changes, fixes, and upgrade notes in each release.
 
 ## Security
 

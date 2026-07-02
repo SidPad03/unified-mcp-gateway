@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: mcpgateway
       POSTGRES_USER: mcpgateway
-      POSTGRES_PASSWORD: mcpgateway
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcpgateway}
     ports:
       - "5432:5432"
     volumes:
@@ -24,8 +24,14 @@ services:
     ports:
       - "3200:3200"
     environment:
-      DATABASE_URL: postgresql://mcpgateway:mcpgateway@postgres:5432/mcpgateway
-      JWT_SECRET: mcpgw-dev-secret-change-in-production
+      DATABASE_URL: postgresql://mcpgateway:${POSTGRES_PASSWORD:-mcpgateway}@postgres:5432/mcpgateway
+      # Required — the server refuses to boot without a real secret. Set it in a
+      # .env file next to this compose file (see .env.example), e.g.
+      #   JWT_SECRET=$(openssl rand -hex 32)
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set — generate one with `openssl rand -hex 32` and put it in a .env file}
+      # Optional: initial admin password. If unset, defaults to `admin` with a
+      # forced password change on first login. Set it to choose your own.
+      MCPGW_ADMIN_PASSWORD: ${MCPGW_ADMIN_PASSWORD:-}
       LISTEN_ADDR: "0.0.0.0:3200"
       RUST_LOG: mcp_gateway_server=info,tower_http=debug
     depends_on:

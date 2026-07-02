@@ -40,6 +40,7 @@ export default function PolicyEditor() {
   const [pageError, setPageError] = useState('');
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dropIdx, setDropIdx] = useState<number | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const dragCounter = useRef(0);
 
   useEffect(() => {
@@ -86,7 +87,9 @@ export default function PolicyEditor() {
   };
 
   const savePolicy = async () => {
+    if (isSubmitting) return;
     setError('');
+    setIsSubmitting(true);
     try {
       if (editingPolicy) {
         await api.updatePolicy(editingPolicy.policy_id, {
@@ -114,6 +117,8 @@ export default function PolicyEditor() {
       loadData();
     } catch (e: any) {
       setError(e.message || 'Failed to save policy');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -519,9 +524,10 @@ export default function PolicyEditor() {
                 </button>
                 <button
                   onClick={savePolicy}
-                  className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
+                  disabled={isSubmitting}
+                  className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
                 >
-                  {editingPolicy ? 'Update' : 'Create'} Policy
+                  {isSubmitting ? 'Saving…' : `${editingPolicy ? 'Update' : 'Create'} Policy`}
                 </button>
               </div>
             </div>

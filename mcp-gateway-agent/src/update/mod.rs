@@ -125,8 +125,16 @@ pub async fn download_and_apply(
 
     let bytes = resp.bytes().await?;
 
-    // Verify checksum if provided
-    if let Some(ref expected_checksum) = asset.checksum {
+    // Verify the SHA-256 checksum before we overwrite the running binary.
+    // Releases always publish a checksums.sha256 (see CI), so a missing
+    // checksum means a malformed or tampered release — fail closed rather than
+    // installing an unverified binary.
+    let expected_checksum = asset.checksum.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Release asset has no published checksum; refusing to install an unverified binary"
+        )
+    })?;
+    {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(&bytes);

@@ -42,22 +42,38 @@ import {
   ArrowRight,
   Layers,
   ChevronRight,
+  Laptop,
+  Boxes,
 } from 'lucide-react';
 import clsx from 'clsx';
 
 // ── App metadata with proper names, colors, and icons ──────────────
-const APP_META: Record<string, { label: string; color: string; Icon: LucideIcon }> = {
-  claude:        { label: 'Claude Code',    color: '#e87b5f', Icon: Terminal },
-  claudedesktop: { label: 'Claude Desktop', color: '#d4856a', Icon: Monitor },
-  cursor:        { label: 'Cursor',         color: '#4d9de0', Icon: MousePointer2 },
-  vscode:        { label: 'VS Code',        color: '#2fb4ab', Icon: Code2 },
-  openwebui:     { label: 'Open WebUI',     color: '#69c97a', Icon: Globe },
+// color: brand accent — used for glow, handle dot, fallback icon tint. Must be visible on dark bg.
+// lineColor: edge stroke color (defaults to color). Use a lighter shade for dark-branded apps.
+// iconBg: solid background for the icon box (overrides the default transparent tint).
+const APP_META: Record<string, { label: string; color: string; lineColor?: string; iconBg?: string; Icon: LucideIcon }> = {
+  claude:        { label: 'Claude Code',    color: '#da7756', Icon: Terminal },                                          // Anthropic terracotta
+  claudedesktop: { label: 'Claude Desktop', color: '#da7756', Icon: Monitor },                                          // Anthropic terracotta
+  cursor:        { label: 'Cursor',         color: '#9ca3af', lineColor: '#9ca3af', iconBg: '#1a1a1a', Icon: MousePointer2 }, // dark brand → grey lines
+  vscode:        { label: 'VS Code',        color: '#007ACC', Icon: Code2 },                                            // official VS Code blue
+  openwebui:     { label: 'Open WebUI',     color: '#e0e0e0', lineColor: '#d4d4d4', iconBg: '#111111', Icon: Globe },    // dark icon → white/light lines
   clawbot:       { label: 'Clawbot',        color: '#b07ce8', Icon: Bot },
-  codex:         { label: 'Codex',          color: '#e06ead', Icon: Terminal },
-  lmstudio:      { label: 'LM Studio',      color: '#d4a843', Icon: Cpu },
+  codex:         { label: 'Codex',          color: '#10A37F', Icon: Terminal },                                          // OpenAI green
+  lmstudio:      { label: 'LM Studio',      color: '#6F42C1', iconBg: '#6F42C1', Icon: Cpu },                           // LM Studio purple
 };
 
-const fallbackAppMeta = { label: '', color: '#6b7280', Icon: MessageSquare };
+const APP_ICON_URLS: Record<string, string> = {
+  claude: 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/claude-ai.svg',
+  claudedesktop: 'https://cdn.simpleicons.org/anthropic/da7756',
+  cursor: 'https://www.cursor.com/favicon.ico',
+  vscode: 'https://cdn.jsdelivr.net/gh/devicons/devicon/icons/vscode/vscode-original.svg',
+  openwebui: 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/open-webui.svg',
+  codex: 'https://cdn.simpleicons.org/openai/10A37F',
+  lmstudio: 'https://unpkg.com/@lobehub/icons-static-png@latest/dark/lmstudio.png',
+  clawbot: '',
+};
+
+const fallbackAppMeta = { label: '', color: '#6b7280', lineColor: undefined as string | undefined, iconBg: undefined as string | undefined, Icon: MessageSquare as LucideIcon };
 
 const getAppMeta = (key: string) => {
   const meta = APP_META[key];
@@ -117,32 +133,103 @@ function NodeShell({
   );
 }
 
+// ── Reusable App Icon ──────────────────────────────────────────────
+// Renders the actual brand icon with proper background, falling back to Lucide.
+function AppIcon({ appKey, size = 8 }: { appKey: string; size?: number }) {
+  const meta = getAppMeta(appKey);
+  const iconUrl = APP_ICON_URLS[appKey];
+  const [imgFailed, setImgFailed] = useState(false);
+  const { Icon } = meta;
+  const boxPx = size * 4;       // tailwind size units → px (8 = 32px)
+  const imgPx = boxPx * 0.625;  // icon inside the box
+  const fbPx  = boxPx * 0.5;    // fallback lucide size
+
+  return (
+    <div
+      className="rounded-lg flex items-center justify-center shrink-0 overflow-hidden"
+      style={{
+        width: boxPx, height: boxPx,
+        background: meta.iconBg || `${meta.color}18`,
+        border: `1px solid ${meta.iconBg ? meta.iconBg : meta.color + '25'}`,
+      }}
+    >
+      {iconUrl && !imgFailed ? (
+        <img
+          src={iconUrl}
+          alt={meta.label}
+          style={{ width: imgPx, height: imgPx }}
+          className="object-contain"
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <Icon style={{ width: fbPx, height: fbPx, color: meta.color }} />
+      )}
+    </div>
+  );
+}
+
+// ── User Node ──────────────────────────────────────────────────────
+// Leftmost column: shows which user accessed which application.
+const USER_NODE_COLOR = '#38bdf8'; // sky — distinct from app brand colors
+function UserNodeComponent({ data, selected }: NodeProps) {
+  const username = String(data.username || 'unknown');
+  const calls = Number(data.call_count) || 0;
+  const initials = username.trim().slice(0, 2).toUpperCase() || '?';
+
+  return (
+    <NodeShell glowColor={calls > 0 ? `${USER_NODE_COLOR}20` : undefined} selected={selected}>
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full"
+        style={{ background: USER_NODE_COLOR }}
+      />
+      <div className="flex items-center gap-3">
+        <div
+          className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-[11px] font-semibold"
+          style={{
+            background: `${USER_NODE_COLOR}18`,
+            border: `1px solid ${USER_NODE_COLOR}30`,
+            color: USER_NODE_COLOR,
+          }}
+        >
+          {initials}
+        </div>
+        <div className="min-w-0">
+          <span className="text-[13px] font-semibold text-white truncate block">{username}</span>
+          <p className="text-[10px] text-gray-500 mt-0.5 tabular-nums">
+            {calls > 0 ? `${calls.toLocaleString()} calls` : 'no activity'}
+          </p>
+        </div>
+      </div>
+    </NodeShell>
+  );
+}
+
 // ── App Node ───────────────────────────────────────────────────────
 function AppNodeComponent({ data, selected }: NodeProps) {
   const appKey = String(data.application);
   const meta = getAppMeta(appKey);
   const connected = Boolean(data.is_connected);
   const calls = Number(data.call_count) || 0;
-  const { Icon } = meta;
 
   return (
     <NodeShell glowColor={connected ? meta.color : undefined} selected={selected}>
+      {/* Target handle for optional incoming user → app edges. */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!w-2 !h-2 !border-2 !border-[#0a0a0f] !rounded-full !opacity-60"
+        style={{ background: USER_NODE_COLOR }}
+      />
       <Handle
         type="source"
         position={Position.Right}
         className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full"
-        style={{ background: meta.color }}
+        style={{ background: meta.lineColor || meta.color }}
       />
       <div className="flex items-center gap-3">
-        <div
-          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-          style={{
-            background: `${meta.color}18`,
-            border: `1px solid ${meta.color}25`,
-          }}
-        >
-          <Icon className="w-4 h-4" style={{ color: meta.color }} />
-        </div>
+        <AppIcon appKey={appKey} />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-[13px] font-semibold text-white truncate">
@@ -198,7 +285,7 @@ function BackendNodeComponent({ data, selected }: NodeProps) {
       )}
       <div className="flex items-center gap-3">
         <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 border border-accent/15">
-          <Server className="w-4 h-4 text-accent" />
+          {transport === 'agent' ? <Laptop className="w-4 h-4 text-accent" /> : <Server className="w-4 h-4 text-accent" />}
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -276,10 +363,43 @@ function ToolNodeComponent({ data, selected }: NodeProps) {
   );
 }
 
+function SubBackendNodeComponent({ data, selected }: NodeProps) {
+  const name = String(data.sub_name);
+  const toolCount = Number(data.tool_count) || 0;
+  const transport = String(data.transport || 'stdio');
+  const expanded = Boolean(data.expanded);
+
+  return (
+    <div className="tool-node-enter" style={{ animationDelay: `${(Number(data.animIndex) || 0) * 0.06}s` }}>
+      <NodeShell selected={selected}>
+        <Handle type="target" position={Position.Left} className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full" style={{ background: '#7c5cfc' }} />
+        {expanded && (
+          <Handle type="source" position={Position.Right} className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full" style={{ background: '#7c5cfc' }} />
+        )}
+        <div className="flex items-center gap-3 max-w-[180px]">
+          <div className="w-6 h-6 rounded-md bg-accent/10 flex items-center justify-center shrink-0 border border-accent/15">
+            <Server className="w-3 h-3 text-accent" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[12px] font-medium text-gray-200 truncate">{name}</p>
+            <span className="text-[10px] text-gray-500">{toolCount} tools</span>
+          </div>
+          <ChevronRight
+            className="w-3.5 h-3.5 text-gray-500 shrink-0 transition-transform duration-300"
+            style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+          />
+        </div>
+      </NodeShell>
+    </div>
+  );
+}
+
 const nodeTypes = {
+  userNode: UserNodeComponent,
   appNode: AppNodeComponent,
   backendNode: BackendNodeComponent,
   toolNode: ToolNodeComponent,
+  subBackendNode: SubBackendNodeComponent,
 };
 
 // ── Relative time helper ───────────────────────────────────────────
@@ -296,7 +416,7 @@ function timeAgo(iso: string): string {
 
 // ── Detail Panel (right-side overlay) ──────────────────────────────
 interface SelectionInfo {
-  type: 'app' | 'backend' | 'tool' | 'app-backend-edge' | 'backend-tool-edge';
+  type: 'user' | 'app' | 'backend' | 'tool' | 'sub-backend' | 'user-app-edge' | 'app-backend-edge' | 'backend-tool-edge' | 'backend-sub-edge' | 'sub-tool-edge';
   // For nodes
   data?: Record<string, unknown>;
   // For edges
@@ -326,18 +446,38 @@ function DetailPanel({
 
   const renderHeader = () => {
     switch (selection.type) {
+      case 'user': {
+        const username = String(selection.data?.username ?? 'unknown');
+        const calls = Number(selection.data?.call_count) || 0;
+        const initials = username.trim().slice(0, 2).toUpperCase() || '?';
+        return (
+          <div className="flex items-center gap-3">
+            <div
+              className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-[11px] font-semibold"
+              style={{
+                background: `${USER_NODE_COLOR}18`,
+                border: `1px solid ${USER_NODE_COLOR}30`,
+                color: USER_NODE_COLOR,
+              }}
+            >
+              {initials}
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-white">{username}</p>
+              <span className="text-[10px] text-gray-500">
+                {calls > 0 ? `${calls.toLocaleString()} calls` : 'no activity'} in range
+              </span>
+            </div>
+          </div>
+        );
+      }
       case 'app': {
         const appKey = String(selection.data?.application ?? '');
         const meta = getAppMeta(appKey);
         const connected = Boolean(selection.data?.is_connected);
         return (
           <div className="flex items-center gap-3">
-            <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-              style={{ background: `${meta.color}18`, border: `1px solid ${meta.color}25` }}
-            >
-              <meta.Icon className="w-4 h-4" style={{ color: meta.color }} />
-            </div>
+            <AppIcon appKey={appKey} />
             <div>
               <p className="text-sm font-semibold text-white">{meta.label}</p>
               <div className="flex items-center gap-2 mt-0.5">
@@ -421,11 +561,46 @@ function DetailPanel({
           </div>
         );
       }
-      case 'app-backend-edge': {
-        const srcMeta = getAppMeta(selection.sourceName ?? '');
+      case 'sub-backend': {
+        const subName = String(selection.data?.sub_name ?? '');
+        const subToolCount = Number(selection.data?.tool_count ?? 0);
+        return (
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 border border-accent/15">
+              <Server className="w-4 h-4 text-accent" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-white">{subName}</p>
+              <span className="text-[10px] text-gray-500">{subToolCount} tools</span>
+            </div>
+          </div>
+        );
+      }
+      case 'user-app-edge': {
+        const appKey = selection.targetName ?? '';
+        const meta = getAppMeta(appKey);
         return (
           <div>
             <div className="flex items-center gap-2 text-sm">
+              <UsersIcon className="w-4 h-4" style={{ color: USER_NODE_COLOR }} />
+              <span className="font-semibold text-white">User</span>
+              <ArrowRight className="w-3.5 h-3.5 text-gray-600" />
+              <AppIcon appKey={appKey} size={6} />
+              <span className="font-semibold text-white">{meta.label}</span>
+            </div>
+            <p className="text-[10px] text-gray-500 mt-1">
+              {(selection.callCount ?? 0).toLocaleString()} calls in this connection
+            </p>
+          </div>
+        );
+      }
+      case 'app-backend-edge': {
+        const srcAppKey = selection.sourceName ?? '';
+        const srcMeta = getAppMeta(srcAppKey);
+        return (
+          <div>
+            <div className="flex items-center gap-2 text-sm">
+              <AppIcon appKey={srcAppKey} size={6} />
               <span className="font-semibold text-white">{srcMeta.label}</span>
               <ArrowRight className="w-3.5 h-3.5 text-gray-600" />
               <span className="font-semibold text-white">{selection.targetName}</span>
@@ -436,6 +611,8 @@ function DetailPanel({
           </div>
         );
       }
+      case 'backend-sub-edge':
+      case 'sub-tool-edge':
       case 'backend-tool-edge': {
         const displayTarget = (selection.targetName ?? '').includes('__')
           ? (selection.targetName ?? '').split('__').slice(1).join('__')
@@ -582,6 +759,8 @@ export default function UsageGraph({ isAdmin }: Props) {
   const [range, setRange] = useState<string>('24h');
   const [loading, setLoading] = useState(true);
   const [expandedBackend, setExpandedBackend] = useState<string | null>(null);
+  const [expandedSubBackend, setExpandedSubBackend] = useState<string | null>(null);
+  const [backendConfigs, setBackendConfigs] = useState<any[]>([]);
   const [livePulse, setLivePulse] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
 
@@ -600,6 +779,10 @@ export default function UsageGraph({ isAdmin }: Props) {
       api.getUsers().then(setUsers).catch(() => {});
     }
   }, [isAdmin]);
+
+  useEffect(() => {
+    api.getBackends().then(setBackendConfigs).catch(() => {});
+  }, []);
 
   const loadGraph = useCallback(async () => {
     setLoading(true);
@@ -735,8 +918,13 @@ export default function UsageGraph({ isAdmin }: Props) {
           (p.backend && p.backend === msg.backend_name) ||
           (p.application && p.application === msg.application);
         if (matches) {
-          api.getAuditEvents({ ...p, limit: '15' })
-            .then((res) => setAuditEvents(res.events))
+          const prefix = auditToolPrefixRef.current;
+          const fetchLimit = prefix ? '100' : '15';
+          api.getAuditEvents({ ...p, limit: fetchLimit })
+            .then((res) => {
+              const filtered = applyToolPrefixFilter(res.events, prefix);
+              setAuditEvents(prefix ? filtered.slice(0, 15) : filtered);
+            })
             .catch(() => {});
         }
       }
@@ -815,19 +1003,45 @@ export default function UsageGraph({ isAdmin }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedUserId, range]);
 
+  // Compute a "from" timestamp based on the selected range for audit queries
+  const getAuditFrom = useCallback((): string => {
+    const now = new Date();
+    if (range === '7d') now.setDate(now.getDate() - 7);
+    else if (range === '30d') now.setDate(now.getDate() - 30);
+    else now.setHours(now.getHours() - 24);
+    return now.toISOString();
+  }, [range]);
+
+  // Client-side tool prefix filter for sub-backend selections
+  // When viewing a sub-backend, we fetch all events for the parent backend
+  // and filter to only those whose tool_name matches the sub-backend prefix.
+  const auditToolPrefixRef = useRef<string | null>(null);
+
+  const applyToolPrefixFilter = (events: AuditEvent[], prefix: string | null): AuditEvent[] => {
+    if (!prefix) return events;
+    return events.filter(evt => {
+      const origName = evt.tool_name.includes('__') ? evt.tool_name.split('__').slice(1).join('__') : evt.tool_name;
+      return origName.startsWith(prefix + '_') || origName === prefix;
+    });
+  };
+
   // Fetch audit events for the current selection
-  const fetchAudit = useCallback(async (params: Record<string, string>) => {
-    lastAuditParams.current = params;
+  const fetchAudit = useCallback(async (params: Record<string, string>, toolPrefix?: string | null) => {
+    const withRange = { ...params, from: getAuditFrom() };
+    lastAuditParams.current = withRange;
+    auditToolPrefixRef.current = toolPrefix ?? null;
     setLoadingAudit(true);
     try {
-      const res = await api.getAuditEvents({ ...params, limit: '15' });
-      setAuditEvents(res.events);
+      const fetchLimit = toolPrefix ? '100' : '15';
+      const res = await api.getAuditEvents({ ...withRange, limit: fetchLimit });
+      const filtered = applyToolPrefixFilter(res.events, toolPrefix ?? null);
+      setAuditEvents(toolPrefix ? filtered.slice(0, 15) : filtered);
     } catch {
       setAuditEvents([]);
     } finally {
       setLoadingAudit(false);
     }
-  }, []);
+  }, [getAuditFrom]);
 
   // While the detail panel is open, silently refresh its events every 5s
   // (WS handles instant updates on matching calls; this catches anything missed)
@@ -835,12 +1049,33 @@ export default function UsageGraph({ isAdmin }: Props) {
     if (!selection) return;
     const interval = setInterval(() => {
       if (Object.keys(lastAuditParams.current).length === 0) return;
-      api.getAuditEvents({ ...lastAuditParams.current, limit: '15' })
-        .then((res) => setAuditEvents(res.events))
+      const prefix = auditToolPrefixRef.current;
+      const fetchLimit = prefix ? '100' : '15';
+      api.getAuditEvents({ ...lastAuditParams.current, limit: fetchLimit })
+        .then((res) => {
+          const filtered = applyToolPrefixFilter(res.events, prefix);
+          setAuditEvents(prefix ? filtered.slice(0, 15) : filtered);
+        })
         .catch(() => {});
     }, 5000);
     return () => clearInterval(interval);
   }, [selection]);
+
+  // Re-fetch audit when range changes and a selection is open
+  useEffect(() => {
+    if (!selection || Object.keys(lastAuditParams.current).length === 0) return;
+    // Update the stored from param and re-fetch
+    lastAuditParams.current = { ...lastAuditParams.current, from: getAuditFrom() };
+    const prefix = auditToolPrefixRef.current;
+    const fetchLimit = prefix ? '100' : '15';
+    api.getAuditEvents({ ...lastAuditParams.current, limit: fetchLimit })
+      .then((res) => {
+        const filtered = applyToolPrefixFilter(res.events, prefix);
+        setAuditEvents(prefix ? filtered.slice(0, 15) : filtered);
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range]);
 
   // Build graph nodes and edges
   const { nodes, edges } = useMemo(() => {
@@ -850,9 +1085,15 @@ export default function UsageGraph({ isAdmin }: Props) {
     const flowNodes: Node[] = [];
     const flowEdges: Edge[] = [];
 
-    const COL_APP = 50;
-    const COL_BACKEND = 450;
-    const COL_TOOL = 850;
+    // Optional leftmost Users column. When present, everything else shifts
+    // right to make room, so the flow reads Users → Apps → Backends → Tools.
+    const usersList = graphData.users ?? [];
+    const showUsers = usersList.length > 0;
+    const USERS_SHIFT = showUsers ? 300 : 0;
+    const COL_USER = 50;
+    const COL_APP = 50 + USERS_SHIFT;
+    const COL_BACKEND = 450 + USERS_SHIFT;
+    const COL_TOOL = 850 + USERS_SHIFT;
     const ROW_SPACING = 90;
 
     // All tools with calls for the expanded backend (sorted by most recent, then count)
@@ -869,6 +1110,7 @@ export default function UsageGraph({ isAdmin }: Props) {
 
     // Vertical centering — tools only shown when a backend is expanded
     const maxRows = Math.max(
+      usersList.length,
       graphData.applications.length,
       graphData.backends.length,
       expandedTools.length,
@@ -876,6 +1118,24 @@ export default function UsageGraph({ isAdmin }: Props) {
     );
     const getYOffset = (count: number) =>
       ((maxRows - count) * ROW_SPACING) / 2 + 40;
+
+    // User nodes (leftmost column) + user → app edges
+    if (showUsers) {
+      const userOffset = getYOffset(usersList.length);
+      usersList.forEach((u, i) => {
+        flowNodes.push({
+          id: `user-${u.user_id}`,
+          type: 'userNode',
+          position: { x: COL_USER, y: i * ROW_SPACING + userOffset },
+          data: {
+            user_id: u.user_id,
+            username: u.username,
+            call_count: u.call_count,
+            last_seen: u.last_seen,
+          },
+        });
+      });
+    }
 
     // App nodes
     const appOffset = getYOffset(graphData.applications.length);
@@ -910,9 +1170,133 @@ export default function UsageGraph({ isAdmin }: Props) {
       });
     });
 
-    // Tool nodes — only for expanded backend's called tools
-    if (expandedBackend && expandedTools.length > 0) {
-      // Position tools vertically centered around the expanded backend node
+    // Edge thickness scaling
+    const allCounts = [
+      ...(graphData.user_to_app ?? []).map((e) => e.call_count),
+      ...graphData.app_to_backend.map((e) => e.call_count),
+      ...graphData.backend_to_tool.map((e) => e.call_count),
+    ];
+    const maxCalls = Math.max(...allCounts, 1);
+
+    // User -> App edges (colored by the target application for visual continuity)
+    if (showUsers) {
+      (graphData.user_to_app ?? []).forEach((edge, i) => {
+        // Only draw the edge if both endpoints are actually rendered.
+        const hasApp = graphData.applications.some((a) => a.application === edge.target);
+        const hasUser = usersList.some((u) => u.user_id === edge.source);
+        if (!hasApp || !hasUser) return;
+        const meta = getAppMeta(edge.target);
+        const thickness = Math.max(1.5, Math.min((edge.call_count / maxCalls) * 5, 5));
+        const edgeColor = meta.lineColor || meta.color;
+        flowEdges.push({
+          id: `ua-${i}-${edge.source}-${edge.target}`,
+          source: `user-${edge.source}`,
+          target: `app-${edge.target}`,
+          animated: true,
+          style: { stroke: edgeColor, strokeWidth: thickness, opacity: 0.5 },
+          data: { sourceName: edge.source, targetName: edge.target, callCount: edge.call_count },
+        });
+      });
+    }
+
+    // App -> Backend edges
+    graphData.app_to_backend.forEach((edge, i) => {
+      const meta = getAppMeta(edge.source);
+      const thickness = Math.max(1.5, Math.min((edge.call_count / maxCalls) * 5, 5));
+      const edgeColor = meta.lineColor || meta.color;
+      flowEdges.push({
+        id: `ab-${i}-${edge.source}-${edge.target}`,
+        source: `app-${edge.source}`,
+        target: `backend-${edge.target}`,
+        animated: true,
+        style: { stroke: edgeColor, strokeWidth: thickness, opacity: 0.55 },
+        data: { sourceName: edge.source, targetName: edge.target, callCount: edge.call_count },
+      });
+    });
+
+    // Get the config for the expanded backend to check if it's an agent
+    const expandedBackendConfig = expandedBackend
+      ? backendConfigs.find(b => b.name === expandedBackend)
+      : null;
+    const isAgent = expandedBackendConfig?.transport === 'agent';
+    const subBackends: any[] = isAgent ? (expandedBackendConfig?.config?.sub_backends || []) : [];
+
+    if (expandedBackend && isAgent && subBackends.length > 0) {
+      // Agent backend: show sub-backend nodes
+      const expandedBackendIdx = graphData.backends.findIndex(b => b.backend_name === expandedBackend);
+      const backendY = expandedBackendIdx * ROW_SPACING + backendOffset;
+      const subBlockHeight = (subBackends.length - 1) * ROW_SPACING;
+      const subStartY = backendY - subBlockHeight / 2;
+
+      subBackends.forEach((sub: any, i: number) => {
+        flowNodes.push({
+          id: `sub-${expandedBackend}-${sub.name}`,
+          type: 'subBackendNode',
+          position: { x: COL_TOOL, y: subStartY + i * ROW_SPACING },
+          data: {
+            sub_name: sub.name,
+            transport: sub.transport,
+            tool_count: sub.tool_count || 0,
+            expanded: expandedSubBackend === sub.name,
+            animIndex: i,
+          },
+        });
+
+        // Edge from backend to sub-backend
+        flowEdges.push({
+          id: `bs-${expandedBackend}-${sub.name}`,
+          source: `backend-${expandedBackend}`,
+          target: `sub-${expandedBackend}-${sub.name}`,
+          animated: true,
+          style: { stroke: '#7c5cfc', strokeWidth: 1.5, opacity: 0.45 },
+          data: { sourceName: expandedBackend, targetName: sub.name, callCount: 0 },
+        });
+      });
+
+      // If a sub-backend is expanded, show its tools
+      if (expandedSubBackend) {
+        const COL_TOOL_DETAIL = 1250;
+        const subTools = expandedTools.filter(t => {
+          const origName = t.tool_name.includes('__') ? t.tool_name.split('__').slice(1).join('__') : t.tool_name;
+          return origName.startsWith(expandedSubBackend + '_') || origName === expandedSubBackend;
+        });
+
+        if (subTools.length > 0) {
+          const subIdx = subBackends.findIndex((s: any) => s.name === expandedSubBackend);
+          const subY = subStartY + subIdx * ROW_SPACING;
+          const toolBlockHeight = (subTools.length - 1) * ROW_SPACING;
+          const toolStartY = subY - toolBlockHeight / 2;
+
+          subTools.forEach((t, i) => {
+            flowNodes.push({
+              id: `tool-${t.tool_name}`,
+              type: 'toolNode',
+              position: { x: COL_TOOL_DETAIL, y: toolStartY + i * ROW_SPACING },
+              data: {
+                tool_name: t.tool_name,
+                backend_name: t.backend_name,
+                risk_category: t.risk_category,
+                call_count: t.call_count,
+                animIndex: i,
+              },
+            });
+          });
+
+          // Edges from sub-backend to tools
+          subTools.forEach((t, i) => {
+            flowEdges.push({
+              id: `st-${expandedSubBackend}-${t.tool_name}`,
+              source: `sub-${expandedBackend}-${expandedSubBackend}`,
+              target: `tool-${t.tool_name}`,
+              animated: true,
+              style: { stroke: '#7c5cfc', strokeWidth: 1, opacity: 0.35 },
+              data: { sourceName: expandedSubBackend, targetName: t.tool_name, callCount: t.call_count },
+            });
+          });
+        }
+      }
+    } else if (expandedBackend && expandedTools.length > 0) {
+      // Non-agent backend: show tools directly (existing behavior)
       const expandedBackendIdx = graphData.backends.findIndex(
         (b) => b.backend_name === expandedBackend,
       );
@@ -934,31 +1318,8 @@ export default function UsageGraph({ isAdmin }: Props) {
           },
         });
       });
-    }
 
-    // Edge thickness scaling
-    const allCounts = [
-      ...graphData.app_to_backend.map((e) => e.call_count),
-      ...graphData.backend_to_tool.map((e) => e.call_count),
-    ];
-    const maxCalls = Math.max(...allCounts, 1);
-
-    // App -> Backend edges
-    graphData.app_to_backend.forEach((edge, i) => {
-      const meta = getAppMeta(edge.source);
-      const thickness = Math.max(1.5, Math.min((edge.call_count / maxCalls) * 5, 5));
-      flowEdges.push({
-        id: `ab-${i}-${edge.source}-${edge.target}`,
-        source: `app-${edge.source}`,
-        target: `backend-${edge.target}`,
-        animated: true,
-        style: { stroke: meta.color, strokeWidth: thickness, opacity: 0.55 },
-        data: { sourceName: edge.source, targetName: edge.target, callCount: edge.call_count },
-      });
-    });
-
-    // Backend -> Tool edges (only for expanded backend's tools)
-    if (expandedBackend) {
+      // Backend -> Tool edges for non-agent
       graphData.backend_to_tool.forEach((edge, i) => {
         if (edge.source !== expandedBackend) return;
         const toolExists = expandedTools.some((t) => t.tool_name === edge.target);
@@ -976,18 +1337,43 @@ export default function UsageGraph({ isAdmin }: Props) {
     }
 
     return { nodes: flowNodes, edges: flowEdges };
-  }, [graphData, connections, expandedBackend]);
+  }, [graphData, connections, expandedBackend, expandedSubBackend, backendConfigs]);
 
   // Event handlers
   const onNodeClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
+      // User node: show that user's recent activity.
+      if (node.type === 'userNode') {
+        setSelection({ type: 'user', data: node.data as Record<string, unknown> });
+        fetchAudit({ user_id: String(node.data.user_id) });
+        return;
+      }
+
       const nodeType =
-        node.type === 'appNode' ? 'app' : node.type === 'backendNode' ? 'backend' : 'tool';
+        node.type === 'appNode' ? 'app' : node.type === 'backendNode' ? 'backend' : node.type === 'subBackendNode' ? 'backend' : 'tool';
+
+      // Handle sub-backend node clicks — must come before backend toggle
+      if (node.type === 'subBackendNode') {
+        const subName = String(node.data.sub_name);
+        setExpandedSubBackend((prev) => (prev === subName ? null : subName));
+        setSelection({ type: 'sub-backend', data: node.data as Record<string, unknown> });
+        const params: Record<string, string> = {};
+        if (expandedBackend) params.backend = expandedBackend;
+        fetchAudit(params, subName);
+        return;
+      }
 
       // Toggle backend expansion when clicking a backend node
-      if (nodeType === 'backend') {
+      if (node.type === 'backendNode') {
         const backendName = String(node.data.backend_name);
-        setExpandedBackend((prev) => (prev === backendName ? null : backendName));
+        setExpandedBackend((prev) => {
+          if (prev === backendName) {
+            setExpandedSubBackend(null);
+            return null;
+          }
+          setExpandedSubBackend(null);
+          return backendName;
+        });
       }
 
       setSelection({ type: nodeType as SelectionInfo['type'], data: node.data as Record<string, unknown> });
@@ -999,34 +1385,44 @@ export default function UsageGraph({ isAdmin }: Props) {
       if (nodeType === 'tool') params.tool_name = String(node.data.tool_name);
       fetchAudit(params);
     },
-    [fetchAudit],
+    [fetchAudit, expandedBackend],
   );
 
   const onEdgeClick = useCallback(
     (_event: React.MouseEvent, edge: Edge) => {
-      const isAppBackend = edge.id.startsWith('ab-');
       const edgeData = edge.data as Record<string, unknown> | undefined;
       const sourceName = String(edgeData?.sourceName ?? '');
       const targetName = String(edgeData?.targetName ?? '');
       const callCount = Number(edgeData?.callCount ?? 0);
 
-      setSelection({
-        type: isAppBackend ? 'app-backend-edge' : 'backend-tool-edge',
-        sourceName,
-        targetName,
-        callCount,
-      });
+      let edgeType: SelectionInfo['type'];
+      if (edge.id.startsWith('ua-')) edgeType = 'user-app-edge';
+      else if (edge.id.startsWith('ab-')) edgeType = 'app-backend-edge';
+      else if (edge.id.startsWith('bs-')) edgeType = 'backend-sub-edge';
+      else if (edge.id.startsWith('st-')) edgeType = 'sub-tool-edge';
+      else edgeType = 'backend-tool-edge';
+
+      setSelection({ type: edgeType, sourceName, targetName, callCount });
 
       // Fetch audit events for this connection
       const params: Record<string, string> = {};
-      if (isAppBackend) {
+      let toolPrefix: string | null = null;
+      if (edgeType === 'user-app-edge') {
+        params.user_id = sourceName;
+        params.application = targetName;
+      } else if (edgeType === 'app-backend-edge') {
         params.application = sourceName;
         params.backend = targetName;
+      } else if (edgeType === 'backend-sub-edge') {
+        params.backend = sourceName;
+        toolPrefix = targetName;
+      } else if (edgeType === 'sub-tool-edge') {
+        params.tool_name = targetName;
       } else {
         params.backend = sourceName;
         params.tool_name = targetName;
       }
-      fetchAudit(params);
+      fetchAudit(params, toolPrefix);
     },
     [fetchAudit],
   );
@@ -1034,6 +1430,7 @@ export default function UsageGraph({ isAdmin }: Props) {
   const onPaneClick = useCallback(() => {
     setSelection(null);
     setExpandedBackend(null);
+    setExpandedSubBackend(null);
     setAuditEvents([]);
     lastAuditParams.current = {};
   }, []);
@@ -1090,6 +1487,7 @@ export default function UsageGraph({ isAdmin }: Props) {
               onChange={(e) => setSelectedUserId(e.target.value)}
               className="px-2 py-1 bg-transparent border border-border rounded-lg text-[11px] text-gray-300 focus:outline-none focus:border-accent/40 appearance-none pr-5 cursor-pointer"
             >
+              <option value="all">All users</option>
               <option value="">Current user</option>
               {users.map((u) => (
                 <option key={u.user_id} value={u.user_id}>

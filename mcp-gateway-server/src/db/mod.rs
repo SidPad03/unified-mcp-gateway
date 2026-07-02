@@ -198,6 +198,24 @@ WHERE a.backend_id = b.backend_id
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tools_backend_original
     ON tool_registry(backend_id, original_name);
 "#,
+    // 010: Force a password change on first login. Adds a per-user flag; the
+    // default `admin` account is flagged once so the operator must set a real
+    // password before using the dashboard. The UPDATE is guarded so it only
+    // runs the first time the column is added — migrations execute on every
+    // startup, and an unconditional UPDATE would re-flag admin after they had
+    // already chosen a new password.
+    r#"
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'users' AND column_name = 'must_change_password'
+    ) THEN
+        ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
+        UPDATE users SET must_change_password = TRUE WHERE username = 'admin';
+    END IF;
+END $$;
+"#,
 ];
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {

@@ -32,6 +32,7 @@ export default function UserManagement() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -56,7 +57,9 @@ export default function UserManagement() {
   };
 
   const createUser = async () => {
+    if (isSubmitting) return;
     setError('');
+    setIsSubmitting(true);
     try {
       await api.createUser(newUser);
       setShowCreateModal(false);
@@ -64,6 +67,8 @@ export default function UserManagement() {
       loadData();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -91,7 +96,9 @@ export default function UserManagement() {
   };
 
   const saveRole = async () => {
+    if (isSubmitting) return;
     setError('');
+    setIsSubmitting(true);
     try {
       if (editingRole) {
         await api.updateRole(editingRole.role_id, {
@@ -106,6 +113,8 @@ export default function UserManagement() {
       loadData();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -150,7 +159,9 @@ export default function UserManagement() {
   };
 
   const generateApiKey = async () => {
+    if (isSubmitting) return;
     setError('');
+    setIsSubmitting(true);
     try {
       const result = await api.createApiKey({ name: keyName || 'default', user_id: keyModalUserId });
       setGeneratedKey(result.raw_key);
@@ -158,6 +169,8 @@ export default function UserManagement() {
       loadData();
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -209,10 +222,12 @@ export default function UserManagement() {
   };
 
   const changePassword = async () => {
+    if (isSubmitting) return;
     setError('');
     if (!newPassword.trim()) { setError('Password is required'); return; }
     if (newPassword.length < 4) { setError('Password must be at least 4 characters'); return; }
     if (newPassword !== confirmPassword) { setError('Passwords do not match'); return; }
+    setIsSubmitting(true);
     try {
       await api.updateUser(passwordUserId, { password: newPassword });
       setPasswordSuccess(true);
@@ -222,6 +237,8 @@ export default function UserManagement() {
       }, 1500);
     } catch (e: any) {
       setError(e.message || 'Failed to change password');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -533,9 +550,10 @@ export default function UserManagement() {
                   </button>
                   <button
                     onClick={generateApiKey}
-                    className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
+                    disabled={isSubmitting}
+                    className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
                   >
-                    Generate
+                    {isSubmitting ? 'Generating…' : 'Generate'}
                   </button>
                 </div>
               </div>
@@ -649,9 +667,10 @@ export default function UserManagement() {
                 </button>
                 <button
                   onClick={saveRole}
-                  className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
+                  disabled={isSubmitting}
+                  className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
                 >
-                  {editingRole ? 'Update' : 'Create'} Role
+                  {isSubmitting ? 'Saving…' : `${editingRole ? 'Update' : 'Create'} Role`}
                 </button>
               </div>
             </div>
@@ -727,9 +746,10 @@ export default function UserManagement() {
                 </button>
                 <button
                   onClick={createUser}
-                  className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
+                  disabled={isSubmitting}
+                  className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
                 >
-                  Create User
+                  {isSubmitting ? 'Creating…' : 'Create User'}
                 </button>
               </div>
             </div>
@@ -794,9 +814,10 @@ export default function UserManagement() {
                   </button>
                   <button
                     onClick={changePassword}
-                    className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
+                    disabled={isSubmitting}
+                    className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
                   >
-                    Update Password
+                    {isSubmitting ? 'Saving…' : 'Update Password'}
                   </button>
                 </div>
               </div>

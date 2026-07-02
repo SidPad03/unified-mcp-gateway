@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api, Tool, Backend } from '@/lib/api';
 import { Search, Wrench, X, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import clsx from 'clsx';
@@ -302,120 +302,125 @@ export default function ToolInventory() {
             ) : filteredAndSorted.length === 0 ? (
               <tr><td colSpan={5} className="px-4 py-12 text-center text-gray-500 text-sm">No tools found</td></tr>
             ) : (
-              filteredAndSorted.map(tool => (
-                <tr
-                  key={tool.tool_id}
-                  className="border-b border-border/50 hover:bg-surface-hover transition-colors cursor-pointer"
-                  onClick={() => setSelectedTool(selectedTool?.tool_id === tool.tool_id ? null : tool)}
-                >
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-7 h-7 bg-accent/10 rounded-md flex items-center justify-center shrink-0">
-                        <Wrench className="w-3.5 h-3.5 text-accent" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-white truncate">{tool.tool_name}</p>
-                        <p className="text-xs text-gray-500 truncate max-w-xs">{tool.description || 'No description'}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-sm text-gray-300">{tool.backend_name}</span>
-                  </td>
-                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                    {auth.isAdmin && editingRisk === tool.tool_id ? (
-                      <select
-                        autoFocus
-                        value={tool.risk_category || 'unclassified'}
-                        onChange={e => changeRiskCategory(tool.tool_id, e.target.value)}
-                        onBlur={() => setEditingRisk(null)}
-                        className="text-xs px-2 py-1 bg-[#0a0a0f] border border-accent/40 rounded text-gray-300 focus:outline-none"
-                      >
-                        {ALL_RISK_CATEGORIES.map(r => <option key={r} value={r}>{r}</option>)}
-                      </select>
-                    ) : (
-                      <span
-                        className={clsx(
-                          'inline-flex px-2 py-0.5 text-xs font-medium rounded-full border',
-                          RISK_COLORS[tool.risk_category || 'unclassified'] || RISK_COLORS.unclassified,
-                          auth.isAdmin && 'cursor-pointer hover:ring-1 hover:ring-accent/30'
+              filteredAndSorted.map(tool => {
+                const isExpanded = selectedTool?.tool_id === tool.tool_id;
+                return (
+                  <React.Fragment key={tool.tool_id}>
+                    <tr
+                      className="border-b border-border/50 hover:bg-surface-hover transition-colors cursor-pointer"
+                      onClick={() => setSelectedTool(isExpanded ? null : tool)}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-7 h-7 bg-accent/10 rounded-md flex items-center justify-center shrink-0">
+                            <Wrench className="w-3.5 h-3.5 text-accent" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-white truncate">{tool.tool_name}</p>
+                            <p className="text-xs text-gray-500 truncate max-w-xs">{tool.description || 'No description'}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-sm text-gray-300">{tool.backend_name}</span>
+                      </td>
+                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                        {auth.isAdmin && editingRisk === tool.tool_id ? (
+                          <select
+                            autoFocus
+                            value={tool.risk_category || 'unclassified'}
+                            onChange={e => changeRiskCategory(tool.tool_id, e.target.value)}
+                            onBlur={() => setEditingRisk(null)}
+                            className="text-xs px-2 py-1 bg-[#0a0a0f] border border-accent/40 rounded text-gray-300 focus:outline-none"
+                          >
+                            {ALL_RISK_CATEGORIES.map(r => <option key={r} value={r}>{r}</option>)}
+                          </select>
+                        ) : (
+                          <span
+                            className={clsx(
+                              'inline-flex px-2 py-0.5 text-xs font-medium rounded-full border',
+                              RISK_COLORS[tool.risk_category || 'unclassified'] || RISK_COLORS.unclassified,
+                              auth.isAdmin && 'cursor-pointer hover:ring-1 hover:ring-accent/30'
+                            )}
+                            onClick={() => auth.isAdmin && setEditingRisk(tool.tool_id)}
+                            title={auth.isAdmin ? 'Click to reclassify' : undefined}
+                          >
+                            {tool.risk_category || 'unclassified'}
+                          </span>
                         )}
-                        onClick={() => auth.isAdmin && setEditingRisk(tool.tool_id)}
-                        title={auth.isAdmin ? 'Click to reclassify' : undefined}
-                      >
-                        {tool.risk_category || 'unclassified'}
-                      </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-sm text-gray-300">{tool.call_count_24h}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {(() => {
+                          const status = getToolStatus(tool);
+                          const statusConfig = {
+                            enabled: { color: 'text-success', dot: 'bg-success', label: 'Enabled' },
+                            disabled: { color: 'text-gray-500', dot: 'bg-gray-600', label: 'Disabled' },
+                            disconnected: { color: 'text-warning', dot: 'bg-warning', label: 'Disconnected' },
+                          }[status];
+                          return (
+                            <span className={clsx('inline-flex items-center gap-1 text-xs font-medium', statusConfig.color)}>
+                              <span className={clsx('w-1.5 h-1.5 rounded-full', statusConfig.dot)} />
+                              {statusConfig.label}
+                            </span>
+                          );
+                        })()}
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-4 bg-surface-hover border-b border-border/50">
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-semibold text-white">Tool Details</h3>
+                            <button onClick={(e) => { e.stopPropagation(); setSelectedTool(null); }} className="text-gray-500 hover:text-gray-300">
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div><span className="text-gray-500">Full Name:</span> <span className="text-gray-200 ml-2">{selectedTool.tool_name}</span></div>
+                            <div><span className="text-gray-500">Original Name:</span> <span className="text-gray-200 ml-2">{selectedTool.original_name}</span></div>
+                            <div><span className="text-gray-500">Backend:</span> <span className="text-gray-200 ml-2">{selectedTool.backend_name}</span></div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-gray-500">Risk Category:</span>
+                              {auth.isAdmin ? (
+                                <select
+                                  value={selectedTool.risk_category || 'unclassified'}
+                                  onChange={e => changeRiskCategory(selectedTool.tool_id, e.target.value)}
+                                  className="text-xs px-2 py-1 bg-[#0a0a0f] border border-border rounded text-gray-300 focus:outline-none focus:border-accent/50"
+                                >
+                                  {ALL_RISK_CATEGORIES.map(r => <option key={r} value={r}>{r}</option>)}
+                                </select>
+                              ) : (
+                                <span className={clsx('inline-flex px-2 py-0.5 text-xs font-medium rounded-full border ml-2', RISK_COLORS[selectedTool.risk_category || 'unclassified'] || RISK_COLORS.unclassified)}>
+                                  {selectedTool.risk_category || 'unclassified'}
+                                </span>
+                              )}
+                            </div>
+                            <div><span className="text-gray-500">Last Seen:</span> <span className="text-gray-200 ml-2">{new Date(selectedTool.last_seen).toLocaleString()}</span></div>
+                            <div><span className="text-gray-500">Calls ({callsLabel}):</span> <span className="text-gray-200 ml-2">{selectedTool.call_count_24h}</span></div>
+                            <div className="col-span-2"><span className="text-gray-500">Description:</span> <span className="text-gray-200 ml-2">{selectedTool.description || 'No description available'}</span></div>
+                          </div>
+                          {selectedTool.input_schema && (
+                            <div className="mt-4">
+                              <p className="text-xs text-gray-500 mb-2">Input Schema:</p>
+                              <pre className="bg-[#0a0a0f] p-3 rounded-lg text-xs text-gray-400 overflow-auto max-h-40">
+                                {JSON.stringify(selectedTool.input_schema, null, 2)}
+                              </pre>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
                     )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-sm text-gray-300">{tool.call_count_24h}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    {(() => {
-                      const status = getToolStatus(tool);
-                      const statusConfig = {
-                        enabled: { color: 'text-success', dot: 'bg-success', label: 'Enabled' },
-                        disabled: { color: 'text-gray-500', dot: 'bg-gray-600', label: 'Disabled' },
-                        disconnected: { color: 'text-warning', dot: 'bg-warning', label: 'Disconnected' },
-                      }[status];
-                      return (
-                        <span className={clsx('inline-flex items-center gap-1 text-xs font-medium', statusConfig.color)}>
-                          <span className={clsx('w-1.5 h-1.5 rounded-full', statusConfig.dot)} />
-                          {statusConfig.label}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                </tr>
-              ))
+                  </React.Fragment>
+                );
+              })
             )}
           </tbody>
         </table>
       </div>
 
-      {/* Detail panel */}
-      {selectedTool && (
-        <div className="mt-4 bg-surface border border-border rounded-xl p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-white">Tool Details</h3>
-            <button onClick={() => setSelectedTool(null)} className="text-gray-500 hover:text-gray-300">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div><span className="text-gray-500">Full Name:</span> <span className="text-gray-200 ml-2">{selectedTool.tool_name}</span></div>
-            <div><span className="text-gray-500">Original Name:</span> <span className="text-gray-200 ml-2">{selectedTool.original_name}</span></div>
-            <div><span className="text-gray-500">Backend:</span> <span className="text-gray-200 ml-2">{selectedTool.backend_name}</span></div>
-            <div className="flex items-center gap-2">
-              <span className="text-gray-500">Risk Category:</span>
-              {auth.isAdmin ? (
-                <select
-                  value={selectedTool.risk_category || 'unclassified'}
-                  onChange={e => changeRiskCategory(selectedTool.tool_id, e.target.value)}
-                  className="text-xs px-2 py-1 bg-[#0a0a0f] border border-border rounded text-gray-300 focus:outline-none focus:border-accent/50"
-                >
-                  {ALL_RISK_CATEGORIES.map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
-              ) : (
-                <span className={clsx('inline-flex px-2 py-0.5 text-xs font-medium rounded-full border ml-2', RISK_COLORS[selectedTool.risk_category || 'unclassified'] || RISK_COLORS.unclassified)}>
-                  {selectedTool.risk_category || 'unclassified'}
-                </span>
-              )}
-            </div>
-            <div><span className="text-gray-500">Last Seen:</span> <span className="text-gray-200 ml-2">{new Date(selectedTool.last_seen).toLocaleString()}</span></div>
-            <div><span className="text-gray-500">Calls ({callsLabel}):</span> <span className="text-gray-200 ml-2">{selectedTool.call_count_24h}</span></div>
-            <div className="col-span-2"><span className="text-gray-500">Description:</span> <span className="text-gray-200 ml-2">{selectedTool.description || 'No description available'}</span></div>
-          </div>
-          {selectedTool.input_schema && (
-            <div className="mt-4">
-              <p className="text-xs text-gray-500 mb-2">Input Schema:</p>
-              <pre className="bg-[#0a0a0f] p-3 rounded-lg text-xs text-gray-400 overflow-auto max-h-40">
-                {JSON.stringify(selectedTool.input_schema, null, 2)}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
