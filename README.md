@@ -57,22 +57,28 @@ MCP Gateway is a three-component system:
 
 ### 1. Start the gateway
 
+The server and dashboard are published as prebuilt images on GHCR, so there's no
+build step — just pull and run. Grab the compose file, set a JWT secret, and start:
+
 ```bash
-git clone https://github.com/SidPad03/unified-mcp-gateway.git
-cd unified-mcp-gateway
+# Download the compose file
+curl -O https://raw.githubusercontent.com/SidPad03/unified-mcp-gateway/main/docker-compose.yml
 
-# A JWT secret is required — the server refuses to boot without one.
-cp .env.example .env
-echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
+# A JWT secret is required — the server refuses to boot without one
+echo "JWT_SECRET=$(openssl rand -hex 32)" > .env
 
-# Start all services (server + dashboard + postgres)
-docker compose up --build
+# Pull the prebuilt images and start everything (server + dashboard + postgres)
+docker compose up -d
 ```
 
 This starts three containers:
-- **PostgreSQL** on port 5432
 - **MCP Gateway Server** on port 3200
 - **Dashboard** on port 8080
+- **PostgreSQL** (internal to the compose network)
+
+> The compose file tracks `:latest`. To pin a specific release, change the
+> `image:` tags to `:v1.1.0`. Prefer to build from source? See
+> [Development](#development).
 
 ### 2. Log in to the dashboard
 
@@ -126,7 +132,7 @@ it automatically):
 JWT_SECRET=your-strong-random-secret
 # Optional — defaults to `mcpgateway` if unset
 POSTGRES_PASSWORD=your-strong-db-password
-# Optional — if unset, a random admin password is generated and logged once
+# Optional — if unset, defaults to `admin` with a forced change on first login
 MCPGW_ADMIN_PASSWORD=your-initial-admin-password
 ```
 
