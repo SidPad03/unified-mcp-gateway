@@ -17,6 +17,10 @@ services:
     # Pre-built image from GHCR. Pin to a version (e.g. :v1.1.0) for reproducible
     # deploys, or use :latest to track the newest release.
     image: ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-server:latest
+    # The published images are currently linux/amd64 only; on Apple Silicon /
+    # arm64 hosts Docker runs them via emulation. Remove this once multi-arch
+    # images are published.
+    platform: linux/amd64
     ports:
       - "3200:3200"
     environment:
@@ -42,6 +46,7 @@ services:
 
   mcp-gateway-dashboard:
     image: ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-dashboard:latest
+    platform: linux/amd64
     ports:
       - "8080:80"
     depends_on:
