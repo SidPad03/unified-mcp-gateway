@@ -1255,7 +1255,11 @@ export default function UsageGraph({ isAdmin }: Props) {
 
       // If a sub-backend is expanded, show its tools
       if (expandedSubBackend) {
-        const COL_TOOL_DETAIL = 1250;
+        // One column (400px) to the right of the sub-backends. Must be relative
+        // to COL_TOOL so it also accounts for USERS_SHIFT — a hardcoded value
+        // overlapped the sub-backend column when the Users column was shown,
+        // making the sub→tool edges run backwards.
+        const COL_TOOL_DETAIL = COL_TOOL + 400;
         const subTools = expandedTools.filter(t => {
           const origName = t.tool_name.includes('__') ? t.tool_name.split('__').slice(1).join('__') : t.tool_name;
           return origName.startsWith(expandedSubBackend + '_') || origName === expandedSubBackend;
