@@ -58,7 +58,7 @@ const APP_META: Record<string, { label: string; color: string; lineColor?: strin
   vscode:        { label: 'VS Code',        color: '#007ACC', Icon: Code2 },                                            // official VS Code blue
   openwebui:     { label: 'Open WebUI',     color: '#e0e0e0', lineColor: '#d4d4d4', iconBg: '#111111', Icon: Globe },    // dark icon → white/light lines
   clawbot:       { label: 'Clawbot',        color: '#b07ce8', Icon: Bot },
-  codex:         { label: 'Codex',          color: '#d97700', Icon: Terminal },                                          // OpenAI Codex amber
+  codex:         { label: 'Codex',          color: '#10A37F', iconBg: '#0d0d0d', Icon: Terminal },                       // OpenAI Codex
   lmstudio:      { label: 'LM Studio',      color: '#6F42C1', iconBg: '#6F42C1', Icon: Cpu },                           // LM Studio purple
 };
 
@@ -68,7 +68,7 @@ const APP_ICON_URLS: Record<string, string> = {
   cursor: 'https://cdn.simpleicons.org/cursor/ffffff',
   vscode: 'https://cdn.jsdelivr.net/gh/devicons/devicon/icons/vscode/vscode-original.svg',
   openwebui: 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/open-webui.svg',
-  codex: 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/codex.svg',
+  codex: 'https://unpkg.com/@lobehub/icons-static-png@latest/dark/codex.png',
   lmstudio: 'https://unpkg.com/@lobehub/icons-static-png@latest/dark/lmstudio.png',
   clawbot: 'https://cdn.jsdelivr.net/gh/twitter/twemoji/assets/svg/1f980.svg',
 };
