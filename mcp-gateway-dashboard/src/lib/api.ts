@@ -122,6 +122,10 @@ export const api = {
     request<CreateApiKeyResponse[]>(`/api-keys/provision/${userId}`, { method: 'POST' }),
   getKeysByUser: (userId: string) =>
     request<ApiKey[]>(`/api-keys/by-user/${userId}`),
+  // Reveal a user's per-app keys in full (self or admin) so a ready-to-paste
+  // client config can be built. May rotate legacy hash-only keys.
+  revealAppKeys: (userId: string) =>
+    request<RevealedKey[]>(`/api-keys/reveal/${userId}`, { method: 'POST' }),
 
   // Usage
   getUsageGraph: (userId?: string, range?: string) => {
@@ -350,6 +354,13 @@ export interface CreateApiKeyResponse {
   name: string;
   user_id: string;
   application?: string;
+}
+
+export interface RevealedKey {
+  key_id: string;
+  application: string | null;
+  key_prefix: string;
+  raw_key: string;
 }
 
 export interface UserNode {

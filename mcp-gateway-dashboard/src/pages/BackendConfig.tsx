@@ -138,23 +138,30 @@ export default function BackendConfig({ isAdmin }: Props) {
     setShowConnectModal(true);
     setConnectTab('claude');
     setCopied(false);
-    setNewKeyName('');
-    setNewKeyUserId('');
     setConnectError('');
     setConnectLoading(true);
     try {
-      const [keys, userList] = await Promise.all([
-        api.getApiKeys(),
-        isAdmin ? api.getUsers().catch(() => [] as User[]) : Promise.resolve([] as User[]),
-      ]);
+      // Reveal the logged-in user's full per-app keys so the config box can copy
+      // a working key. This runs first because it may rotate any legacy
+      // hash-only keys (changing their prefix), so we list keys afterwards.
+      let currentUserId: string | undefined;
+      try {
+        currentUserId = JSON.parse(localStorage.getItem('mcpgw_user') || '{}').user_id;
+      } catch {
+        currentUserId = undefined;
+      }
+      if (currentUserId) {
+        try {
+          const revealed = await api.revealAppKeys(currentUserId);
+          const raw: Record<string, string> = {};
+          revealed.forEach(r => { if (r.application) raw[r.application] = r.raw_key; });
+          if (Object.keys(raw).length) setGeneratedKeys(prev => ({ ...prev, ...raw }));
+        } catch {
+          /* fall back to prefix-only display if reveal fails */
+        }
+      }
+      const keys = await api.getApiKeys();
       setApiKeys(keys);
-      setUsers(userList);
-      if (keys.length > 0) {
-        setSelectedKeyId(keys[0].key_id);
-      }
-      if (userList.length > 0) {
-        setNewKeyUserId(userList[0].user_id);
-      }
     } catch {
       setApiKeys([]);
     } finally {
@@ -1070,111 +1077,6 @@ export default function BackendConfig({ isAdmin }: Props) {
               <div className="py-8 text-center text-gray-500 text-sm">Loading...</div>
             ) : (
               <>
-                {/* Gateway URL */}
-                <div className="mb-4">
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Gateway URL</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={gatewayUrl}
-                      onChange={e => { if (isAdmin) setGatewayUrl(e.target.value); }}
-                      readOnly={!isAdmin}
-                      className={clsx(
-                        'flex-1 px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm font-mono focus:outline-none',
-                        isAdmin ? 'text-white focus:border-accent/50' : 'text-gray-500 cursor-not-allowed'
-                      )}
-                      placeholder={getDefaultGatewayUrl()}
-                    />
-                    {isAdmin && (
-                      <button
-                        onClick={saveGatewayUrl}
-                        className={clsx(
-                          'px-3 py-2 rounded-lg text-xs font-medium transition-colors shrink-0',
-                          gatewayUrlSaved
-                            ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                            : 'bg-accent/10 text-accent border border-accent/20 hover:bg-accent/20'
-                        )}
-                      >
-                        {gatewayUrlSaved ? 'Saved' : 'Save'}
-                      </button>
-                    )}
-                  </div>
-                  <p className="text-[10px] text-gray-600 mt-1">
-                    {isAdmin
-                      ? 'The public MCP endpoint URL that AI clients will connect to. Click Save to persist.'
-                      : 'The public MCP endpoint URL configured by your admin.'}
-                  </p>
-                </div>
-
-                {/* Per-app API Key display */}
-                <div className="mb-4">
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">API Key for {connectTab}</label>
-
-                  {isAdmin && users.length > 0 && (
-                    <div className="mb-2">
-                      <label className="block text-[10px] text-gray-500 mb-1">User</label>
-                      <select
-                        value={newKeyUserId}
-                        onChange={e => setNewKeyUserId(e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
-                      >
-                        {users.map(u => (
-                          <option key={u.user_id} value={u.user_id}>
-                            {u.username} ({u.roles?.join(', ') || 'no role'})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  {(() => {
-                    const appKey = getAppKey(connectTab);
-                    if (appKey) {
-                      return (
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2 px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg">
-                            <Key className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-                            <code className="text-xs text-gray-300 font-mono">{appKey.key_prefix}...</code>
-                            <span className="text-[10px] text-gray-600 ml-auto">{appKey.name}</span>
-                          </div>
-                          {generatedKeys[connectTab] && (
-                            <div className="px-3 py-2 bg-success/10 border border-success/20 rounded-lg">
-                              <p className="text-xs text-success mb-1">New key generated — save it now, it won't be shown again:</p>
-                              <code className="text-xs text-success font-mono break-all">{generatedKeys[connectTab]}</code>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    }
-                    return (
-                      <div className="space-y-2">
-                        <div className="px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                          <p className="text-xs text-amber-400">No per-app key found for {connectTab}. Provision keys to auto-generate one per application.</p>
-                        </div>
-                        <button
-                          onClick={provisionKeys}
-                          disabled={connectSubmitting}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/10 border border-accent/30 text-accent text-xs rounded-lg hover:bg-accent/20 transition-colors w-full justify-center disabled:opacity-50"
-                        >
-                          <Key className="w-3.5 h-3.5" />
-                          {connectSubmitting ? 'Provisioning…' : 'Provision App Keys'}
-                        </button>
-                        {generatedKeys[connectTab] && (
-                          <div className="px-3 py-2 bg-success/10 border border-success/20 rounded-lg">
-                            <p className="text-xs text-success mb-1">New key generated — save it now, it won't be shown again:</p>
-                            <code className="text-xs text-success font-mono break-all">{generatedKeys[connectTab]}</code>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-
-                  {connectError && (
-                    <div className="mt-2 px-3 py-2 bg-danger/10 border border-danger/20 rounded-lg">
-                      <p className="text-xs text-danger">{connectError}</p>
-                    </div>
-                  )}
-                </div>
 
                 {connectTab === 'openwebui' ? (
                   <>

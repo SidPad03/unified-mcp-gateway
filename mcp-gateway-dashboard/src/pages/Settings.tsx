@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, Tool, Backend } from '@/lib/api';
-import { Settings as SettingsIcon, Sparkles, Key, Eye, EyeOff, Loader2, CheckCircle, AlertTriangle, X, Info, Tag, ChevronDown } from 'lucide-react';
+import { Settings as SettingsIcon, Sparkles, Key, Eye, EyeOff, Loader2, CheckCircle, AlertTriangle, X, Info, Tag, ChevronDown, Link } from 'lucide-react';
 import clsx from 'clsx';
 
 const RISK_COLORS: Record<string, string> = {
@@ -35,6 +35,11 @@ export default function Settings() {
   const [tokenSaved, setTokenSaved] = useState(false);
   const [tools, setTools] = useState<Tool[]>([]);
   const [batchSize, setBatchSize] = useState(10);
+
+  // Gateway URL: the public MCP endpoint AI clients connect to. Stored in the
+  // browser and reflected in the "Connect AI Client" config on the AI Client page.
+  const [gatewayUrl, setGatewayUrl] = useState(() => localStorage.getItem('mcpgw_gateway_url') || '');
+  const [gatewayUrlSaved, setGatewayUrlSaved] = useState(false);
 
   // Bulk reclassify state
   const [backends, setBackends] = useState<Backend[]>([]);
@@ -338,11 +343,61 @@ No other text.`
 
   const unclassifiedCount = tools.filter(t => !t.risk_category || t.risk_category === 'unclassified').length;
 
+  const saveGatewayUrl = () => {
+    localStorage.setItem('mcpgw_gateway_url', gatewayUrl.trim());
+    setGatewayUrlSaved(true);
+    setTimeout(() => setGatewayUrlSaved(false), 2000);
+  };
+
   return (
     <div>
       <div className="mb-6">
         <h2 className="text-lg font-semibold text-white">Settings</h2>
         <p className="text-sm text-gray-500 mt-1">Application configuration and integrations</p>
+      </div>
+
+      {/* Gateway Connection Section */}
+      <div className="bg-surface border border-border rounded-xl p-6 mb-6">
+        <div className="flex items-start gap-4 mb-6">
+          <div className="w-10 h-10 bg-accent/10 rounded-xl flex items-center justify-center shrink-0">
+            <Link className="w-5 h-5 text-accent" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-white">Gateway URL</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              The public MCP endpoint URL that AI clients connect to. Used to build the
+              ready-to-paste configuration on the AI Client page.
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-2 uppercase tracking-wider">Public MCP Endpoint</label>
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Link className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+              <input
+                type="text"
+                value={gatewayUrl}
+                onChange={e => setGatewayUrl(e.target.value)}
+                placeholder="https://mcp-gateway.example.com/mcp"
+                className="w-full pl-9 pr-3 py-2.5 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white font-mono focus:outline-none focus:border-accent/50 transition-colors"
+              />
+            </div>
+            <button
+              onClick={saveGatewayUrl}
+              className={clsx(
+                'px-4 py-2 text-sm font-medium rounded-lg transition-colors',
+                gatewayUrlSaved
+                  ? 'bg-success/20 text-success border border-success/30'
+                  : 'bg-accent hover:bg-accent-hover text-white'
+              )}
+            >
+              {gatewayUrlSaved ? 'Saved' : 'Save'}
+            </button>
+          </div>
+          <p className="text-[10px] text-gray-600 mt-1.5">Stored in your browser and reflected in the AI Client connection config.</p>
+        </div>
       </div>
 
       {/* AI Risk Classification Section */}

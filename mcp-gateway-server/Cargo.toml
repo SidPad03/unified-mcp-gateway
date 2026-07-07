@@ -45,6 +45,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"
+# Authenticated encryption for API keys stored at rest (so the dashboard can
+# reveal a client's key for the "copy config" flow without keeping plaintext).
+chacha20poly1305 = "0.10"
 
 # Config
 dotenvy = "0.15"

@@ -216,6 +216,14 @@ BEGIN
     END IF;
 END $$;
 "#,
+    // 011: Store an encrypted copy of each API key so the dashboard can reveal
+    // it for the "copy client config" flow. Encrypted at rest with
+    // ChaCha20-Poly1305 under a JWT_SECRET-derived key — a DB-only leak can't
+    // recover the keys. NULL for keys created before this column (those get
+    // rotated on first reveal).
+    r#"
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_secret TEXT;
+"#,
 ];
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
