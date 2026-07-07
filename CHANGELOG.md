@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-07-07
+
+### Fixed
+
+- **Forced first-login password change could not be completed.** After setting a
+  new password on the "Set your password" screen, the request was rejected with
+  _"You must change your password before continuing"_ and you were bounced back
+  to the same screen. The server-side gate compared the request path against the
+  `/api/v1`-prefixed URL, but axum strips the nest prefix inside the router, so
+  the one request allowed to clear the flag (a `PATCH` to your own user record)
+  never matched and was denied. The gate now matches the correct path, and a
+  regression test covers it.
+
+### Changed
+
+- **Container images are now multi-arch (`linux/amd64` + `linux/arm64`).** The
+  server, dashboard, and agent images are built natively for both architectures
+  in CI (no emulation) and published as a single manifest, so `docker compose
+  up` runs them natively on Apple Silicon / arm64 hosts. The
+  `platform: linux/amd64` workaround in `docker-compose.yml` is no longer
+  required.
+
 ## [1.1.0] - 2026-07-02
 
 ### Fixed — critical
@@ -78,5 +100,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 [#1]: https://github.com/SidPad03/unified-mcp-gateway/issues/1
 [#2]: https://github.com/SidPad03/unified-mcp-gateway/issues/2
+[1.1.1]: https://github.com/SidPad03/unified-mcp-gateway/releases/tag/gateway-v1.1.1
 [1.1.0]: https://github.com/SidPad03/unified-mcp-gateway/releases/tag/gateway-v1.1.0
 [1.0.0]: https://github.com/SidPad03/unified-mcp-gateway/releases/tag/gateway-v1.0.0

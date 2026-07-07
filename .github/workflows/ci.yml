@@ -10,28 +10,17 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  build-server:
+  # Compute the release version once and share it with every downstream job so
+  # the images, the manifest tags, and the GitHub release can never drift.
+  version:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set image name
-        run: echo "SERVER_IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}/mcp-gateway-server" >> "$GITHUB_ENV"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        if: github.event_name == 'push'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute version
         id: version
@@ -56,20 +45,27 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Gateway version: ${VERSION}"
 
-      - name: Build and push server image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./mcp-gateway-server
-          push: ${{ github.event_name == 'push' }}
-          tags: |
-            ${{ env.SERVER_IMAGE }}:latest
-            ${{ env.SERVER_IMAGE }}:${{ github.sha }}
-            ${{ env.SERVER_IMAGE }}:v${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  build-dashboard:
-    runs-on: ubuntu-latest
+  # Build each image for one architecture on its *native* runner (no QEMU) and
+  # push it to GHCR by digest only (no tag yet). The `merge` job stitches the
+  # per-arch digests into a single multi-arch manifest.
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - name: mcp-gateway-server
+            context: ./mcp-gateway-server
+          - name: mcp-gateway-dashboard
+            context: ./mcp-gateway-dashboard
+          - name: mcp-gateway-agent
+            context: ./mcp-gateway-agent
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.platform.runner }}
     permissions:
       contents: read
       packages: write
@@ -78,7 +74,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set image name
-        run: echo "DASHBOARD_IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}/mcp-gateway-dashboard" >> "$GITHUB_ENV"
+        run: echo "IMAGE=${REGISTRY}/${GITHUB_REPOSITORY,,}/${{ matrix.component.name }}" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -91,44 +87,83 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute version
-        id: version
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          BASE=$(grep '^version' mcp-gateway-server/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          MAJOR_MINOR=$(echo "$BASE" | cut -d. -f1-2)
-
-          EXISTING=$(gh release list --limit 100 --json tagName -q '.[].tagName' \
-            | grep "^gateway-v${MAJOR_MINOR}\." \
-            | sed "s/gateway-v${MAJOR_MINOR}\.//" \
-            | sort -n | tail -1 || true)
-
-          if [ -z "$EXISTING" ]; then
-            PATCH=0
-          else
-            PATCH=$((EXISTING + 1))
-          fi
-
-          VERSION="${MAJOR_MINOR}.${PATCH}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push dashboard image
-        uses: docker/build-push-action@v5
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
         with:
-          context: ./mcp-gateway-dashboard
-          push: ${{ github.event_name == 'push' }}
-          tags: |
-            ${{ env.DASHBOARD_IMAGE }}:latest
-            ${{ env.DASHBOARD_IMAGE }}:${{ github.sha }}
-            ${{ env.DASHBOARD_IMAGE }}:v${{ steps.version.outputs.version }}
-          build-args: APP_VERSION=${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          context: ${{ matrix.component.context }}
+          platforms: linux/${{ matrix.platform.arch }}
+          build-args: |
+            APP_VERSION=${{ needs.version.outputs.version }}
+          cache-from: type=gha,scope=${{ matrix.component.name }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}-${{ matrix.platform.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ github.event_name == 'push' }}
+
+      - name: Export digest
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.component.name }}-${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Combine the per-arch digests of each component into one multi-arch manifest
+  # and publish the human-facing tags (:latest, :v<version>, :<sha>).
+  merge:
+    needs: [version, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [mcp-gateway-server, mcp-gateway-dashboard, mcp-gateway-agent]
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.component }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image name
+        run: echo "IMAGE=${REGISTRY}/${GITHUB_REPOSITORY,,}/${{ matrix.component }}" >> "$GITHUB_ENV"
+
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            -t "${IMAGE}:latest" \
+            -t "${IMAGE}:v${{ needs.version.outputs.version }}" \
+            -t "${IMAGE}:${GITHUB_SHA}" \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect "${IMAGE}:v${{ needs.version.outputs.version }}"
 
   release-gateway:
     runs-on: ubuntu-latest
-    needs: [build-server, build-dashboard]
+    needs: [version, merge]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
@@ -136,34 +171,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Compute version
-        id: version
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          BASE=$(grep '^version' mcp-gateway-server/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          MAJOR_MINOR=$(echo "$BASE" | cut -d. -f1-2)
-
-          EXISTING=$(gh release list --limit 100 --json tagName -q '.[].tagName' \
-            | grep "^gateway-v${MAJOR_MINOR}\." \
-            | sed "s/gateway-v${MAJOR_MINOR}\.//" \
-            | sort -n | tail -1 || true)
-
-          if [ -z "$EXISTING" ]; then
-            PATCH=0
-          else
-            PATCH=$((EXISTING + 1))
-          fi
-
-          VERSION="${MAJOR_MINOR}.${PATCH}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          TAG="gateway-v${{ steps.version.outputs.version }}"
+          TAG="gateway-v${VERSION}"
+
+          # Prefer the matching CHANGELOG section as the release notes; fall back
+          # to a generic line if that version isn't documented yet.
+          awk -v hdr="## [${VERSION}]" '
+            index($0, hdr) == 1 { f = 1; print; next }
+            /^## \[/ { if (f) exit }
+            f
+          ' CHANGELOG.md > notes.md || true
+          if [ ! -s notes.md ]; then
+            echo "MCP Gateway Server + Dashboard v${VERSION} (multi-arch: linux/amd64, linux/arm64)" > notes.md
+          fi
+
           gh release create "$TAG" \
-            --title "Gateway v${{ steps.version.outputs.version }}" \
-            --notes "MCP Gateway Server + Dashboard v${{ steps.version.outputs.version }}" \
+            --title "Gateway v${VERSION}" \
+            --notes-file notes.md \
             --target main

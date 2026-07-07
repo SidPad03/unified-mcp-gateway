@@ -149,6 +149,20 @@ async fn refresh_token(
     Ok(Json(serde_json::json!({ "token": token })))
 }
 
+/// Whether `(method, path)` is the *only* request a user still flagged
+/// `must_change_password` is allowed to make: a `PATCH` to their own user
+/// record, to set a new password.
+///
+/// `path` is the URI path **as seen inside the `/api/v1` nested router**. axum
+/// strips the nest prefix from `parts.uri` for handlers/extractors mounted
+/// under `.nest("/api/v1", ..)`, so here the path is `/users/{id}` — *not*
+/// `/api/v1/users/{id}`. Matching the un-stripped, prefixed path (as an earlier
+/// version did) rejects the very request that clears the flag, making the
+/// forced first-login password change impossible to complete.
+fn is_self_password_change(method: &axum::http::Method, path: &str, user_id: Uuid) -> bool {
+    *method == axum::http::Method::PATCH && path == format!("/users/{}", user_id)
+}
+
 // Extractor for Claims from JWT or API key
 #[axum::async_trait]
 impl<S> axum::extract::FromRequestParts<S> for Claims
@@ -225,14 +239,12 @@ where
         // call their own password-change endpoint until they rotate it. This
         // enforces the gate server-side so it can't be bypassed by ignoring the
         // dashboard screen and calling the API directly.
-        if must_change_password {
-            let is_self_password_change = parts.method == axum::http::Method::PATCH
-                && parts.uri.path() == format!("/api/v1/users/{}", user_id);
-            if !is_self_password_change {
-                return Err(AppError::Forbidden(
-                    "You must change your password before continuing".into(),
-                ));
-            }
+        if must_change_password
+            && !is_self_password_change(&parts.method, parts.uri.path(), user_id)
+        {
+            return Err(AppError::Forbidden(
+                "You must change your password before continuing".into(),
+            ));
         }
 
         Ok(Claims {
@@ -377,5 +389,49 @@ mod tests {
 
         assert_eq!(decoded.claims.username, "admin");
         assert_eq!(decoded.claims.roles, vec!["owner".to_string()]);
+    }
+
+    /// Regression test for the forced first-login password change dead-end.
+    /// The must-change-password gate runs inside the `/api/v1` nested router,
+    /// where axum has already stripped the `/api/v1` prefix from the URI. The
+    /// gate must therefore match the *stripped* path `/users/{id}` — matching
+    /// the prefixed `/api/v1/users/{id}` (as an earlier version did) rejected
+    /// the exact PATCH that clears the flag, so the user could never get past
+    /// the "Set your password" screen.
+    #[test]
+    fn must_change_gate_allows_only_self_password_change() {
+        use axum::http::Method;
+        let me: Uuid = "67e55044-10b1-426f-9247-bb680e5fe0c8".parse().unwrap();
+        let other: Uuid = "00000000-0000-0000-0000-000000000009".parse().unwrap();
+
+        // The one request that must be allowed: PATCH my own record, using the
+        // path as seen *inside* the /api/v1 nest (prefix already stripped).
+        assert!(is_self_password_change(
+            &Method::PATCH,
+            &format!("/users/{}", me),
+            me
+        ));
+
+        // Wrong method on my own record — blocked.
+        assert!(!is_self_password_change(&Method::GET, &format!("/users/{}", me), me));
+        assert!(!is_self_password_change(&Method::DELETE, &format!("/users/{}", me), me));
+
+        // Someone else's record — blocked.
+        assert!(!is_self_password_change(
+            &Method::PATCH,
+            &format!("/users/{}", other),
+            me
+        ));
+
+        // A different endpoint entirely — blocked.
+        assert!(!is_self_password_change(&Method::PATCH, "/policies/abc", me));
+
+        // The un-stripped, /api/v1-prefixed path must NOT match — this is the
+        // exact comparison that broke the flow.
+        assert!(!is_self_password_change(
+            &Method::PATCH,
+            &format!("/api/v1/users/{}", me),
+            me
+        ));
     }
 }
