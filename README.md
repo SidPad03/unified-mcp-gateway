@@ -76,9 +76,10 @@ This starts three containers:
 - **Dashboard** on port 8080
 - **PostgreSQL** (internal to the compose network)
 
-> The compose file tracks `:latest`. To pin a specific release, change the
-> `image:` tags to `:v1.1.0`. Prefer to build from source? See
-> [Development](#development).
+> The images are multi-arch (`linux/amd64` + `linux/arm64`), so they run
+> natively on both Intel and Apple Silicon / arm64 hosts — no emulation. The
+> compose file tracks `:latest`; to pin a specific release, change the `image:`
+> tags to `:v1.1.1`. Prefer to build from source? See [Development](#development).
 
 ### 2. Log in to the dashboard
 
@@ -360,8 +361,8 @@ cargo run -- run      # connect to gateway
 
 The project includes CI/CD via GitHub Actions:
 
-- **Server + Dashboard**: Docker images built and pushed to GHCR on every `main` push
-- **Agent**: Cross-compiled for macOS, Linux, and Windows via `cargo-zigbuild`, published as GitHub Releases
+- **Server, Dashboard & Agent**: multi-arch Docker images (`linux/amd64` + `linux/arm64`), built natively per-architecture and pushed to GHCR on every `main` push
+- **Agent binaries**: cross-compiled for macOS, Linux, and Windows via `cargo-zigbuild`, published as GitHub Releases
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup and deployment details.
 

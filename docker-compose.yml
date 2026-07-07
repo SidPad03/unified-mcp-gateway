@@ -14,13 +14,10 @@ services:
       retries: 5
 
   mcp-gateway-server:
-    # Pre-built image from GHCR. Pin to a version (e.g. :v1.1.0) for reproducible
-    # deploys, or use :latest to track the newest release.
+    # Pre-built multi-arch image from GHCR (linux/amd64 + linux/arm64) — runs
+    # natively on Intel and Apple Silicon / arm64 hosts. Pin to a version
+    # (e.g. :v1.1.1) for reproducible deploys, or use :latest for the newest.
     image: ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-server:latest
-    # The published images are currently linux/amd64 only; on Apple Silicon /
-    # arm64 hosts Docker runs them via emulation. Remove this once multi-arch
-    # images are published.
-    platform: linux/amd64
     ports:
       - "3200:3200"
     environment:
@@ -45,8 +42,8 @@ services:
       start_period: 30s
 
   mcp-gateway-dashboard:
+    # Multi-arch image (linux/amd64 + linux/arm64) — see the server note above.
     image: ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-dashboard:latest
-    platform: linux/amd64
     ports:
       - "8080:80"
     depends_on:
