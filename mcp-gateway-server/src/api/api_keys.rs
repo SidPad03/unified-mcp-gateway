@@ -52,6 +52,7 @@ pub fn router() -> Router<AppState> {
         .route("/api-keys/provision/:user_id", post(provision_app_keys))
         .route("/api-keys/by-user/:user_id", get(keys_by_user))
         .route("/api-keys/reveal/:user_id", post(reveal_app_keys))
+        .route("/api-keys/rotate", post(rotate_app_key))
 }
 
 async fn create_api_key(
@@ -372,6 +373,73 @@ async fn keys_by_user(
     Ok(Json(result))
 }
 
+#[derive(Deserialize)]
+pub struct RotateKeyRequest {
+    pub application: String,
+    pub user_id: Option<String>,
+}
+
+/// Revoke a user's existing key for one AI-client application and issue a fresh
+/// one — or create it if none exists — returning the new key in full. Allowed
+/// for the key owner (self) or an admin. The `(user_id, application)` unique
+/// index guarantees one key per client: the row is overwritten in place, so the
+/// previous key stops working immediately.
+async fn rotate_app_key(
+    State(state): State<AppState>,
+    claims: Claims,
+    Json(req): Json<RotateKeyRequest>,
+) -> Result<Json<CreateApiKeyResponse>, AppError> {
+    if !SUPPORTED_APPS.contains(&req.application.as_str()) {
+        return Err(AppError::BadRequest("Unknown application".into()));
+    }
+
+    let target_user_id: Uuid = req
+        .user_id
+        .as_deref()
+        .unwrap_or(&claims.sub)
+        .parse()
+        .map_err(|_| AppError::BadRequest("Invalid user_id".into()))?;
+
+    let is_self = claims.sub == target_user_id.to_string();
+    if !is_self {
+        require_admin(&claims)?;
+    }
+
+    let raw_key = generate_api_key();
+    let key_prefix = raw_key[..12].to_string();
+    let key_hash = hash_key(&raw_key);
+    let key_secret = encrypt_api_key(&raw_key).ok();
+    let key_id = Uuid::new_v4();
+    let key_name = format!("{}-key", req.application);
+
+    let (row_key_id,): (Uuid,) = sqlx::query_as(
+        "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, application, key_secret)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (user_id, application) WHERE application IS NOT NULL
+         DO UPDATE SET key_hash = EXCLUDED.key_hash, key_prefix = EXCLUDED.key_prefix,
+                       key_secret = EXCLUDED.key_secret, is_active = TRUE, created_at = NOW()
+         RETURNING key_id",
+    )
+    .bind(key_id)
+    .bind(target_user_id)
+    .bind(&key_hash)
+    .bind(&key_prefix)
+    .bind(&key_name)
+    .bind(&req.application)
+    .bind(&key_secret)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(CreateApiKeyResponse {
+        key_id: row_key_id.to_string(),
+        raw_key,
+        key_prefix,
+        name: key_name,
+        user_id: target_user_id.to_string(),
+        application: Some(req.application),
+    }))
+}
+
 #[derive(Serialize)]
 pub struct RevealedKey {
     pub key_id: String,
@@ -468,6 +536,21 @@ pub async fn generate_app_keys_for_user(pool: &sqlx::PgPool, user_id: Uuid) -> R
         .bind(&key_secret)
         .execute(pool)
         .await?;
+    }
+    Ok(())
+}
+
+/// Ensure every existing user has an API key for each supported application.
+/// Runs on startup so a user created before an app was added (e.g. clawbot /
+/// codex) still gets one — otherwise that app never appears in their client
+/// list or on the usage graph (whose app nodes come from `api_keys`).
+/// Idempotent: `generate_app_keys_for_user` inserts with ON CONFLICT DO NOTHING.
+pub async fn backfill_app_keys_for_all_users(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    let user_ids: Vec<(Uuid,)> = sqlx::query_as("SELECT user_id FROM users")
+        .fetch_all(pool)
+        .await?;
+    for (user_id,) in user_ids {
+        generate_app_keys_for_user(pool, user_id).await?;
     }
     Ok(())
 }

@@ -161,5 +161,11 @@ async fn seed_default_policies(pool: &PgPool) -> Result<(), sqlx::Error> {
     }
 
     tracing::info!("Seeded default policies (allow all + deny destructive)");
+
+    // Backfill: ensure existing users have keys for any applications added after
+    // they were created (e.g. clawbot / codex), so those clients appear in the
+    // connect list and on the usage graph. Idempotent.
+    crate::api::api_keys::backfill_app_keys_for_all_users(pool).await?;
+
     Ok(())
 }

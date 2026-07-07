@@ -73,6 +73,16 @@ export default function BackendConfig({ isAdmin }: Props) {
   const [users, setUsers] = useState<User[]>([]);
   const [gatewayUrl, setGatewayUrl] = useState(() => localStorage.getItem('mcpgw_gateway_url') || '');
   const [gatewayUrlSaved, setGatewayUrlSaved] = useState(false);
+  const [regeneratingKey, setRegeneratingKey] = useState(false);
+  const [regenError, setRegenError] = useState('');
+
+  // Add Agent modal state
+  const [showAgentModal, setShowAgentModal] = useState(false);
+  const [agentName, setAgentName] = useState('');
+  const [agentKey, setAgentKey] = useState('');
+  const [agentCopied, setAgentCopied] = useState(false);
+  const [agentSubmitting, setAgentSubmitting] = useState(false);
+  const [agentError, setAgentError] = useState('');
 
   // Sync state
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -239,6 +249,67 @@ export default function BackendConfig({ isAdmin }: Props) {
   };
 
   const getGatewayUrl = () => gatewayUrl || getDefaultGatewayUrl();
+
+  // The agent connects over a WebSocket at /agent/ws on the same host as the
+  // MCP endpoint. Derive it from the configured gateway URL.
+  const getAgentWsUrl = () => {
+    try {
+      const u = new URL(getGatewayUrl());
+      u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+      u.pathname = '/agent/ws';
+      u.search = '';
+      u.hash = '';
+      return u.toString();
+    } catch {
+      return 'wss://<your-gateway-host>/agent/ws';
+    }
+  };
+
+  // Revoke this client's current key and issue a fresh one (creates if none).
+  const regenerateAppKey = async () => {
+    if (regeneratingKey) return;
+    setRegenError('');
+    setRegeneratingKey(true);
+    try {
+      let currentUserId: string | undefined;
+      try { currentUserId = JSON.parse(localStorage.getItem('mcpgw_user') || '{}').user_id; } catch { currentUserId = undefined; }
+      const targetUserId = (isAdmin && newKeyUserId) ? newKeyUserId : currentUserId;
+      const result = await api.rotateAppKey(connectTab, targetUserId);
+      setGeneratedKeys(prev => ({ ...prev, [connectTab]: result.raw_key }));
+      const keys = await api.getApiKeys();
+      setApiKeys(keys);
+    } catch (e: any) {
+      setRegenError(e.message || 'Failed to generate key');
+    } finally {
+      setRegeneratingKey(false);
+    }
+  };
+
+  const openAgentModal = () => {
+    setAgentName('');
+    setAgentKey('');
+    setAgentError('');
+    setAgentCopied(false);
+    setShowAgentModal(true);
+  };
+
+  // Provision a dedicated key for a remote agent and reveal it once. The agent
+  // authenticates its WebSocket with this key and registers as a backend.
+  const createAgent = async () => {
+    const name = agentName.trim();
+    if (!name) { setAgentError('Enter a name for this agent'); return; }
+    if (agentSubmitting) return;
+    setAgentError('');
+    setAgentSubmitting(true);
+    try {
+      const result = await api.createApiKey({ name: `agent: ${name}` });
+      setAgentKey(result.raw_key);
+    } catch (e: any) {
+      setAgentError(e.message || 'Failed to create agent key');
+    } finally {
+      setAgentSubmitting(false);
+    }
+  };
 
   const getKeyForDisplay = () => {
     const appKey = getAppKey(connectTab);
@@ -622,6 +693,13 @@ export default function BackendConfig({ isAdmin }: Props) {
                   >
                     <Plus className="w-4 h-4" />
                     New Backend
+                  </button>
+                  <button
+                    onClick={() => { setShowAddMenu(false); openAgentModal(); }}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-300 hover:bg-surface-hover hover:text-white transition-colors border-t border-border"
+                  >
+                    <Laptop className="w-4 h-4" />
+                    New Agent
                   </button>
                   <button
                     onClick={() => { setShowAddMenu(false); openJsonEditor(); }}
@@ -1077,6 +1155,23 @@ export default function BackendConfig({ isAdmin }: Props) {
               <div className="py-8 text-center text-gray-500 text-sm">Loading...</div>
             ) : (
               <>
+                {/* Generate / rotate this client's key */}
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <p className="text-[11px] text-gray-500">One key per client. Generating a new key revokes the old one.</p>
+                  <button
+                    onClick={regenerateAppKey}
+                    disabled={regeneratingKey}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 bg-accent/10 border border-accent/30 text-accent text-xs rounded-lg hover:bg-accent/20 transition-colors disabled:opacity-50 shrink-0"
+                  >
+                    <RotateCcw className={clsx('w-3.5 h-3.5', regeneratingKey && 'animate-spin')} />
+                    {regeneratingKey ? 'Generating…' : 'Generate new key'}
+                  </button>
+                </div>
+                {regenError && (
+                  <div className="mb-3 px-3 py-2 bg-danger/10 border border-danger/20 rounded-lg">
+                    <p className="text-xs text-danger">{regenError}</p>
+                  </div>
+                )}
 
                 {connectTab === 'openwebui' ? (
                   <>
@@ -1219,6 +1314,119 @@ export default function BackendConfig({ isAdmin }: Props) {
                 Done
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Agent Modal */}
+      {showAgentModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-surface border border-border rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 bg-accent/10 rounded-xl flex items-center justify-center">
+                  <Laptop className="w-5 h-5 text-accent" />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-white">Add Agent</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">Connect MCP servers from a remote machine</p>
+                </div>
+              </div>
+              <button onClick={() => setShowAgentModal(false)} className="text-gray-500 hover:text-gray-300">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {!agentKey ? (
+              <>
+                <div className="mb-4">
+                  <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Agent Name</label>
+                  <input
+                    type="text"
+                    value={agentName}
+                    onChange={e => setAgentName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') createAgent(); }}
+                    placeholder="macbook-pro"
+                    autoFocus
+                    className="w-full px-3 py-2.5 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white focus:outline-none focus:border-accent/50 transition-colors"
+                  />
+                  <p className="text-[10px] text-gray-600 mt-1">A label to identify this machine (e.g. your laptop or a dev box).</p>
+                </div>
+
+                {agentError && (
+                  <div className="mb-4 px-3 py-2 bg-danger/10 border border-danger/20 rounded-lg">
+                    <p className="text-xs text-danger">{agentError}</p>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => setShowAgentModal(false)}
+                    className="px-4 py-2 bg-surface-hover border border-border text-gray-300 text-sm rounded-lg hover:bg-surface-active transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={createAgent}
+                    disabled={agentSubmitting}
+                    className="px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {agentSubmitting ? 'Creating…' : 'Create Agent'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mb-4 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                  <p className="text-xs text-amber-400">Copy this key now — it won't be shown again.</p>
+                </div>
+
+                <div className="space-y-3 mb-4">
+                  <div>
+                    <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">API Key</label>
+                    <div className="relative">
+                      <input
+                        readOnly
+                        value={agentKey}
+                        className="w-full px-3 py-2 pr-16 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none"
+                      />
+                      <button
+                        onClick={async () => { await navigator.clipboard.writeText(agentKey); setAgentCopied(true); setTimeout(() => setAgentCopied(false), 2000); }}
+                        className={clsx('absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors',
+                          agentCopied ? 'bg-success/20 text-success' : 'bg-surface-hover text-gray-400 hover:text-white')}
+                      >
+                        {agentCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        {agentCopied ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Gateway URL</label>
+                    <input readOnly value={getAgentWsUrl()} className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none" />
+                  </div>
+                </div>
+
+                <div className="mb-4 p-3 bg-surface-hover rounded-lg border border-border/50">
+                  <h4 className="text-xs font-medium text-white mb-2">Configure the agent on {agentName || 'your machine'}</h4>
+                  <ol className="text-xs text-gray-400 space-y-1.5 list-decimal list-inside">
+                    <li>Install the MCP Gateway Agent (see the project README).</li>
+                    <li>Run <code className="text-accent bg-accent/10 px-1 py-0.5 rounded text-[10px]">mcp-gateway-agent setup</code></li>
+                    <li>Enter the <span className="text-white">Gateway URL</span> and <span className="text-white">API Key</span> above.</li>
+                    <li>Add your local MCP backends when prompted, then start the agent.</li>
+                  </ol>
+                  <p className="text-[10px] text-gray-600 mt-2">Once connected, the agent appears here as a backend and its tools become available through the gateway.</p>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => { setShowAgentModal(false); loadBackends(); }}
+                    className="px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -126,6 +126,10 @@ export const api = {
   // client config can be built. May rotate legacy hash-only keys.
   revealAppKeys: (userId: string) =>
     request<RevealedKey[]>(`/api-keys/reveal/${userId}`, { method: 'POST' }),
+  // Revoke + regenerate the key for one AI client (self or admin), returning the
+  // new key in full. Creates it if none exists. One key per (user, application).
+  rotateAppKey: (application: string, userId?: string) =>
+    request<CreateApiKeyResponse>('/api-keys/rotate', { method: 'POST', body: JSON.stringify({ application, user_id: userId }) }),
 
   // Usage
   getUsageGraph: (userId?: string, range?: string) => {
