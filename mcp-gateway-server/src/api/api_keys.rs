@@ -629,6 +629,7 @@ mod tests {
 
     #[test]
     fn encrypt_decrypt_api_key_roundtrip() {
+        let _guard = crate::test_support::lock_env();
         std::env::set_var("JWT_SECRET", "test-secret-at-least-16-chars-long");
         let raw = generate_api_key();
 

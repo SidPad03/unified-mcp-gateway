@@ -23,6 +23,8 @@ mod db;
 mod errors;
 mod metrics;
 mod policy;
+#[cfg(test)]
+mod test_support;
 
 pub use errors::AppError;
 
