@@ -197,6 +197,13 @@ fn run_daemonized(config_path: Option<String>) -> anyhow::Result<()> {
 
 async fn run_foreground(config_path: Option<String>) -> anyhow::Result<()> {
     init_logging();
+    // The PID file lives in the config directory, so that directory has to
+    // exist before we write it. `run_daemonized` already does this; without it
+    // here, `run --foreground` on a machine that has never run `setup` — a
+    // container, or a service manager starting the agent directly — failed with
+    // a bare "No such file or directory" before it could even report which file
+    // it wanted.
+    config::ensure_dirs()?;
     write_pid_file()?;
 
     let config = load_config(config_path)?;

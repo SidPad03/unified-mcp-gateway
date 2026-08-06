@@ -37,4 +37,9 @@ COPY --from=builder /app/target/release/mcp-gateway-agent /app/mcp-gateway-agent
 
 ENV RUST_LOG=mcp_gateway_agent=info
 
-CMD ["/app/mcp-gateway-agent", "/app/mcp-gateway-agent.toml"]
+# The CLI requires a subcommand, and the config path is a flag rather than a
+# positional argument — passing the path alone made clap exit 2 ("unrecognized
+# subcommand") before any agent code ran. `--foreground` is required too: a bare
+# `run` daemonizes by spawning a detached child and returning, which as PID 1
+# would stop the container immediately. Mount your config at the path below.
+CMD ["/app/mcp-gateway-agent", "run", "--foreground", "--config", "/app/mcp-gateway-agent.toml"]
