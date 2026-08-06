@@ -57,8 +57,9 @@ MCP Gateway is a three-component system:
 
 ### 1. Start the gateway
 
-The server and dashboard are published as prebuilt images on GHCR, so there's no
-build step — just pull and run. Grab the compose file, set a JWT secret, and start:
+The server and dashboard are published as prebuilt images on Docker Hub, so
+there's no build step — just pull and run. Grab the compose file, set a JWT
+secret, and start:
 
 ```bash
 # Download the compose file
@@ -76,10 +77,20 @@ This starts three containers:
 - **Dashboard** on port 8080
 - **PostgreSQL** (internal to the compose network)
 
-> The images are multi-arch (`linux/amd64` + `linux/arm64`), so they run
-> natively on both Intel and Apple Silicon / arm64 hosts — no emulation. The
-> compose file tracks `:latest`; to pin a specific release, change the `image:`
-> tags to `:v1.1.1`. Prefer to build from source? See [Development](#development).
+The images are:
+
+| Component | Docker Hub | GHCR mirror |
+|-----------|-----------|-------------|
+| Server | [`sidpad03/mcp-gateway-server`](https://hub.docker.com/r/sidpad03/mcp-gateway-server) | `ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-server` |
+| Dashboard | [`sidpad03/mcp-gateway-dashboard`](https://hub.docker.com/r/sidpad03/mcp-gateway-dashboard) | `ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-dashboard` |
+| Agent | [`sidpad03/mcp-gateway-agent`](https://hub.docker.com/r/sidpad03/mcp-gateway-agent) | `ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-agent` |
+
+> Every build publishes the same multi-arch manifest (`linux/amd64` +
+> `linux/arm64`) to both registries, so they run natively on Intel and Apple
+> Silicon / arm64 hosts with no emulation. Docker Hub is the default in the
+> compose file; swap in the GHCR name if you prefer it. The compose file tracks
+> `:latest` — to pin a release, change the `image:` tags to `:v1.1.3`. Prefer to
+> build from source? See [Development](#development).
 
 ### 2. Log in to the dashboard
 
@@ -361,10 +372,28 @@ cargo run -- run      # connect to gateway
 
 The project includes CI/CD via GitHub Actions:
 
-- **Server, Dashboard & Agent**: multi-arch Docker images (`linux/amd64` + `linux/arm64`), built natively per-architecture and pushed to GHCR on every `main` push
+- **Server, Dashboard & Agent**: multi-arch Docker images (`linux/amd64` + `linux/arm64`), built natively per-architecture and published to **Docker Hub** (`sidpad03/mcp-gateway-*`) and mirrored to **GHCR** on every `main` push
 - **Agent binaries**: cross-compiled for macOS, Linux, and Windows via `cargo-zigbuild`, published as GitHub Releases
 
+Docker Hub publishing requires two repository secrets — `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN` (a Docker Hub access token with Read/Write scope). Without
+them the workflow still publishes to GHCR and logs a warning.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup and deployment details.
+
+## Documentation
+
+Full documentation lives in [docs/](docs/):
+
+| Page | What it covers |
+|------|----------------|
+| [Architecture](docs/architecture.md) | System design, request flow, transports, trust model |
+| [Deployment Guide](docs/deployment.md) | Production deployment, TLS, backups, upgrades |
+| [Configuration Reference](docs/configuration.md) | Environment variables, backend transports, agent config |
+| [Authentication & Authorization](docs/authentication.md) | JWTs, API keys, roles, policy engine |
+| [API Reference](docs/api-reference.md) | Every REST, MCP, and WebSocket endpoint |
+| [MCP Gateway Agent](docs/agent.md) | Installing, configuring, and running the agent |
+| [Agent Architecture](docs/agent-architecture.md) | The agent↔server WebSocket protocol |
 
 ## Changelog
 

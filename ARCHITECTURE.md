@@ -45,10 +45,11 @@ clients and MCP tool servers. Three components + Postgres.
 
 ## Operations
 
-- **Build & publish:** pushing to `main` triggers GitHub Actions, which builds
-  multi-arch (`linux/amd64` + `linux/arm64`) server and dashboard images and pushes
-  them to GHCR. Agent binaries are cross-compiled with `cargo-zigbuild` and attached
-  to GitHub Releases.
+- **Build & publish:** pushing to `main` triggers GitHub Actions, which builds each
+  image for `linux/amd64` and `linux/arm64` on its native runner, stages the
+  per-arch layers in GHCR by digest, then publishes one multi-arch manifest to both
+  Docker Hub (`sidpad03/mcp-gateway-*`, the documented default) and GHCR. Agent
+  binaries are cross-compiled with `cargo-zigbuild` and attached to GitHub Releases.
 - **Deploy:** pull the published images with the provided `docker-compose.yml`. Pin
   the `image:` tags to a release tag rather than `:latest` if you want reproducible
   rollouts; rolling back is then a tag change plus `docker compose up -d`.
@@ -60,6 +61,14 @@ clients and MCP tool servers. Three components + Postgres.
   it (generate one with `openssl rand -hex 32`). The seeded `admin` account requires
   a password change on first login; set `MCPGW_ADMIN_PASSWORD` to choose your own
   initial password instead. Always run behind a TLS-terminating reverse proxy.
+
+## Further reading
+
+This page is the condensed overview. Deeper documentation lives in [docs/](docs/):
+[architecture](docs/architecture.md), [deployment](docs/deployment.md),
+[configuration](docs/configuration.md), [authentication](docs/authentication.md),
+[API reference](docs/api-reference.md), and the agent
+([usage](docs/agent.md), [protocol](docs/agent-architecture.md)).
 
 For vulnerability reporting and the supported-version policy, see
 [SECURITY.md](SECURITY.md).
