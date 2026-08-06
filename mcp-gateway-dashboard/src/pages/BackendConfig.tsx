@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, Backend, ApiKey, User } from '@/lib/api';
-import { Plus, Trash2, Server, Wifi, Terminal, Globe, X, RefreshCw, Link, Copy, Check, RotateCcw, Key, Pencil, Laptop, Boxes, Eye, EyeOff } from 'lucide-react';
+import { Plus, Trash2, Server, Wifi, Terminal, Globe, X, RefreshCw, Link, Copy, Check, RotateCcw, Pencil, Laptop, Boxes, Eye, EyeOff } from 'lucide-react';
 import clsx from 'clsx';
 
 interface Props {

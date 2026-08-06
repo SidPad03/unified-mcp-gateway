@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api, Tool, Backend, UpdateStatus } from '@/lib/api';
 import ConfigTransferCard from '@/components/ConfigTransferCard';
-import { Settings as SettingsIcon, Sparkles, Key, Eye, EyeOff, Loader2, CheckCircle, AlertTriangle, X, Info, Tag, ChevronDown, Link, RefreshCw } from 'lucide-react';
+import { Sparkles, Key, Eye, EyeOff, Loader2, CheckCircle, AlertTriangle, X, Info, Tag, ChevronDown, Link, RefreshCw } from 'lucide-react';
 import clsx from 'clsx';
 
 const RISK_COLORS: Record<string, string> = {

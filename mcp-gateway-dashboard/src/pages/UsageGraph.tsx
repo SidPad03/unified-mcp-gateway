@@ -43,7 +43,6 @@ import {
   Layers,
   ChevronRight,
   Laptop,
-  Boxes,
 } from 'lucide-react';
 import clsx from 'clsx';
 
