@@ -125,6 +125,27 @@ export const api = {
   // Security posture (owner-only): raw signals for the posture checklist card.
   getSecurityPosture: () => request<SecurityPosture>('/security/posture'),
 
+  // Update check. The caller passes the version it is running — CI bakes the
+  // release number into the dashboard build, not the server binary, so the
+  // server cannot determine it on its own.
+  checkForUpdates: (current: string, force = false) =>
+    request<UpdateStatus>(
+      `/updates/check?current=${encodeURIComponent(current)}${force ? '&force=true' : ''}`,
+    ),
+
+  // Configuration transfer (owner-only). The bundle is encrypted with a
+  // passphrase the operator supplies; the server never stores it.
+  exportConfig: (passphrase: string, includeAudit: boolean) =>
+    request<ConfigBundle>('/config/export', {
+      method: 'POST',
+      body: JSON.stringify({ passphrase, include_audit: includeAudit }),
+    }),
+  importConfig: (passphrase: string, bundle: ConfigBundle) =>
+    request<ImportSummary>('/config/import', {
+      method: 'POST',
+      body: JSON.stringify({ passphrase, bundle }),
+    }),
+
   // API Keys
   getApiKeys: () => request<ApiKey[]>('/api-keys'),
   createApiKey: (data: CreateApiKeyRequest) =>
@@ -286,6 +307,38 @@ export interface MetricsSummary {
 export interface SecurityPostureOwner {
   username: string;
   last_login?: string;
+}
+
+export interface UpdateStatus {
+  current_version: string;
+  latest_version?: string;
+  update_available: boolean;
+  release_url?: string;
+  release_name?: string;
+  release_notes?: string;
+  published_at?: string;
+  checked_at: string;
+  source_repo: string;
+  /** Set when the check could not be completed — distinct from "up to date". */
+  error?: string;
+}
+
+/** Opaque to the client: everything meaningful is inside `ciphertext`. */
+export interface ConfigBundle {
+  format: string;
+  format_version: number;
+  created_at: string;
+  source_version: string;
+  includes_audit: boolean;
+  kdf: { algorithm: string; salt: string; m_cost: number; t_cost: number; p_cost: number };
+  nonce: string;
+  ciphertext: string;
+}
+
+export interface ImportSummary {
+  imported: { table: string; rows: number }[];
+  source_version: string;
+  created_at: string;
 }
 
 export interface SecurityPosture {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { api, Tool, Backend } from '@/lib/api';
-import { Settings as SettingsIcon, Sparkles, Key, Eye, EyeOff, Loader2, CheckCircle, AlertTriangle, X, Info, Tag, ChevronDown, Link } from 'lucide-react';
+import { api, Tool, Backend, UpdateStatus } from '@/lib/api';
+import ConfigTransferCard from '@/components/ConfigTransferCard';
+import { Settings as SettingsIcon, Sparkles, Key, Eye, EyeOff, Loader2, CheckCircle, AlertTriangle, X, Info, Tag, ChevronDown, Link, RefreshCw } from 'lucide-react';
 import clsx from 'clsx';
 
 const RISK_COLORS: Record<string, string> = {
@@ -23,7 +24,42 @@ const RISK_BG: Record<string, string> = {
 
 const RISK_CATEGORIES = ['read', 'write', 'admin', 'destructive', 'execute', 'unclassified'];
 
+/** Owner check from the cached session, matching useAuth's `isAdmin`. */
+function useIsOwner(): boolean {
+  try {
+    const raw = localStorage.getItem('mcpgw_user');
+    return raw ? (JSON.parse(raw).roles ?? []).includes('owner') : false;
+  } catch {
+    return false;
+  }
+}
+
 export default function Settings() {
+  const isOwner = useIsOwner();
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+
+  // Always an explicit click — never on mount. An automatic call on every visit
+  // would spend the deployment's GitHub rate budget for information nobody asked
+  // for. `force` skips the server's 30-minute cache, which is what someone who
+  // just published a release expects from pressing the button.
+  const runUpdateCheck = async () => {
+    setUpdateChecking(true);
+    try {
+      setUpdateStatus(await api.checkForUpdates(__APP_VERSION__, true));
+    } catch (e: any) {
+      setUpdateStatus({
+        current_version: __APP_VERSION__,
+        update_available: false,
+        checked_at: new Date().toISOString(),
+        source_repo: '',
+        error: e.message || 'Could not check for updates',
+      });
+    } finally {
+      setUpdateChecking(false);
+    }
+  };
+
   // GPT-5 Classification state
   const [apiToken, setApiToken] = useState(() => sessionStorage.getItem('mcpgw_openai_token') || '');
   const [showToken, setShowToken] = useState(false);
@@ -794,13 +830,16 @@ No other text.`
         )}
       </div>
 
+      {/* Configuration transfer (owner-only; self-hides for everyone else) */}
+      <ConfigTransferCard isOwner={isOwner} />
+
       {/* About Section */}
       <div className="bg-surface border border-border rounded-xl p-6">
         <div className="flex items-start gap-4">
           <div className="w-10 h-10 bg-surface-hover rounded-xl flex items-center justify-center shrink-0">
             <Info className="w-5 h-5 text-gray-400" />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <h3 className="text-sm font-semibold text-white">About MCP Gateway</h3>
             {/* Same build-time define the sidebar uses (vite.config.ts), fed by
                 the APP_VERSION build-arg in CI. Hardcoding it here meant /settings
@@ -810,6 +849,51 @@ No other text.`
               A unified MCP gateway that aggregates tools from multiple MCP backends, enforcing RBAC policies
               and providing audit logging for all tool calls made by AI agents.
             </p>
+
+            <div className="mt-4 flex items-center gap-3 flex-wrap">
+              <button
+                onClick={runUpdateCheck}
+                disabled={updateChecking}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-surface-hover hover:bg-border rounded-lg text-xs text-gray-300 transition-colors disabled:opacity-50"
+              >
+                {updateChecking
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking…</>
+                  : <><RefreshCw className="w-3.5 h-3.5" /> Check for updates</>}
+              </button>
+
+              {/* Three outcomes worth distinguishing: an update exists, you are
+                  current, or the check itself failed. Collapsing the third into
+                  "up to date" would quietly hide a stale deployment. */}
+              {updateStatus?.error && (
+                <span className="text-xs text-warning">{updateStatus.error}</span>
+              )}
+              {updateStatus && !updateStatus.error && updateStatus.update_available && (
+                <a
+                  href={updateStatus.release_url ?? '#'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-accent hover:underline"
+                >
+                  v{updateStatus.latest_version} is available →
+                </a>
+              )}
+              {updateStatus && !updateStatus.error && !updateStatus.update_available && (
+                <span className="text-xs text-success">
+                  Up to date{updateStatus.latest_version ? ` (latest: v${updateStatus.latest_version})` : ''}
+                </span>
+              )}
+            </div>
+
+            {updateStatus?.update_available && updateStatus.release_notes && (
+              <details className="mt-3">
+                <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-400">
+                  Release notes for {updateStatus.release_name || `v${updateStatus.latest_version}`}
+                </summary>
+                <pre className="mt-2 p-3 bg-[#0a0a0f] border border-border rounded-lg text-[11px] text-gray-400 whitespace-pre-wrap max-h-56 overflow-y-auto">
+                  {updateStatus.release_notes}
+                </pre>
+              </details>
+            )}
           </div>
         </div>
       </div>
