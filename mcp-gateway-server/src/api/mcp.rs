@@ -1,15 +1,11 @@
-use axum::{
-    extract::State,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::policy::engine::{PolicyDecision, PolicyEngine};
 use super::auth::Claims;
+use crate::policy::engine::{PolicyDecision, PolicyEngine};
+use crate::AppState;
 
 // JSON-RPC structures
 #[derive(Deserialize)]
@@ -137,7 +133,9 @@ async fn handle_tools_list(
 
     let mut tool_list = Vec::new();
     let mut denied_count = 0usize;
-    for (tool_name, _original_name, description, input_schema, _backend_name, risk_category) in &tools {
+    for (tool_name, _original_name, description, input_schema, _backend_name, risk_category) in
+        &tools
+    {
         let tool_risk = risk_category.as_deref().unwrap_or("unclassified");
         let (decision, _, _) = engine.evaluate(tool_name, tool_risk, claims.application.as_deref());
 
@@ -206,7 +204,10 @@ async fn handle_tools_call(
     };
 
     let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
 
     if tool_name.is_empty() {
         return JsonRpcResponse {
@@ -233,21 +234,22 @@ async fn handle_tools_call(
     .await
     .unwrap_or(None);
 
-    let (_tool_id, _tool_name, original_name, risk_category, backend_id, backend_name, transport) = match tool_row {
-        Some(r) => r,
-        None => {
-            return JsonRpcResponse {
-                jsonrpc: "2.0".into(),
-                id: req.id.clone(),
-                result: None,
-                error: Some(JsonRpcError {
-                    code: -32602,
-                    message: format!("Tool not found: {}", tool_name),
-                    data: None,
-                }),
-            };
-        }
-    };
+    let (_tool_id, _tool_name, original_name, risk_category, backend_id, backend_name, transport) =
+        match tool_row {
+            Some(r) => r,
+            None => {
+                return JsonRpcResponse {
+                    jsonrpc: "2.0".into(),
+                    id: req.id.clone(),
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32602,
+                        message: format!("Tool not found: {}", tool_name),
+                        data: None,
+                    }),
+                };
+            }
+        };
 
     let risk = risk_category.as_deref().unwrap_or("read");
     let user_id: Option<Uuid> = claims.sub.parse().ok();
@@ -258,11 +260,14 @@ async fn handle_tools_call(
         Err(_) => PolicyEngine::new(vec![], PolicyDecision::Deny),
     };
 
-    let (decision, policy_id, reason) = engine.evaluate(tool_name, risk, claims.application.as_deref());
+    let (decision, policy_id, reason) =
+        engine.evaluate(tool_name, risk, claims.application.as_deref());
     let decision_str = decision.to_string();
 
     // Record metrics
-    state.metrics.record_policy_decision(&decision_str, tool_name);
+    state
+        .metrics
+        .record_policy_decision(&decision_str, tool_name);
 
     if decision != PolicyDecision::Allow {
         let duration = start.elapsed();
@@ -270,25 +275,33 @@ async fn handle_tools_call(
 
         // Audit the denial
         if let Some(ref audit) = state.audit {
-            let _ = audit.record_event(
-                tool_name,
-                &backend_name,
-                risk,
-                Some(&arguments.to_string()),
-                None,
-                duration_ms,
-                "denied",
-                reason.as_deref(),
-                "deny",
-                policy_id.as_deref(),
-                user_id,
-                None,
-                None,
-                claims.application.as_deref(),
-            ).await;
+            let _ = audit
+                .record_event(
+                    tool_name,
+                    &backend_name,
+                    risk,
+                    Some(&arguments.to_string()),
+                    None,
+                    duration_ms,
+                    "denied",
+                    reason.as_deref(),
+                    "deny",
+                    policy_id.as_deref(),
+                    user_id,
+                    None,
+                    None,
+                    claims.application.as_deref(),
+                )
+                .await;
         }
 
-        state.metrics.record_tool_call(tool_name, &backend_name, "denied", risk, duration.as_secs_f64());
+        state.metrics.record_tool_call(
+            tool_name,
+            &backend_name,
+            "denied",
+            risk,
+            duration.as_secs_f64(),
+        );
 
         let deny_reason = reason.unwrap_or_else(|| "Access denied by policy".into());
         return JsonRpcResponse {
@@ -306,55 +319,77 @@ async fn handle_tools_call(
     // Forward to backend — returns the raw MCP result object (preserving isError, content, etc.)
     let result = match transport.as_str() {
         "streamable-http" => {
-            let config_row: Option<(serde_json::Value,)> = sqlx::query_as(
-                "SELECT config FROM backends WHERE backend_id = $1"
-            ).bind(backend_id).fetch_optional(&state.db).await.unwrap_or(None);
+            let config_row: Option<(serde_json::Value,)> =
+                sqlx::query_as("SELECT config FROM backends WHERE backend_id = $1")
+                    .bind(backend_id)
+                    .fetch_optional(&state.db)
+                    .await
+                    .unwrap_or(None);
 
             match config_row {
                 Some((config,)) => {
-                    crate::backends::BackendManager::call_http_tool(&config, &original_name, &arguments).await
+                    crate::backends::BackendManager::call_http_tool(
+                        &config,
+                        &original_name,
+                        &arguments,
+                    )
+                    .await
                 }
                 None => Err("Backend config not found".into()),
             }
         }
         "sse" => {
-            let config_row: Option<(serde_json::Value,)> = sqlx::query_as(
-                "SELECT config FROM backends WHERE backend_id = $1"
-            ).bind(backend_id).fetch_optional(&state.db).await.unwrap_or(None);
+            let config_row: Option<(serde_json::Value,)> =
+                sqlx::query_as("SELECT config FROM backends WHERE backend_id = $1")
+                    .bind(backend_id)
+                    .fetch_optional(&state.db)
+                    .await
+                    .unwrap_or(None);
 
             match config_row {
                 Some((config,)) => {
-                    crate::backends::BackendManager::call_sse_tool(&config, &original_name, &arguments).await
+                    crate::backends::BackendManager::call_sse_tool(
+                        &config,
+                        &original_name,
+                        &arguments,
+                    )
+                    .await
                 }
                 None => Err("Backend config not found".into()),
             }
         }
         "stdio" => {
-            state.backend_manager.call_tool(&backend_id, &original_name, &arguments).await
+            state
+                .backend_manager
+                .call_tool(&backend_id, &original_name, &arguments)
+                .await
         }
         "agent" => {
-            let config_row: Option<(serde_json::Value,)> = sqlx::query_as(
-                "SELECT config FROM backends WHERE backend_id = $1"
-            ).bind(backend_id).fetch_optional(&state.db).await.unwrap_or(None);
+            let config_row: Option<(serde_json::Value,)> =
+                sqlx::query_as("SELECT config FROM backends WHERE backend_id = $1")
+                    .bind(backend_id)
+                    .fetch_optional(&state.db)
+                    .await
+                    .unwrap_or(None);
 
             match config_row {
                 Some((config,)) => {
-                    let agent_id = config.get("agent_id")
+                    let agent_id = config
+                        .get("agent_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or(&backend_name);
-                    state.agent_registry
+                    state
+                        .agent_registry
                         .call_tool(agent_id, &original_name, &arguments)
                         .await
                 }
                 None => Err("Backend config not found".into()),
             }
         }
-        _ => {
-            Err(format!(
-                "Backend '{}' uses unsupported transport: {}",
-                backend_name, transport
-            ))
-        }
+        _ => Err(format!(
+            "Backend '{}' uses unsupported transport: {}",
+            backend_name, transport
+        )),
     };
 
     let duration = start.elapsed();
@@ -363,7 +398,8 @@ async fn handle_tools_call(
     match result {
         Ok(raw_result) => {
             // Check if the backend signalled a tool-level error via isError flag
-            let is_tool_error = raw_result.get("isError")
+            let is_tool_error = raw_result
+                .get("isError")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
@@ -374,29 +410,41 @@ async fn handle_tools_call(
                 raw_result.clone()
             };
 
-            let audit_status = if is_tool_error { "tool_error" } else { "success" };
+            let audit_status = if is_tool_error {
+                "tool_error"
+            } else {
+                "success"
+            };
 
             // Audit
             if let Some(ref audit) = state.audit {
-                let _ = audit.record_event(
-                    tool_name,
-                    &backend_name,
-                    risk,
-                    Some(&arguments.to_string()),
-                    Some(&content.to_string()),
-                    duration_ms,
-                    audit_status,
-                    None,
-                    &decision_str,
-                    policy_id.as_deref(),
-                    user_id,
-                    None,
-                    None,
-                    claims.application.as_deref(),
-                ).await;
+                let _ = audit
+                    .record_event(
+                        tool_name,
+                        &backend_name,
+                        risk,
+                        Some(&arguments.to_string()),
+                        Some(&content.to_string()),
+                        duration_ms,
+                        audit_status,
+                        None,
+                        &decision_str,
+                        policy_id.as_deref(),
+                        user_id,
+                        None,
+                        None,
+                        claims.application.as_deref(),
+                    )
+                    .await;
             }
 
-            state.metrics.record_tool_call(tool_name, &backend_name, audit_status, risk, duration.as_secs_f64());
+            state.metrics.record_tool_call(
+                tool_name,
+                &backend_name,
+                audit_status,
+                risk,
+                duration.as_secs_f64(),
+            );
 
             // If the backend already returned MCP content array, pass it through directly
             if content.is_array() {
@@ -442,25 +490,33 @@ async fn handle_tools_call(
         Err(err_msg) => {
             // Audit error
             if let Some(ref audit) = state.audit {
-                let _ = audit.record_event(
-                    tool_name,
-                    &backend_name,
-                    risk,
-                    Some(&arguments.to_string()),
-                    None,
-                    duration_ms,
-                    "error",
-                    Some(&err_msg),
-                    &decision_str,
-                    policy_id.as_deref(),
-                    user_id,
-                    None,
-                    None,
-                    claims.application.as_deref(),
-                ).await;
+                let _ = audit
+                    .record_event(
+                        tool_name,
+                        &backend_name,
+                        risk,
+                        Some(&arguments.to_string()),
+                        None,
+                        duration_ms,
+                        "error",
+                        Some(&err_msg),
+                        &decision_str,
+                        policy_id.as_deref(),
+                        user_id,
+                        None,
+                        None,
+                        claims.application.as_deref(),
+                    )
+                    .await;
             }
 
-            state.metrics.record_tool_call(tool_name, &backend_name, "error", risk, duration.as_secs_f64());
+            state.metrics.record_tool_call(
+                tool_name,
+                &backend_name,
+                "error",
+                risk,
+                duration.as_secs_f64(),
+            );
 
             JsonRpcResponse {
                 jsonrpc: "2.0".into(),
@@ -477,4 +533,3 @@ async fn handle_tools_call(
         }
     }
 }
-

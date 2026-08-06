@@ -63,10 +63,11 @@ fn build_http_client(tls_skip_verify: bool) -> reqwest::Result<reqwest::Client> 
         .build()
 }
 
-pub async fn check_update(
-    config: &crate::config::Config,
-) -> anyhow::Result<Option<AgentRelease>> {
-    let base_url = config.agent.dashboard_url.clone()
+pub async fn check_update(config: &crate::config::Config) -> anyhow::Result<Option<AgentRelease>> {
+    let base_url = config
+        .agent
+        .dashboard_url
+        .clone()
         .unwrap_or_else(|| derive_http_url(&config.agent.gateway_url));
     let url = format!("{}/api/v1/agent/releases/latest", base_url);
 
@@ -98,7 +99,10 @@ pub async fn download_and_apply(
     config: &crate::config::Config,
     release: &AgentRelease,
 ) -> anyhow::Result<()> {
-    let base_url = config.agent.dashboard_url.clone()
+    let base_url = config
+        .agent
+        .dashboard_url
+        .clone()
         .unwrap_or_else(|| derive_http_url(&config.agent.gateway_url));
     let arch = current_arch();
 
@@ -151,7 +155,11 @@ pub async fn download_and_apply(
     }
 
     // Write to cache
-    let cache_name = if cfg!(windows) { "mcp-gateway-agent.new.exe" } else { "mcp-gateway-agent.new" };
+    let cache_name = if cfg!(windows) {
+        "mcp-gateway-agent.new.exe"
+    } else {
+        "mcp-gateway-agent.new"
+    };
     let cache_path = crate::config::cache_dir().join(cache_name);
     crate::config::ensure_dirs()?;
     std::fs::write(&cache_path, &bytes)?;
@@ -174,8 +182,13 @@ pub async fn download_and_apply(
 
 pub async fn run_update_command(check_only: bool, auto_yes: bool) -> anyhow::Result<()> {
     let config_path = crate::config::default_config_path();
-    let config_content = std::fs::read_to_string(&config_path)
-        .map_err(|e| anyhow::anyhow!("No config found at {}. Run 'mcp-gateway-agent setup' first. ({})", config_path.display(), e))?;
+    let config_content = std::fs::read_to_string(&config_path).map_err(|e| {
+        anyhow::anyhow!(
+            "No config found at {}. Run 'mcp-gateway-agent setup' first. ({})",
+            config_path.display(),
+            e
+        )
+    })?;
     let config: crate::config::Config = toml::from_str(&config_content)?;
 
     println!("Checking for updates...");

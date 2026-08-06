@@ -75,7 +75,10 @@ pub fn install() -> anyhow::Result<()> {
             .args(["enable-linger"])
             .status();
     } else {
-        anyhow::bail!("systemctl enable --now failed with exit code: {:?}", status.code());
+        anyhow::bail!(
+            "systemctl enable --now failed with exit code: {:?}",
+            status.code()
+        );
     }
 
     Ok(())

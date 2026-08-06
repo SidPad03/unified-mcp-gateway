@@ -1,7 +1,7 @@
 pub mod agent_releases;
 pub mod api_keys;
-pub mod auth;
 pub mod audit;
+pub mod auth;
 pub mod backends;
 pub mod config_transfer;
 pub mod live;
@@ -14,8 +14,8 @@ pub mod updates;
 pub mod usage;
 pub mod users;
 
-use axum::Router;
 use crate::AppState;
+use axum::Router;
 
 pub fn router() -> Router<AppState> {
     Router::new()

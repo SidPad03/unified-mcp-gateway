@@ -83,10 +83,9 @@ impl Dashboard {
                     self.log_scroll -= 1;
                 }
             }
-            KeyCode::Down
-                if self.log_scroll < self.logs.len().saturating_sub(1) => {
-                    self.log_scroll += 1;
-                }
+            KeyCode::Down if self.log_scroll < self.logs.len().saturating_sub(1) => {
+                self.log_scroll += 1;
+            }
             _ => {}
         }
     }
@@ -120,7 +119,12 @@ impl Dashboard {
                 success,
             } => {
                 // Update the matching record if found, otherwise add new
-                if let Some(record) = self.tool_calls.iter_mut().rev().find(|r| r.tool == tool && r.duration_ms.is_none()) {
+                if let Some(record) = self
+                    .tool_calls
+                    .iter_mut()
+                    .rev()
+                    .find(|r| r.tool == tool && r.duration_ms.is_none())
+                {
                     record.duration_ms = Some(duration_ms);
                     record.success = Some(success);
                 }
@@ -154,7 +158,7 @@ impl Dashboard {
         let area = f.area();
 
         let main_chunks = Layout::vertical([
-            Constraint::Length(2),  // Header
+            Constraint::Length(2), // Header
             Constraint::Fill(1),   // Middle
             Constraint::Length(8), // Logs
             Constraint::Length(1), // Status bar
@@ -163,11 +167,8 @@ impl Dashboard {
 
         self.render_header(f, main_chunks[0]);
 
-        let middle = Layout::horizontal([
-            Constraint::Percentage(35),
-            Constraint::Percentage(65),
-        ])
-        .split(main_chunks[1]);
+        let middle = Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
+            .split(main_chunks[1]);
 
         self.render_backends_panel(f, middle[0]);
         self.render_tool_calls_panel(f, middle[1]);
@@ -270,10 +271,7 @@ impl Dashboard {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(theme::border())
-                .title(Span::styled(
-                    " Recent Tool Calls ",
-                    theme::title_style(),
-                )),
+                .title(Span::styled(" Recent Tool Calls ", theme::title_style())),
         );
         f.render_widget(list, area);
     }
@@ -284,7 +282,11 @@ impl Dashboard {
             .logs
             .iter()
             .rev()
-            .skip(self.logs.len().saturating_sub(self.log_scroll + visible_height))
+            .skip(
+                self.logs
+                    .len()
+                    .saturating_sub(self.log_scroll + visible_height),
+            )
             .take(visible_height)
             .map(|log| {
                 let level_style = match log.level {
@@ -311,18 +313,35 @@ impl Dashboard {
 
     fn render_status_bar(&self, f: &mut Frame, area: Rect) {
         let hints = Line::from(vec![
-            Span::styled("  q", ratatui::style::Style::default().fg(theme::TEXT_DIM).add_modifier(Modifier::BOLD)),
-            Span::styled(":quit  ", theme::dim()),
-            Span::styled("s", ratatui::style::Style::default().fg(theme::TEXT_DIM).add_modifier(Modifier::BOLD)),
-            Span::styled(":setup  ", theme::dim()),
-            Span::styled("u", ratatui::style::Style::default().fg(theme::TEXT_DIM).add_modifier(Modifier::BOLD)),
-            Span::styled(":update  ", theme::dim()),
-            Span::styled("\u{2191}\u{2193}", ratatui::style::Style::default().fg(theme::TEXT_DIM).add_modifier(Modifier::BOLD)),
-            Span::styled(":scroll logs  ", theme::dim()),
             Span::styled(
-                format!("tools:{}", self.total_tools),
-                theme::dim(),
+                "  q",
+                ratatui::style::Style::default()
+                    .fg(theme::TEXT_DIM)
+                    .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(":quit  ", theme::dim()),
+            Span::styled(
+                "s",
+                ratatui::style::Style::default()
+                    .fg(theme::TEXT_DIM)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(":setup  ", theme::dim()),
+            Span::styled(
+                "u",
+                ratatui::style::Style::default()
+                    .fg(theme::TEXT_DIM)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(":update  ", theme::dim()),
+            Span::styled(
+                "\u{2191}\u{2193}",
+                ratatui::style::Style::default()
+                    .fg(theme::TEXT_DIM)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(":scroll logs  ", theme::dim()),
+            Span::styled(format!("tools:{}", self.total_tools), theme::dim()),
         ]);
         f.render_widget(Paragraph::new(hints), area);
     }
@@ -332,7 +351,9 @@ use ratatui::layout::Rect;
 
 fn chrono_now() -> String {
     let now = std::time::SystemTime::now();
-    let since_epoch = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let since_epoch = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     let secs = since_epoch.as_secs() % 86400;
     let h = secs / 3600;
     let m = (secs % 3600) / 60;

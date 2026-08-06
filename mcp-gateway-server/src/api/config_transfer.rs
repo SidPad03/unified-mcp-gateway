@@ -176,11 +176,7 @@ fn derive_key(passphrase: &str, salt: &[u8], p: &KdfParams) -> Result<[u8; 32], 
     }
     let params = argon2::Params::new(p.m_cost, p.t_cost, p.p_cost, Some(32))
         .map_err(|e| AppError::BadRequest(format!("Invalid key-derivation parameters: {e}")))?;
-    let argon2 = argon2::Argon2::new(
-        argon2::Algorithm::Argon2id,
-        argon2::Version::V0x13,
-        params,
-    );
+    let argon2 = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     let mut key = [0u8; 32];
     argon2
         .hash_password_into(passphrase.as_bytes(), salt, &mut key)
@@ -217,7 +213,9 @@ fn unseal(bundle: &Bundle, passphrase: &str) -> Result<Vec<u8>, AppError> {
         .decode(&bundle.nonce)
         .map_err(|_| AppError::BadRequest("Bundle nonce is not valid base64".into()))?;
     if nonce.len() != 12 {
-        return Err(AppError::BadRequest("Bundle nonce has the wrong length".into()));
+        return Err(AppError::BadRequest(
+            "Bundle nonce has the wrong length".into(),
+        ));
     }
     let ciphertext = B64
         .decode(&bundle.ciphertext)
@@ -273,7 +271,8 @@ async fn export_config(
     for table in wanted {
         // `table` is one of our own compile-time constants, never user input.
         let sql = format!("SELECT row_to_json(t) FROM {table} t");
-        let mut rows: Vec<serde_json::Value> = sqlx::query_scalar(&sql).fetch_all(&state.db).await?;
+        let mut rows: Vec<serde_json::Value> =
+            sqlx::query_scalar(&sql).fetch_all(&state.db).await?;
 
         if table == "api_keys" {
             for row in rows.iter_mut() {
@@ -313,7 +312,9 @@ async fn export_config(
 /// A key stored before at-rest encryption existed has nothing to recover; it
 /// still authenticates after import, it just cannot be revealed.
 fn rekey_for_export(row: &mut serde_json::Value) {
-    let Some(obj) = row.as_object_mut() else { return };
+    let Some(obj) = row.as_object_mut() else {
+        return;
+    };
     let stored = obj
         .remove("key_secret")
         .and_then(|v| v.as_str().map(str::to_owned));
@@ -375,8 +376,9 @@ async fn import_config(
             }
             // json_populate_record maps the object onto the target's row type,
             // so no bundle-supplied identifier ever reaches the SQL text.
-            let sql =
-                format!("INSERT INTO {table} SELECT * FROM json_populate_record(NULL::{table}, $1)");
+            let sql = format!(
+                "INSERT INTO {table} SELECT * FROM json_populate_record(NULL::{table}, $1)"
+            );
             sqlx::query(&sql).bind(&row).execute(&mut *tx).await?;
             count += 1;
         }
@@ -582,7 +584,10 @@ mod tests {
         let sealed = super::super::api_keys::encrypt_api_key("mcpgw_abc123def456").unwrap();
         let mut row = serde_json::json!({ "key_id": "x", "key_secret": sealed });
         rekey_for_export(&mut row);
-        assert!(row.get("key_secret").is_none(), "stored blob must be dropped");
+        assert!(
+            row.get("key_secret").is_none(),
+            "stored blob must be dropped"
+        );
         assert_eq!(row["key_secret_plain"], "mcpgw_abc123def456");
     }
 
@@ -614,8 +619,10 @@ mod tests {
         std::env::set_var("JWT_SECRET", "target-deployment-secret-value");
         rekey_for_import(&mut row).unwrap();
         assert_eq!(
-            super::super::api_keys::decrypt_api_key_for_transfer(row["key_secret"].as_str().unwrap())
-                .unwrap(),
+            super::super::api_keys::decrypt_api_key_for_transfer(
+                row["key_secret"].as_str().unwrap()
+            )
+            .unwrap(),
             "mcpgw_portable"
         );
     }

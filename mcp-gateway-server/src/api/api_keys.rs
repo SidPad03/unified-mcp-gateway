@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    routing::{get, post, delete},
+    routing::{delete, get, post},
     Json, Router,
 };
 use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, Key, KeyInit, Nonce};
@@ -9,10 +9,19 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use super::auth::{require_admin, Claims};
 use crate::{AppError, AppState};
-use super::auth::{Claims, require_admin};
 
-pub const SUPPORTED_APPS: &[&str] = &["claude", "claudedesktop", "cursor", "vscode", "openwebui", "clawbot", "codex", "lmstudio"];
+pub const SUPPORTED_APPS: &[&str] = &[
+    "claude",
+    "claudedesktop",
+    "cursor",
+    "vscode",
+    "openwebui",
+    "clawbot",
+    "codex",
+    "lmstudio",
+];
 
 #[derive(Deserialize)]
 pub struct CreateApiKeyRequest {
@@ -48,7 +57,10 @@ pub struct ApiKeyResponse {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api-keys", post(create_api_key).get(list_api_keys))
-        .route("/api-keys/:id", delete(delete_api_key).patch(update_api_key))
+        .route(
+            "/api-keys/:id",
+            delete(delete_api_key).patch(update_api_key),
+        )
         .route("/api-keys/provision/:user_id", post(provision_app_keys))
         .route("/api-keys/by-user/:user_id", get(keys_by_user))
         .route("/api-keys/reveal/:user_id", post(reveal_app_keys))
@@ -70,12 +82,10 @@ async fn create_api_key(
         .map_err(|_| AppError::BadRequest("Invalid user_id".into()))?;
 
     // Verify user exists
-    let exists: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT user_id FROM users WHERE user_id = $1",
-    )
-    .bind(target_user_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let exists: Option<(Uuid,)> = sqlx::query_as("SELECT user_id FROM users WHERE user_id = $1")
+        .bind(target_user_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     if exists.is_none() {
         return Err(AppError::NotFound("User not found".into()));
@@ -117,7 +127,18 @@ async fn list_api_keys(
 ) -> Result<Json<Vec<ApiKeyResponse>>, AppError> {
     let is_admin = claims.roles.contains(&"owner".to_string());
 
-    let keys: Vec<(Uuid, String, String, Uuid, String, bool, chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>, Option<String>)> = if is_admin {
+    let keys: Vec<(
+        Uuid,
+        String,
+        String,
+        Uuid,
+        String,
+        bool,
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+    )> = if is_admin {
         sqlx::query_as(
             "SELECT ak.key_id, ak.key_prefix, ak.name, ak.user_id, u.username, ak.is_active, ak.created_at, ak.last_used, ak.expires_at, ak.application
              FROM api_keys ak JOIN users u ON ak.user_id = u.user_id
@@ -126,7 +147,10 @@ async fn list_api_keys(
         .fetch_all(&state.db)
         .await?
     } else {
-        let user_id: Uuid = claims.sub.parse().map_err(|_| AppError::Internal("Invalid user_id in claims".into()))?;
+        let user_id: Uuid = claims
+            .sub
+            .parse()
+            .map_err(|_| AppError::Internal("Invalid user_id in claims".into()))?;
         sqlx::query_as(
             "SELECT ak.key_id, ak.key_prefix, ak.name, ak.user_id, u.username, ak.is_active, ak.created_at, ak.last_used, ak.expires_at, ak.application
              FROM api_keys ak JOIN users u ON ak.user_id = u.user_id
@@ -140,20 +164,33 @@ async fn list_api_keys(
 
     let result: Vec<ApiKeyResponse> = keys
         .into_iter()
-        .map(|(key_id, prefix, name, user_id, username, active, created, last_used, expires, application)| {
-            ApiKeyResponse {
-                key_id: key_id.to_string(),
-                key_prefix: prefix,
+        .map(
+            |(
+                key_id,
+                prefix,
                 name,
-                user_id: user_id.to_string(),
+                user_id,
                 username,
-                is_active: active,
-                created_at: created.to_rfc3339(),
-                last_used: last_used.map(|t| t.to_rfc3339()),
-                expires_at: expires.map(|t| t.to_rfc3339()),
+                active,
+                created,
+                last_used,
+                expires,
                 application,
-            }
-        })
+            )| {
+                ApiKeyResponse {
+                    key_id: key_id.to_string(),
+                    key_prefix: prefix,
+                    name,
+                    user_id: user_id.to_string(),
+                    username,
+                    is_active: active,
+                    created_at: created.to_rfc3339(),
+                    last_used: last_used.map(|t| t.to_rfc3339()),
+                    expires_at: expires.map(|t| t.to_rfc3339()),
+                    application,
+                }
+            },
+        )
         .collect();
 
     Ok(Json(result))
@@ -166,7 +203,9 @@ async fn delete_api_key(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&claims)?;
 
-    let key_id: Uuid = id.parse().map_err(|_| AppError::BadRequest("Invalid key_id".into()))?;
+    let key_id: Uuid = id
+        .parse()
+        .map_err(|_| AppError::BadRequest("Invalid key_id".into()))?;
 
     let result = sqlx::query("DELETE FROM api_keys WHERE key_id = $1")
         .bind(key_id)
@@ -193,7 +232,9 @@ async fn update_api_key(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&claims)?;
 
-    let key_id: Uuid = id.parse().map_err(|_| AppError::BadRequest("Invalid key_id".into()))?;
+    let key_id: Uuid = id
+        .parse()
+        .map_err(|_| AppError::BadRequest("Invalid key_id".into()))?;
 
     let result = sqlx::query("UPDATE api_keys SET name = $1 WHERE key_id = $2")
         .bind(&req.name)
@@ -365,20 +406,33 @@ async fn keys_by_user(
 
     let result: Vec<ApiKeyResponse> = keys
         .into_iter()
-        .map(|(key_id, prefix, name, user_id, username, active, created, last_used, expires, application)| {
-            ApiKeyResponse {
-                key_id: key_id.to_string(),
-                key_prefix: prefix,
+        .map(
+            |(
+                key_id,
+                prefix,
                 name,
-                user_id: user_id.to_string(),
+                user_id,
                 username,
-                is_active: active,
-                created_at: created.to_rfc3339(),
-                last_used: last_used.map(|t| t.to_rfc3339()),
-                expires_at: expires.map(|t| t.to_rfc3339()),
+                active,
+                created,
+                last_used,
+                expires,
                 application,
-            }
-        })
+            )| {
+                ApiKeyResponse {
+                    key_id: key_id.to_string(),
+                    key_prefix: prefix,
+                    name,
+                    user_id: user_id.to_string(),
+                    username,
+                    is_active: active,
+                    created_at: created.to_rfc3339(),
+                    last_used: last_used.map(|t| t.to_rfc3339()),
+                    expires_at: expires.map(|t| t.to_rfc3339()),
+                    application,
+                }
+            },
+        )
         .collect();
 
     Ok(Json(result))
@@ -481,7 +535,7 @@ async fn reveal_app_keys(
     let rows: Vec<(Uuid, Option<String>, String, Option<String>)> = sqlx::query_as(
         "SELECT key_id, application, key_prefix, key_secret FROM api_keys
          WHERE user_id = $1 AND is_active = TRUE AND application IS NOT NULL
-         ORDER BY application"
+         ORDER BY application",
     )
     .bind(target_user_id)
     .fetch_all(&state.db)
@@ -524,7 +578,10 @@ async fn reveal_app_keys(
     Ok(Json(result))
 }
 
-pub async fn generate_app_keys_for_user(pool: &sqlx::PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
+pub async fn generate_app_keys_for_user(
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+) -> Result<(), sqlx::Error> {
     for app in SUPPORTED_APPS {
         let raw_key = generate_api_key();
         let key_prefix = raw_key[..12].to_string();

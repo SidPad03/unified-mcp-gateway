@@ -131,10 +131,7 @@ pub fn status_line<'a>(label: &'a str, connected: bool) -> Line<'a> {
     } else {
         Span::styled("○ ", theme::status_err())
     };
-    Line::from(vec![
-        indicator,
-        Span::styled(label, theme::normal()),
-    ])
+    Line::from(vec![indicator, Span::styled(label, theme::normal())])
 }
 
 #[allow(dead_code)] // TUI helper, not currently wired into any view

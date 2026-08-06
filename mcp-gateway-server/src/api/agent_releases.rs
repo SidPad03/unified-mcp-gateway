@@ -90,29 +90,36 @@ async fn fetch_releases(state: &AppState) -> Result<Vec<AgentRelease>, AppError>
 
     // Filter to agent releases (tags starting with "agent-v") and parse checksums
     let mut releases: Vec<AgentRelease> = Vec::new();
-    for r in gitea_releases.into_iter().filter(|r| r.tag_name.starts_with("agent-v")) {
-        let version = r.tag_name.strip_prefix("agent-v").unwrap_or(&r.tag_name).to_string();
+    for r in gitea_releases
+        .into_iter()
+        .filter(|r| r.tag_name.starts_with("agent-v"))
+    {
+        let version = r
+            .tag_name
+            .strip_prefix("agent-v")
+            .unwrap_or(&r.tag_name)
+            .to_string();
 
         // Fetch and parse checksums.sha256 if present in this release
-        let checksums = if let Some(checksum_asset) = r.assets.iter().find(|a| a.name.contains("checksums")) {
-            let mut req = client.get(&checksum_asset.browser_download_url);
-            if let Some(ref token) = gitea_token {
-                req = req.header("Authorization", format!("token {}", token));
-            }
-            match req.timeout(Duration::from_secs(10)).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    match resp.text().await {
+        let checksums =
+            if let Some(checksum_asset) = r.assets.iter().find(|a| a.name.contains("checksums")) {
+                let mut req = client.get(&checksum_asset.browser_download_url);
+                if let Some(ref token) = gitea_token {
+                    req = req.header("Authorization", format!("token {}", token));
+                }
+                match req.timeout(Duration::from_secs(10)).send().await {
+                    Ok(resp) if resp.status().is_success() => match resp.text().await {
                         Ok(text) => parse_checksums(&text),
                         Err(_) => std::collections::HashMap::new(),
-                    }
+                    },
+                    _ => std::collections::HashMap::new(),
                 }
-                _ => std::collections::HashMap::new(),
-            }
-        } else {
-            std::collections::HashMap::new()
-        };
+            } else {
+                std::collections::HashMap::new()
+            };
 
-        let assets = r.assets
+        let assets = r
+            .assets
             .into_iter()
             .filter_map(|a| {
                 let arch = extract_arch(&a.name)?;
@@ -224,9 +231,7 @@ async fn download_release(
         .assets
         .iter()
         .find(|a| a.arch == query.arch)
-        .ok_or_else(|| {
-            AppError::NotFound(format!("No asset for architecture {}", query.arch))
-        })?;
+        .ok_or_else(|| AppError::NotFound(format!("No asset for architecture {}", query.arch)))?;
 
     // Stream from Gitea
     let gitea_token = std::env::var("GITEA_TOKEN").ok();
@@ -255,8 +260,14 @@ async fn download_release(
         .map_err(|e| AppError::Internal(format!("Failed to read download: {}", e)))?;
 
     let headers = [
-        (axum::http::header::CONTENT_TYPE, "application/octet-stream".to_string()),
-        (axum::http::header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", asset.name)),
+        (
+            axum::http::header::CONTENT_TYPE,
+            "application/octet-stream".to_string(),
+        ),
+        (
+            axum::http::header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", asset.name),
+        ),
     ];
 
     Ok((StatusCode::OK, headers, bytes))

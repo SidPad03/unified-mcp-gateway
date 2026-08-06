@@ -6,8 +6,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::auth::{require_admin, Claims};
 use crate::{AppError, AppState};
-use super::auth::{Claims, require_admin};
 
 #[derive(Serialize)]
 pub struct PolicyResponse {
@@ -70,13 +70,26 @@ async fn list_policies(
     .await?;
 
     let mut result = Vec::new();
-    for (policy_id, name, priority, tool_pattern, decision, reason, is_active, risk_categories, created_at, updated_at, application_match) in policies {
+    for (
+        policy_id,
+        name,
+        priority,
+        tool_pattern,
+        decision,
+        reason,
+        is_active,
+        risk_categories,
+        created_at,
+        updated_at,
+        application_match,
+    ) in policies
+    {
         // Fetch bound roles for this policy
         let role_rows: Vec<(Uuid, String)> = sqlx::query_as(
             "SELECT r.role_id, r.name FROM roles r
              JOIN role_policies rp ON rp.role_id = r.role_id
              WHERE rp.policy_id = $1
-             ORDER BY r.name"
+             ORDER BY r.name",
         )
         .bind(policy_id)
         .fetch_all(&state.db)
@@ -113,12 +126,17 @@ async fn create_policy(
     require_admin(&claims)?;
 
     if !["allow", "deny"].contains(&req.decision.as_str()) {
-        return Err(AppError::BadRequest("Decision must be 'allow' or 'deny'".into()));
+        return Err(AppError::BadRequest(
+            "Decision must be 'allow' or 'deny'".into(),
+        ));
     }
 
     let policy_id = Uuid::new_v4();
     let now = chrono::Utc::now();
-    let user_id: Uuid = claims.sub.parse().map_err(|_| AppError::Internal("Invalid user ID".into()))?;
+    let user_id: Uuid = claims
+        .sub
+        .parse()
+        .map_err(|_| AppError::Internal("Invalid user ID".into()))?;
 
     let risk_cats: Vec<String> = req.risk_categories.clone().unwrap_or_default();
 
@@ -165,10 +183,11 @@ async fn create_policy(
                 .execute(&state.db)
                 .await?;
 
-            let name_row: Option<(String,)> = sqlx::query_as("SELECT name FROM roles WHERE role_id = $1")
-                .bind(role_id)
-                .fetch_optional(&state.db)
-                .await?;
+            let name_row: Option<(String,)> =
+                sqlx::query_as("SELECT name FROM roles WHERE role_id = $1")
+                    .bind(role_id)
+                    .fetch_optional(&state.db)
+                    .await?;
             role_ids.push(role_id.to_string());
             if let Some((name,)) = name_row {
                 role_names.push(name);
@@ -203,57 +222,95 @@ async fn update_policy(
 
     if let Some(ref decision) = req.decision {
         if !["allow", "deny"].contains(&decision.as_str()) {
-            return Err(AppError::BadRequest("Decision must be 'allow' or 'deny'".into()));
+            return Err(AppError::BadRequest(
+                "Decision must be 'allow' or 'deny'".into(),
+            ));
         }
     }
 
     if let Some(name) = &req.name {
         sqlx::query("UPDATE policies SET name = $1, updated_at = NOW() WHERE policy_id = $2")
-            .bind(name).bind(id).execute(&state.db).await?;
+            .bind(name)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
     if let Some(priority) = req.priority {
         let conflict: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT policy_id FROM policies WHERE priority = $1 AND policy_id != $2"
+            "SELECT policy_id FROM policies WHERE priority = $1 AND policy_id != $2",
         )
-        .bind(priority).bind(id)
+        .bind(priority)
+        .bind(id)
         .fetch_optional(&state.db)
         .await?;
         if conflict.is_some() {
-            return Err(AppError::Conflict(format!("Priority {} is already in use", priority)));
+            return Err(AppError::Conflict(format!(
+                "Priority {} is already in use",
+                priority
+            )));
         }
         sqlx::query("UPDATE policies SET priority = $1, updated_at = NOW() WHERE policy_id = $2")
-            .bind(priority).bind(id).execute(&state.db).await?;
+            .bind(priority)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
     if let Some(tool_pattern) = &req.tool_pattern {
-        sqlx::query("UPDATE policies SET tool_pattern = $1, updated_at = NOW() WHERE policy_id = $2")
-            .bind(tool_pattern).bind(id).execute(&state.db).await?;
+        sqlx::query(
+            "UPDATE policies SET tool_pattern = $1, updated_at = NOW() WHERE policy_id = $2",
+        )
+        .bind(tool_pattern)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     }
     if let Some(decision) = &req.decision {
         sqlx::query("UPDATE policies SET decision = $1, updated_at = NOW() WHERE policy_id = $2")
-            .bind(decision).bind(id).execute(&state.db).await?;
+            .bind(decision)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
     if let Some(reason) = &req.reason {
         sqlx::query("UPDATE policies SET reason = $1, updated_at = NOW() WHERE policy_id = $2")
-            .bind(reason).bind(id).execute(&state.db).await?;
+            .bind(reason)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
     if let Some(is_active) = req.is_active {
         sqlx::query("UPDATE policies SET is_active = $1, updated_at = NOW() WHERE policy_id = $2")
-            .bind(is_active).bind(id).execute(&state.db).await?;
+            .bind(is_active)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
     if let Some(ref risk_cats) = req.risk_categories {
-        sqlx::query("UPDATE policies SET risk_categories = $1, updated_at = NOW() WHERE policy_id = $2")
-            .bind(risk_cats).bind(id).execute(&state.db).await?;
+        sqlx::query(
+            "UPDATE policies SET risk_categories = $1, updated_at = NOW() WHERE policy_id = $2",
+        )
+        .bind(risk_cats)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     }
     if let Some(ref app_match) = req.application_match {
-        sqlx::query("UPDATE policies SET application_match = $1, updated_at = NOW() WHERE policy_id = $2")
-            .bind(app_match).bind(id).execute(&state.db).await?;
+        sqlx::query(
+            "UPDATE policies SET application_match = $1, updated_at = NOW() WHERE policy_id = $2",
+        )
+        .bind(app_match)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     }
 
     // Update role bindings if provided
     if let Some(ref role_ids) = req.role_ids {
         // Remove old bindings
         sqlx::query("DELETE FROM role_policies WHERE policy_id = $1")
-            .bind(id).execute(&state.db).await?;
+            .bind(id)
+            .execute(&state.db)
+            .await?;
         // Insert new bindings
         for role_id in role_ids {
             sqlx::query("INSERT INTO role_policies (role_id, policy_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")

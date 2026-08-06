@@ -43,20 +43,33 @@ impl BackendManager {
         // Stop existing process if any
         self.stop_backend(&backend_id).await;
 
-        let command = config.get("command").and_then(|v| v.as_str())
+        let command = config
+            .get("command")
+            .and_then(|v| v.as_str())
             .ok_or("Config missing 'command' field")?;
-        let args: Vec<&str> = config.get("args")
+        let args: Vec<&str> = config
+            .get("args")
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
-        let env_map: HashMap<String, String> = config.get("env")
+        let env_map: HashMap<String, String> = config
+            .get("env")
             .and_then(|v| v.as_object())
-            .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
             .unwrap_or_default();
 
         // Log arg count, not the args themselves: stdio MCP args commonly carry
         // tokens/secrets (env is already omitted for the same reason).
-        tracing::info!(backend = name, command, arg_count = args.len(), "Spawning stdio backend");
+        tracing::info!(
+            backend = name,
+            command,
+            arg_count = args.len(),
+            "Spawning stdio backend"
+        );
 
         let mut cmd = Command::new(command);
         cmd.args(&args)
@@ -66,7 +79,9 @@ impl BackendManager {
             .stderr(std::process::Stdio::inherit())
             .kill_on_drop(true);
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn '{}': {}", command, e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn '{}': {}", command, e))?;
 
         let child_stdin = child.stdin.take().ok_or("Failed to capture stdin")?;
         let child_stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
@@ -94,7 +109,8 @@ impl BackendManager {
                 "capabilities": {},
                 "clientInfo": { "name": "mcp-gateway", "version": "0.1.0" }
             })),
-        ).await;
+        )
+        .await;
 
         match &init_result {
             Ok(resp) => tracing::info!(backend = name, ?resp, "MCP initialize succeeded"),
@@ -109,19 +125,33 @@ impl BackendManager {
         let _ = Self::jsonrpc_notify(&process, "notifications/initialized", None).await;
 
         // Discover tools
-        let tools_result = Self::jsonrpc_call(&process, "tools/list", Some(serde_json::json!({}))).await;
+        let tools_result =
+            Self::jsonrpc_call(&process, "tools/list", Some(serde_json::json!({}))).await;
 
         let tools = match tools_result {
             Ok(resp) => {
                 let tool_array = resp.get("tools").and_then(|t| t.as_array());
                 match tool_array {
-                    Some(arr) => arr.iter().map(|t| {
-                        DiscoveredTool {
-                            name: t.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
-                            description: t.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string(),
-                            input_schema: t.get("inputSchema").cloned().unwrap_or(serde_json::json!({"type": "object", "properties": {}})),
-                        }
-                    }).filter(|t| !t.name.is_empty()).collect(),
+                    Some(arr) => {
+                        arr.iter()
+                            .map(|t| DiscoveredTool {
+                                name: t
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                description: t
+                                    .get("description")
+                                    .and_then(|d| d.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                input_schema: t.get("inputSchema").cloned().unwrap_or(
+                                    serde_json::json!({"type": "object", "properties": {}}),
+                                ),
+                            })
+                            .filter(|t| !t.name.is_empty())
+                            .collect()
+                    }
                     None => {
                         tracing::warn!(backend = name, "tools/list returned no tools array");
                         vec![]
@@ -134,7 +164,11 @@ impl BackendManager {
             }
         };
 
-        tracing::info!(backend = name, tool_count = tools.len(), "Backend spawned and tools discovered");
+        tracing::info!(
+            backend = name,
+            tool_count = tools.len(),
+            "Backend spawned and tools discovered"
+        );
         Ok(tools)
     }
 
@@ -157,9 +191,11 @@ impl BackendManager {
         // lifecycle writer (spawn/stop/shutdown) for the duration of the call.
         let process = {
             let backends = self.backends.read().await;
-            backends.get(backend_id)
+            backends
+                .get(backend_id)
                 .ok_or_else(|| "Backend process not running".to_string())?
-                .process.clone()
+                .process
+                .clone()
         };
 
         let result = Self::jsonrpc_call(
@@ -169,7 +205,8 @@ impl BackendManager {
                 "name": tool_name,
                 "arguments": arguments,
             })),
-        ).await?;
+        )
+        .await?;
 
         Ok(result)
     }
@@ -193,7 +230,9 @@ impl BackendManager {
         name: &str,
         config: &serde_json::Value,
     ) -> Result<Vec<DiscoveredTool>, String> {
-        let url = config.get("url").and_then(|v| v.as_str())
+        let url = config
+            .get("url")
+            .and_then(|v| v.as_str())
             .ok_or("Config missing 'url' field")?;
 
         let client = Self::build_http_client(config)?;
@@ -212,10 +251,12 @@ impl BackendManager {
             }
         });
 
-        let init_resp = client.post(url)
+        let init_resp = client
+            .post(url)
             .json(&init_body)
             .timeout(std::time::Duration::from_secs(30))
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("HTTP initialize request failed: {}", e))?;
 
         if !init_resp.status().is_success() {
@@ -224,7 +265,8 @@ impl BackendManager {
             return Err(format!("Initialize returned HTTP {}: {}", status, body));
         }
 
-        let init_json = Self::read_streamable_response(init_resp).await
+        let init_json = Self::read_streamable_response(init_resp)
+            .await
             .map_err(|e| format!("Failed to parse initialize response: {}", e))?;
 
         tracing::info!(backend = name, resp = ?init_json, "HTTP MCP initialize succeeded");
@@ -234,9 +276,12 @@ impl BackendManager {
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
         });
-        let _ = client.post(url).json(&notif_body)
+        let _ = client
+            .post(url)
+            .json(&notif_body)
             .timeout(std::time::Duration::from_secs(10))
-            .send().await;
+            .send()
+            .await;
 
         // Step 3: Discover tools
         let tools_body = serde_json::json!({
@@ -246,10 +291,12 @@ impl BackendManager {
             "params": {}
         });
 
-        let tools_resp = client.post(url)
+        let tools_resp = client
+            .post(url)
             .json(&tools_body)
             .timeout(std::time::Duration::from_secs(30))
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("HTTP tools/list request failed: {}", e))?;
 
         if !tools_resp.status().is_success() {
@@ -258,7 +305,8 @@ impl BackendManager {
             return Err(format!("tools/list returned HTTP {}: {}", status, body));
         }
 
-        let tools_json = Self::read_streamable_response(tools_resp).await
+        let tools_json = Self::read_streamable_response(tools_resp)
+            .await
             .map_err(|e| format!("Failed to parse tools/list response: {}", e))?;
 
         // Parse tools from the result
@@ -266,21 +314,37 @@ impl BackendManager {
         let tool_array = result.get("tools").and_then(|t| t.as_array());
 
         let tools: Vec<DiscoveredTool> = match tool_array {
-            Some(arr) => arr.iter().map(|t| {
-                DiscoveredTool {
-                    name: t.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
-                    description: t.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string(),
-                    input_schema: t.get("inputSchema").cloned()
+            Some(arr) => arr
+                .iter()
+                .map(|t| DiscoveredTool {
+                    name: t
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    description: t
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    input_schema: t
+                        .get("inputSchema")
+                        .cloned()
                         .unwrap_or(serde_json::json!({"type": "object", "properties": {}})),
-                }
-            }).filter(|t| !t.name.is_empty()).collect(),
+                })
+                .filter(|t| !t.name.is_empty())
+                .collect(),
             None => {
                 tracing::warn!(backend = name, "HTTP tools/list returned no tools array");
                 vec![]
             }
         };
 
-        tracing::info!(backend = name, tool_count = tools.len(), "HTTP backend tools discovered");
+        tracing::info!(
+            backend = name,
+            tool_count = tools.len(),
+            "HTTP backend tools discovered"
+        );
         Ok(tools)
     }
 
@@ -290,7 +354,9 @@ impl BackendManager {
         tool_name: &str,
         arguments: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let url = config.get("url").and_then(|v| v.as_str())
+        let url = config
+            .get("url")
+            .and_then(|v| v.as_str())
             .ok_or("Backend config missing 'url' field")?;
 
         let client = Self::build_http_client(config)?;
@@ -305,10 +371,12 @@ impl BackendManager {
             }
         });
 
-        let resp = client.post(url)
+        let resp = client
+            .post(url)
             .json(&body)
             .timeout(std::time::Duration::from_secs(30))
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("Backend request failed: {}", e))?;
 
         let status = resp.status();
@@ -317,7 +385,8 @@ impl BackendManager {
             return Err(format!("Backend returned HTTP {}: {}", status, body));
         }
 
-        let resp_json = Self::read_streamable_response(resp).await
+        let resp_json = Self::read_streamable_response(resp)
+            .await
             .map_err(|e| format!("Failed to parse backend response: {}", e))?;
 
         if let Some(result) = resp_json.get("result") {
@@ -335,7 +404,9 @@ impl BackendManager {
         name: &str,
         config: &serde_json::Value,
     ) -> Result<Vec<DiscoveredTool>, String> {
-        let url = config.get("url").and_then(|v| v.as_str())
+        let url = config
+            .get("url")
+            .and_then(|v| v.as_str())
             .ok_or("Config missing 'url' field")?;
 
         let client = Self::build_http_client(config)?;
@@ -356,10 +427,12 @@ impl BackendManager {
             }
         });
 
-        client.post(&sse.post_url)
+        client
+            .post(&sse.post_url)
             .json(&init_body)
             .timeout(std::time::Duration::from_secs(10))
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("SSE POST initialize failed: {}", e))?;
 
         let init_resp = sse.read_jsonrpc_response().await?;
@@ -370,10 +443,12 @@ impl BackendManager {
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
         });
-        let _ = client.post(&sse.post_url)
+        let _ = client
+            .post(&sse.post_url)
             .json(&notif_body)
             .timeout(std::time::Duration::from_secs(5))
-            .send().await;
+            .send()
+            .await;
 
         // Discover tools
         let tools_body = serde_json::json!({
@@ -383,10 +458,12 @@ impl BackendManager {
             "params": {}
         });
 
-        client.post(&sse.post_url)
+        client
+            .post(&sse.post_url)
             .json(&tools_body)
             .timeout(std::time::Duration::from_secs(10))
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("SSE POST tools/list failed: {}", e))?;
 
         let tools_json = sse.read_jsonrpc_response().await?;
@@ -395,21 +472,37 @@ impl BackendManager {
         let tool_array = result.get("tools").and_then(|t| t.as_array());
 
         let tools: Vec<DiscoveredTool> = match tool_array {
-            Some(arr) => arr.iter().map(|t| {
-                DiscoveredTool {
-                    name: t.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
-                    description: t.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string(),
-                    input_schema: t.get("inputSchema").cloned()
+            Some(arr) => arr
+                .iter()
+                .map(|t| DiscoveredTool {
+                    name: t
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    description: t
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    input_schema: t
+                        .get("inputSchema")
+                        .cloned()
                         .unwrap_or(serde_json::json!({"type": "object", "properties": {}})),
-                }
-            }).filter(|t| !t.name.is_empty()).collect(),
+                })
+                .filter(|t| !t.name.is_empty())
+                .collect(),
             None => {
                 tracing::warn!(backend = name, "SSE tools/list returned no tools array");
                 vec![]
             }
         };
 
-        tracing::info!(backend = name, tool_count = tools.len(), "SSE backend tools discovered");
+        tracing::info!(
+            backend = name,
+            tool_count = tools.len(),
+            "SSE backend tools discovered"
+        );
         Ok(tools)
     }
 
@@ -419,7 +512,9 @@ impl BackendManager {
         tool_name: &str,
         arguments: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let url = config.get("url").and_then(|v| v.as_str())
+        let url = config
+            .get("url")
+            .and_then(|v| v.as_str())
             .ok_or("Backend config missing 'url' field")?;
 
         let client = Self::build_http_client(config)?;
@@ -437,17 +532,21 @@ impl BackendManager {
                 "clientInfo": { "name": "mcp-gateway", "version": "0.1.0" }
             }
         });
-        client.post(&sse.post_url)
+        client
+            .post(&sse.post_url)
             .json(&init_body)
             .timeout(std::time::Duration::from_secs(10))
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("SSE POST initialize failed: {}", e))?;
         let _ = sse.read_jsonrpc_response().await?;
 
-        let _ = client.post(&sse.post_url)
+        let _ = client
+            .post(&sse.post_url)
             .json(&serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
             .timeout(std::time::Duration::from_secs(5))
-            .send().await;
+            .send()
+            .await;
 
         // Send the tool call
         let body = serde_json::json!({
@@ -460,10 +559,12 @@ impl BackendManager {
             }
         });
 
-        client.post(&sse.post_url)
+        client
+            .post(&sse.post_url)
             .json(&body)
             .timeout(std::time::Duration::from_secs(10))
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("SSE POST tools/call failed: {}", e))?;
 
         let resp_json = sse.read_jsonrpc_response().await?;
@@ -581,7 +682,9 @@ impl BackendManager {
         }
         builder = builder.default_headers(header_map);
 
-        builder.build().map_err(|e| format!("Failed to build HTTP client: {}", e))
+        builder
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))
     }
 
     async fn jsonrpc_call(
@@ -601,13 +704,17 @@ impl BackendManager {
             request["params"] = p;
         }
 
-        let mut line = serde_json::to_string(&request)
-            .map_err(|e| format!("Serialize error: {}", e))?;
+        let mut line =
+            serde_json::to_string(&request).map_err(|e| format!("Serialize error: {}", e))?;
         line.push('\n');
 
-        proc.stdin.write_all(line.as_bytes()).await
+        proc.stdin
+            .write_all(line.as_bytes())
+            .await
             .map_err(|e| format!("Write to stdin failed: {}", e))?;
-        proc.stdin.flush().await
+        proc.stdin
+            .flush()
+            .await
             .map_err(|e| format!("Flush stdin failed: {}", e))?;
 
         // Read response lines until we get a JSON-RPC response matching our ID
@@ -620,7 +727,9 @@ impl BackendManager {
                 Ok(Ok(0)) => return Err("Backend process closed stdout (EOF)".into()),
                 Ok(Ok(_)) => {
                     let trimmed = response_line.trim();
-                    if trimmed.is_empty() { continue; }
+                    if trimmed.is_empty() {
+                        continue;
+                    }
 
                     let parsed: serde_json::Value = match serde_json::from_str(trimmed) {
                         Ok(v) => v,
@@ -642,11 +751,17 @@ impl BackendManager {
                     }
 
                     if let Some(error) = parsed.get("error") {
-                        let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+                        let msg = error
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("Unknown error");
                         return Err(format!("JSON-RPC error: {}", msg));
                     }
 
-                    return Ok(parsed.get("result").cloned().unwrap_or(serde_json::json!({})));
+                    return Ok(parsed
+                        .get("result")
+                        .cloned()
+                        .unwrap_or(serde_json::json!({})));
                 }
                 Ok(Err(e)) => return Err(format!("Read from stdout failed: {}", e)),
                 Err(_) => return Err("Timeout waiting for backend response (60s)".into()),
@@ -684,7 +799,11 @@ impl BackendManager {
                 return Ok(format!("{}/{}", origin, relative));
             }
         }
-        Ok(format!("{}/{}", base_url.trim_end_matches('/'), relative.trim_start_matches('/')))
+        Ok(format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            relative.trim_start_matches('/')
+        ))
     }
 
     async fn jsonrpc_notify(
@@ -702,13 +821,17 @@ impl BackendManager {
             request["params"] = p;
         }
 
-        let mut line = serde_json::to_string(&request)
-            .map_err(|e| format!("Serialize error: {}", e))?;
+        let mut line =
+            serde_json::to_string(&request).map_err(|e| format!("Serialize error: {}", e))?;
         line.push('\n');
 
-        proc.stdin.write_all(line.as_bytes()).await
+        proc.stdin
+            .write_all(line.as_bytes())
+            .await
             .map_err(|e| format!("Write notification failed: {}", e))?;
-        proc.stdin.flush().await
+        proc.stdin
+            .flush()
+            .await
             .map_err(|e| format!("Flush notification failed: {}", e))?;
 
         Ok(())
@@ -725,9 +848,11 @@ struct SseConnection {
 
 impl SseConnection {
     async fn connect(client: &reqwest::Client, url: &str) -> Result<Self, String> {
-        let response = client.get(url)
+        let response = client
+            .get(url)
             .header("Accept", "text/event-stream")
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("SSE GET connect failed: {}", e))?;
 
         if !response.status().is_success() {
@@ -818,7 +943,8 @@ impl SseConnection {
             match tokio::time::timeout_at(deadline, self.rx.recv()).await {
                 Ok(Some(json)) => {
                     // Skip notifications (no id field)
-                    if json.get("id").is_none() || json.get("id") == Some(&serde_json::Value::Null) {
+                    if json.get("id").is_none() || json.get("id") == Some(&serde_json::Value::Null)
+                    {
                         continue;
                     }
                     return Ok(json);
@@ -879,7 +1005,10 @@ mod tests {
             "https://tools.vendor.com/sse",
             "https://attacker.evil/collect",
         );
-        assert!(out.is_err(), "cross-origin endpoint must be rejected: {out:?}");
+        assert!(
+            out.is_err(),
+            "cross-origin endpoint must be rejected: {out:?}"
+        );
     }
 
     #[test]
@@ -888,14 +1017,18 @@ mod tests {
             "https://tools.vendor.com/sse",
             "http://tools.vendor.com/messages",
         );
-        assert!(out.is_err(), "https->http downgrade must be rejected: {out:?}");
+        assert!(
+            out.is_err(),
+            "https->http downgrade must be rejected: {out:?}"
+        );
     }
 
     #[test]
     fn sse_body_extracts_jsonrpc_result_frame() {
         // n8n answers a streamable-http POST with a single SSE `message` event
         // carrying the JSON-RPC reply.
-        let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[]}}\n\n";
+        let body =
+            "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[]}}\n\n";
         let out = BackendManager::parse_sse_body(body).expect("should extract frame");
         assert_eq!(out["id"], 2);
         assert!(out.get("result").is_some());
@@ -905,7 +1038,8 @@ mod tests {
     fn sse_body_prefers_result_over_interleaved_notifications() {
         // A progress notification may precede the actual result frame; we must
         // return the frame with `result`, not the first parseable message.
-        let body = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n\
+        let body =
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n\
                     data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n";
         let out = BackendManager::parse_sse_body(body).expect("should extract result frame");
         assert_eq!(out["result"]["ok"], true);

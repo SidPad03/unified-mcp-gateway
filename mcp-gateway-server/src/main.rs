@@ -4,9 +4,9 @@
 #![allow(clippy::type_complexity)]
 
 use axum::{
-    Router,
     extract::DefaultBodyLimit,
     http::{header, HeaderValue, Method},
+    Router,
 };
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
@@ -34,9 +34,12 @@ pub struct AppState {
     pub audit: Option<Arc<audit::AuditRecorder>>,
     pub backend_manager: Arc<backends::BackendManager>,
     pub agent_registry: Arc<agent::AgentRegistry>,
-    pub agent_release_cache: Arc<tokio::sync::Mutex<Option<(std::time::Instant, Vec<api::agent_releases::AgentRelease>)>>>,
+    pub agent_release_cache: Arc<
+        tokio::sync::Mutex<Option<(std::time::Instant, Vec<api::agent_releases::AgentRelease>)>>,
+    >,
     /// Cached GitHub release list for the dashboard update check (30-min TTL).
-    pub update_check_cache: Arc<tokio::sync::Mutex<Option<(std::time::Instant, Vec<api::updates::GithubRelease>)>>>,
+    pub update_check_cache:
+        Arc<tokio::sync::Mutex<Option<(std::time::Instant, Vec<api::updates::GithubRelease>)>>>,
     /// Broadcast channel for live audit events → dashboard WebSocket clients
     pub event_tx: broadcast::Sender<String>,
 }
@@ -45,7 +48,8 @@ pub struct AppState {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "mcp_gateway_server=info,tower_http=debug".into()),
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "mcp_gateway_server=info,tower_http=debug".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -68,8 +72,7 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("JWT_SECRET is too short — use at least 16 characters (32+ recommended).");
     }
 
-    let listen_addr = std::env::var("LISTEN_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:3200".into());
+    let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:3200".into());
 
     tracing::info!("Connecting to database...");
     let pool = PgPoolOptions::new()
@@ -109,14 +112,24 @@ async fn main() -> anyhow::Result<()> {
             "http://localhost:8080".parse::<HeaderValue>().unwrap(),
             "http://localhost:5173".parse::<HeaderValue>().unwrap(),
         ])
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
         .allow_credentials(true);
 
     let app = Router::new()
         .merge(api::mcp::mcp_router())
         .route("/agent/ws", axum::routing::get(agent::agent_ws_handler))
-        .route("/api/v1/ws/live", axum::routing::get(api::live::live_ws_handler))
+        .route(
+            "/api/v1/ws/live",
+            axum::routing::get(api::live::live_ws_handler),
+        )
         .nest("/api/v1", api::router())
         .route("/metrics", axum::routing::get(metrics::prometheus_handler))
         // Cap request bodies at 8 MiB so a single oversized payload can't
@@ -139,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn start_backends(pool: &sqlx::PgPool, manager: &Arc<backends::BackendManager>) {
     let rows: Result<Vec<(uuid::Uuid, String, String, serde_json::Value)>, _> = sqlx::query_as(
-        "SELECT backend_id, name, transport, config FROM backends WHERE is_enabled = TRUE"
+        "SELECT backend_id, name, transport, config FROM backends WHERE is_enabled = TRUE",
     )
     .fetch_all(pool)
     .await;
@@ -155,7 +168,9 @@ async fn start_backends(pool: &sqlx::PgPool, manager: &Arc<backends::BackendMana
     for (backend_id, name, transport, config) in rows {
         let result = match transport.as_str() {
             "stdio" => manager.spawn_backend(backend_id, &name, &config).await,
-            "streamable-http" => backends::BackendManager::discover_http_tools(&name, &config).await,
+            "streamable-http" => {
+                backends::BackendManager::discover_http_tools(&name, &config).await
+            }
             "sse" => backends::BackendManager::discover_sse_tools(&name, &config).await,
             "agent" => {
                 tracing::info!(backend = %name, "Agent backend waiting for remote agent connection");
@@ -229,7 +244,7 @@ pub async fn register_discovered_tools(
     // Remove tools that are no longer provided by this backend
     if !registered_names.is_empty() {
         let result = sqlx::query(
-            "DELETE FROM tool_registry WHERE backend_id = $1 AND original_name != ALL($2)"
+            "DELETE FROM tool_registry WHERE backend_id = $1 AND original_name != ALL($2)",
         )
         .bind(backend_id)
         .bind(&registered_names)

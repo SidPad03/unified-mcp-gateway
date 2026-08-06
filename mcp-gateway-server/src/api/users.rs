@@ -6,9 +6,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{AppError, AppState};
-use super::auth::{Claims, require_admin, hash_password};
 use super::api_keys::generate_app_keys_for_user;
+use super::auth::{hash_password, require_admin, Claims};
+use crate::{AppError, AppState};
 
 #[derive(Serialize)]
 pub struct UserResponse {
@@ -109,7 +109,7 @@ async fn create_user(
 
     sqlx::query(
         "INSERT INTO users (user_id, username, password_hash, email, is_active)
-         VALUES ($1, $2, $3, $4, TRUE)"
+         VALUES ($1, $2, $3, $4, TRUE)",
     )
     .bind(user_id)
     .bind(&req.username)
@@ -135,7 +135,11 @@ async fn create_user(
 
     // Auto-generate per-app API keys
     if let Err(e) = generate_app_keys_for_user(&state.db, user_id).await {
-        tracing::warn!("Failed to auto-generate app keys for user {}: {}", user_id, e);
+        tracing::warn!(
+            "Failed to auto-generate app keys for user {}: {}",
+            user_id,
+            e
+        );
     }
 
     Ok(Json(UserResponse {
@@ -156,8 +160,11 @@ async fn update_user(
     Json(req): Json<UpdateUserRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let is_self = claims.sub == id.to_string();
-    let self_password_only = is_self && req.password.is_some()
-        && req.email.is_none() && req.is_active.is_none() && req.role.is_none();
+    let self_password_only = is_self
+        && req.password.is_some()
+        && req.email.is_none()
+        && req.is_active.is_none()
+        && req.role.is_none();
     if !self_password_only {
         require_admin(&claims)?;
     }
@@ -169,7 +176,7 @@ async fn update_user(
     if would_remove_owner {
         let target_is_owner: bool = sqlx::query_as::<_, (i64,)>(
             "SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
-             WHERE ur.user_id = $1 AND r.name = 'owner'"
+             WHERE ur.user_id = $1 AND r.name = 'owner'",
         )
         .bind(id)
         .fetch_one(&state.db)
@@ -183,7 +190,7 @@ async fn update_user(
                 "SELECT COUNT(DISTINCT ur.user_id) FROM user_roles ur
                  JOIN roles r ON r.role_id = ur.role_id
                  JOIN users u ON u.user_id = ur.user_id
-                 WHERE r.name = 'owner' AND u.is_active = TRUE"
+                 WHERE r.name = 'owner' AND u.is_active = TRUE",
             )
             .fetch_one(&state.db)
             .await?;
@@ -198,41 +205,54 @@ async fn update_user(
 
     if let Some(email) = &req.email {
         sqlx::query("UPDATE users SET email = $1 WHERE user_id = $2")
-            .bind(email).bind(id).execute(&state.db).await?;
+            .bind(email)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
 
     if let Some(is_active) = req.is_active {
         sqlx::query("UPDATE users SET is_active = $1 WHERE user_id = $2")
-            .bind(is_active).bind(id).execute(&state.db).await?;
+            .bind(is_active)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
 
     if let Some(password) = &req.password {
         let password_hash = hash_password(password)?;
         // Setting a password clears the first-login "must change password" flag.
-        sqlx::query("UPDATE users SET password_hash = $1, must_change_password = FALSE WHERE user_id = $2")
-            .bind(&password_hash).bind(id).execute(&state.db).await?;
+        sqlx::query(
+            "UPDATE users SET password_hash = $1, must_change_password = FALSE WHERE user_id = $2",
+        )
+        .bind(&password_hash)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     }
 
     if let Some(role_name) = &req.role {
         // Resolve the target role first so an invalid name can't leave the
         // user with no role at all.
-        let role: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT role_id FROM roles WHERE name = $1"
-        )
-        .bind(role_name)
-        .fetch_optional(&state.db)
-        .await?;
+        let role: Option<(Uuid,)> = sqlx::query_as("SELECT role_id FROM roles WHERE name = $1")
+            .bind(role_name)
+            .fetch_optional(&state.db)
+            .await?;
 
-        let (role_id,) = role.ok_or_else(|| {
-            AppError::BadRequest(format!("Unknown role '{}'", role_name))
-        })?;
+        let (role_id,) =
+            role.ok_or_else(|| AppError::BadRequest(format!("Unknown role '{}'", role_name)))?;
 
         // Swap roles atomically.
         let mut tx = state.db.begin().await?;
         sqlx::query("DELETE FROM user_roles WHERE user_id = $1")
-            .bind(id).execute(&mut *tx).await?;
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)")
-            .bind(id).bind(role_id).execute(&mut *tx).await?;
+            .bind(id)
+            .bind(role_id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
     }
 
@@ -246,18 +266,20 @@ async fn delete_user(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&claims)?;
 
-    let caller_id: Uuid = claims.sub.parse()
+    let caller_id: Uuid = claims
+        .sub
+        .parse()
         .map_err(|_| AppError::Internal("Invalid caller ID".into()))?;
     if caller_id == id {
-        return Err(AppError::BadRequest("Cannot delete your own account".into()));
+        return Err(AppError::BadRequest(
+            "Cannot delete your own account".into(),
+        ));
     }
 
-    let target: Option<(String,)> = sqlx::query_as(
-        "SELECT username FROM users WHERE user_id = $1"
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?;
+    let target: Option<(String,)> = sqlx::query_as("SELECT username FROM users WHERE user_id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?;
 
     if target.is_none() {
         return Err(AppError::NotFound("User not found".into()));
@@ -273,7 +295,7 @@ async fn delete_user(
          JOIN user_roles ur ON ur.user_id = u.user_id
          JOIN roles r ON r.role_id = ur.role_id
          WHERE r.name = 'owner' AND u.is_active = TRUE
-         FOR UPDATE OF u"
+         FOR UPDATE OF u",
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -281,7 +303,9 @@ async fn delete_user(
     let target_is_last_active_owner =
         active_owners.iter().any(|(uid,)| *uid == id) && active_owners.len() <= 1;
     if target_is_last_active_owner {
-        return Err(AppError::BadRequest("Cannot delete the last active owner user".into()));
+        return Err(AppError::BadRequest(
+            "Cannot delete the last active owner user".into(),
+        ));
     }
 
     // CASCADE handles user_roles and api_keys; policies.created_by is SET NULL

@@ -1,12 +1,8 @@
-use axum::{
-    extract::State,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 
-use crate::{AppError, AppState};
 use super::auth::Claims;
+use crate::{AppError, AppState};
 
 #[derive(Serialize)]
 pub struct MetricsSummary {
@@ -62,8 +58,7 @@ pub struct HourlyVolume {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/metrics/summary", get(metrics_summary))
+    Router::new().route("/metrics/summary", get(metrics_summary))
 }
 
 async fn metrics_summary(
@@ -71,32 +66,42 @@ async fn metrics_summary(
     _claims: Claims,
 ) -> Result<Json<MetricsSummary>, AppError> {
     let (total_tool_calls,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_events")
-        .fetch_one(&state.db).await?;
+        .fetch_one(&state.db)
+        .await?;
 
     let (calls_last_24h,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours'"
-    ).fetch_one(&state.db).await?;
+        "SELECT COUNT(*) FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours'",
+    )
+    .fetch_one(&state.db)
+    .await?;
 
     let (active_backends,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM backends WHERE is_enabled = TRUE AND health_status = 'healthy'"
-    ).fetch_one(&state.db).await?;
+        "SELECT COUNT(*) FROM backends WHERE is_enabled = TRUE AND health_status = 'healthy'",
+    )
+    .fetch_one(&state.db)
+    .await?;
 
     let (total_backends,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM backends")
-        .fetch_one(&state.db).await?;
+        .fetch_one(&state.db)
+        .await?;
 
     let (total_tools,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tool_registry")
-        .fetch_one(&state.db).await?;
+        .fetch_one(&state.db)
+        .await?;
 
-    let (enabled_tools,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM tool_registry WHERE is_enabled = TRUE"
-    ).fetch_one(&state.db).await?;
+    let (enabled_tools,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM tool_registry WHERE is_enabled = TRUE")
+            .fetch_one(&state.db)
+            .await?;
 
     let (total_users,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
-        .fetch_one(&state.db).await?;
+        .fetch_one(&state.db)
+        .await?;
 
-    let (active_policies,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM policies WHERE is_active = TRUE"
-    ).fetch_one(&state.db).await?;
+    let (active_policies,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM policies WHERE is_active = TRUE")
+            .fetch_one(&state.db)
+            .await?;
 
     let avg_lat: Option<(Option<f64>,)> = sqlx::query_as(
         "SELECT AVG(duration_ms) FROM audit_events WHERE duration_ms IS NOT NULL AND timestamp > NOW() - INTERVAL '24 hours'"
@@ -129,14 +134,20 @@ async fn metrics_summary(
          FROM audit_events a
          LEFT JOIN tool_registry t ON t.tool_name = a.tool_name
          WHERE a.timestamp > NOW() - INTERVAL '24 hours'
-         GROUP BY risk"
-    ).fetch_all(&state.db).await.unwrap_or_default();
+         GROUP BY risk",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
 
     let hourly_volume: Vec<(chrono::DateTime<chrono::Utc>, i64)> = sqlx::query_as(
         "SELECT date_trunc('hour', timestamp) AS hour, COUNT(*) AS cnt \
          FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours' \
-         GROUP BY hour ORDER BY hour"
-    ).fetch_all(&state.db).await.unwrap_or_default();
+         GROUP BY hour ORDER BY hour",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
 
     // Approximate percentiles
     let percentiles = compute_percentiles(&state.db).await;
@@ -152,24 +163,38 @@ async fn metrics_summary(
         active_policies,
         avg_latency_ms: avg_lat.and_then(|(v,)| v).unwrap_or(0.0),
         error_rate,
-        top_tools_24h: top_tools.into_iter().map(|(tool_name, call_count, avg, errors)| ToolMetric {
-            tool_name,
-            call_count,
-            avg_duration_ms: avg.unwrap_or(0.0),
-            error_count: errors,
-        }).collect(),
-        backend_health: backend_health.into_iter().map(|(name, status, tool_count)| BackendHealth {
-            name, status, tool_count,
-        }).collect(),
+        top_tools_24h: top_tools
+            .into_iter()
+            .map(|(tool_name, call_count, avg, errors)| ToolMetric {
+                tool_name,
+                call_count,
+                avg_duration_ms: avg.unwrap_or(0.0),
+                error_count: errors,
+            })
+            .collect(),
+        backend_health: backend_health
+            .into_iter()
+            .map(|(name, status, tool_count)| BackendHealth {
+                name,
+                status,
+                tool_count,
+            })
+            .collect(),
         latency_percentiles: percentiles,
-        calls_by_risk: calls_by_risk.into_iter().map(|(risk_category, count)| RiskMetric {
-            risk_category: risk_category.unwrap_or_else(|| "unknown".into()),
-            count,
-        }).collect(),
-        hourly_volume: hourly_volume.into_iter().map(|(hour, count)| HourlyVolume {
-            hour: hour.format("%H:%M").to_string(),
-            count,
-        }).collect(),
+        calls_by_risk: calls_by_risk
+            .into_iter()
+            .map(|(risk_category, count)| RiskMetric {
+                risk_category: risk_category.unwrap_or_else(|| "unknown".into()),
+                count,
+            })
+            .collect(),
+        hourly_volume: hourly_volume
+            .into_iter()
+            .map(|(hour, count)| HourlyVolume {
+                hour: hour.format("%H:%M").to_string(),
+                count,
+            })
+            .collect(),
     }))
 }
 

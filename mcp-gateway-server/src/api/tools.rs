@@ -6,8 +6,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{AppError, AppState};
 use super::auth::Claims;
+use crate::{AppError, AppState};
 
 #[derive(Serialize)]
 pub struct ToolResponse {
@@ -88,24 +88,49 @@ async fn list_tools(
 
     qb.push(" ORDER BY t.tool_name");
 
-    let tools: Vec<(Uuid, String, String, String, Option<String>, Option<serde_json::Value>, Option<String>, bool, chrono::DateTime<chrono::Utc>, i64)> = qb.build_query_as()
-        .fetch_all(&state.db)
-        .await?;
+    let tools: Vec<(
+        Uuid,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<serde_json::Value>,
+        Option<String>,
+        bool,
+        chrono::DateTime<chrono::Utc>,
+        i64,
+    )> = qb.build_query_as().fetch_all(&state.db).await?;
 
-    let result: Vec<ToolResponse> = tools.into_iter().map(|(tool_id, tool_name, backend_name, original_name, description, input_schema, risk_category, is_enabled, last_seen, call_count)| {
-        ToolResponse {
-            tool_id: tool_id.to_string(),
-            tool_name,
-            backend_name,
-            original_name,
-            description,
-            input_schema,
-            risk_category,
-            is_enabled,
-            last_seen: last_seen.to_rfc3339(),
-            call_count_24h: call_count,
-        }
-    }).collect();
+    let result: Vec<ToolResponse> = tools
+        .into_iter()
+        .map(
+            |(
+                tool_id,
+                tool_name,
+                backend_name,
+                original_name,
+                description,
+                input_schema,
+                risk_category,
+                is_enabled,
+                last_seen,
+                call_count,
+            )| {
+                ToolResponse {
+                    tool_id: tool_id.to_string(),
+                    tool_name,
+                    backend_name,
+                    original_name,
+                    description,
+                    input_schema,
+                    risk_category,
+                    is_enabled,
+                    last_seen: last_seen.to_rfc3339(),
+                    call_count_24h: call_count,
+                }
+            },
+        )
+        .collect();
 
     Ok(Json(result))
 }
@@ -120,22 +145,34 @@ async fn update_tool(
 
     if let Some(is_enabled) = req.is_enabled {
         sqlx::query("UPDATE tool_registry SET is_enabled = $1 WHERE tool_id = $2")
-            .bind(is_enabled).bind(id).execute(&state.db).await?;
+            .bind(is_enabled)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
     if let Some(description) = &req.description {
         sqlx::query("UPDATE tool_registry SET description = $1 WHERE tool_id = $2")
-            .bind(description).bind(id).execute(&state.db).await?;
+            .bind(description)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
     if let Some(risk_category) = &req.risk_category {
         sqlx::query("UPDATE tool_registry SET risk_category = $1 WHERE tool_id = $2")
-            .bind(risk_category).bind(id).execute(&state.db).await?;
+            .bind(risk_category)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
 
         // Propagate the new risk category to all historical audit events for this tool
         sqlx::query(
             "UPDATE audit_events SET risk_category = $1
-             WHERE tool_name = (SELECT tool_name FROM tool_registry WHERE tool_id = $2)"
+             WHERE tool_name = (SELECT tool_name FROM tool_registry WHERE tool_id = $2)",
         )
-            .bind(risk_category).bind(id).execute(&state.db).await?;
+        .bind(risk_category)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     }
 
     Ok(Json(serde_json::json!({ "status": "updated" })))

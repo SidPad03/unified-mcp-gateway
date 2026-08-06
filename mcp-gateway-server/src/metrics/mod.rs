@@ -9,9 +9,7 @@ use prometheus::{Encoder, TextEncoder};
 
 use crate::AppState;
 
-pub async fn prometheus_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn prometheus_handler(State(state): State<AppState>) -> impl IntoResponse {
     let encoder = TextEncoder::new();
     let metric_families = state.metrics.registry.gather();
     let mut buffer = Vec::new();
@@ -23,7 +21,10 @@ pub async fn prometheus_handler(
     }
     match String::from_utf8(buffer) {
         Ok(body) => (
-            [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
             body,
         )
             .into_response(),

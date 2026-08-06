@@ -188,7 +188,8 @@ async fn latest_gateway_release(
         let code = resp.status();
         // Surface the rate limit specifically — it is the most likely failure
         // and the remedy (set GITHUB_TOKEN, or wait) is different from the rest.
-        if code == reqwest::StatusCode::FORBIDDEN || code == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        if code == reqwest::StatusCode::FORBIDDEN || code == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
             return Err(
                 "GitHub rate limit reached. Set GITHUB_TOKEN on the server to raise it.".into(),
             );
@@ -285,7 +286,11 @@ mod tests {
     #[test]
     fn picks_highest_semver_not_newest_by_position() {
         // A backported patch published after a bigger release must not win.
-        let releases = vec![rel("gateway-v1.1.9"), rel("gateway-v1.2.0"), rel("gateway-v1.1.10")];
+        let releases = vec![
+            rel("gateway-v1.1.9"),
+            rel("gateway-v1.2.0"),
+            rel("gateway-v1.1.10"),
+        ];
         assert_eq!(pick_latest(&releases).unwrap().tag_name, "gateway-v1.2.0");
     }
 
