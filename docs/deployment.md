@@ -7,17 +7,22 @@ a compose file plus a `.env`.
 
 ## Images
 
-Every build publishes the same multi-arch manifest (`linux/amd64` +
-`linux/arm64`) to both registries:
+Every build publishes a multi-arch manifest (`linux/amd64` + `linux/arm64`) to
+Docker Hub:
 
-| Component | Docker Hub (default) | GHCR mirror |
-|-----------|---------------------|-------------|
-| Server | `sidpad03/mcp-gateway-server` | `ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-server` |
-| Dashboard | `sidpad03/mcp-gateway-dashboard` | `ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-dashboard` |
-| Agent | `sidpad03/mcp-gateway-agent` | `ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-agent` |
+| Component | Image |
+|-----------|-------|
+| Server | [`sidpad03/mcp-gateway-server`](https://hub.docker.com/r/sidpad03/mcp-gateway-server) |
+| Dashboard | [`sidpad03/mcp-gateway-dashboard`](https://hub.docker.com/r/sidpad03/mcp-gateway-dashboard) |
+| Agent | [`sidpad03/mcp-gateway-agent`](https://hub.docker.com/r/sidpad03/mcp-gateway-agent) |
 
-Tags: `:latest`, `:v<version>` (e.g. `:v1.1.3`), and `:<git-sha>`. Pin to a
-version tag for reproducible deploys.
+Tags are `:latest` and `:v<version>` (e.g. `:v1.1.6`). Pin to a version tag for
+reproducible deploys.
+
+> **Retention.** CI prunes Docker Hub after each publish, keeping `latest` and
+> the **five most recent** version tags per image. Pin only to a version still
+> within that window, or mirror the image into your own registry if you need to
+> hold a release longer.
 
 ---
 
@@ -170,7 +175,78 @@ token; losing the database loses users, backends, policies, and the audit trail.
 
 ---
 
+## Moving a deployment (configuration transfer)
+
+A `pg_dump` moves the rows, but it does **not** move working API keys: each
+stored key is encrypted under `SHA-256(JWT_SECRET)`, so on a host with a
+different secret the dashboard can no longer reveal them. Use the built-in
+transfer instead — it handles that re-encryption.
+
+**Settings → Configuration transfer** (owner-only).
+
+### Export
+
+1. Choose an encryption passphrase (12 characters minimum).
+2. Decide whether to include audit history — it is usually most of the bundle.
+3. Download the `.mcpgw.json` file.
+
+The bundle is gzipped JSON sealed with ChaCha20-Poly1305 under an Argon2id key
+derived from your passphrase. It contains everything: users and password hashes,
+roles, policies, backends and their configs (including any bearer tokens), tools,
+API keys, and optionally the audit log.
+
+> **There is no recovery for a lost passphrase.** The server never stores it.
+> Keep it with the file — and treat the file itself as a credential, because it
+> is one.
+
+### Import
+
+1. On the **target** deployment, open **Settings → Configuration transfer**.
+2. Select the bundle, enter its passphrase, and type `REPLACE` to confirm.
+
+Import **replaces everything**. Every user, key, backend, policy, tool, and audit
+event already on the target is deleted first, so the result matches the bundle
+exactly rather than merging into whatever was there. It runs in a single
+transaction — if any row fails, nothing changes.
+
+Afterwards, sign out and back in: your session belonged to the data that was
+just replaced.
+
+### What survives
+
+| | Result |
+|---|---|
+| Users, roles, policies, backends, tools | Restored exactly, same UUIDs |
+| Audit history | Restored if the bundle included it |
+| API keys | Keep working **and** stay revealable — re-encrypted under the target's `JWT_SECRET` on import |
+| Keys created before at-rest encryption existed | Still authenticate, but cannot be revealed again |
+
+The source and target do **not** need the same `JWT_SECRET`. Existing dashboard
+sessions on the target are invalidated, since the user rows behind them changed.
+
+---
+
 ## Upgrading
+
+The dashboard tells you when a release is available: **Settings → About →
+Check for updates**. It compares the running build against the newest
+`gateway-v*` GitHub release.
+
+The check runs only when you click it, and goes through the server rather than
+the browser — the dashboard's CSP blocks direct calls to `api.github.com`, and
+proxying means one cached lookup serves every operator instead of each browser
+spending from GitHub's unauthenticated rate limit.
+
+| Variable | Effect |
+|----------|--------|
+| `UPDATE_CHECK_REPO` | Check a different repo (default `SidPad03/unified-mcp-gateway`) |
+| `UPDATE_CHECK_DISABLED` | Set to anything to disable the check — for air-gapped deployments |
+| `GITHUB_TOKEN` | Optional; raises GitHub's rate limit for the check |
+
+If the check cannot reach GitHub it says so explicitly rather than reporting
+"up to date", so a stale deployment is never mistaken for a current one.
+
+To upgrade:
 
 1. Read [CHANGELOG.md](../CHANGELOG.md) for the target version.
 2. Back up the database.

@@ -7,22 +7,100 @@ on:
     branches: [main]
 
 env:
-  # Per-arch images are staged in GHCR by digest, then the multi-arch manifest is
-  # published to BOTH registries. Docker Hub is the registry the docs point at;
-  # GHCR stays published so existing `ghcr.io/...` pulls keep working.
-  #
-  # Docker Hub publishing needs two repository secrets:
-  #   DOCKERHUB_USERNAME — Docker Hub account name
-  #   DOCKERHUB_TOKEN    — a Docker Hub access token with Read/Write scope
-  # If they are absent (e.g. on a fork), the Docker Hub steps skip and the GHCR
-  # publish still succeeds.
-  REGISTRY: ghcr.io
+  # Images are published to Docker Hub only. Publishing needs two repository
+  # secrets: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (an access token with
+  # Read/Write/Delete — Delete is required by the `prune` job).
   DOCKERHUB_NAMESPACE: sidpad03
+  # Tags kept per image, newest first, in addition to `latest`.
+  KEEP_VERSIONS: 5
+
+# A newer push to the same branch makes an in-flight run redundant. Never cancel
+# on main: those runs publish images and cut releases.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # Compute the release version once and share it with every downstream job so
-  # the images, the manifest tags, and the GitHub release can never drift.
+  # ── Gate ──────────────────────────────────────────────────────────────
+  # Everything below depends on this, so a red test never publishes an image.
+  # Runs on pull requests too, which is the point of requiring it for merge.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mcpgateway
+          POSTGRES_PASSWORD: mcpgateway
+          POSTGRES_DB: mcpgateway
+        options: >-
+          --health-cmd "pg_isready -U mcpgateway"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      # Enables the config-transfer round-trip tests, which need real Postgres
+      # (`row_to_json` / `jsonb_populate_record` have no in-process equivalent).
+      # Without this they skip, and the import bug they caught would ship.
+      TEST_DATABASE_URL: postgresql://mcpgateway:mcpgateway@localhost:5432/mcpgateway
+      # The API-key cipher derives its key from this. Test-only value.
+      JWT_SECRET: ci-test-secret-not-used-in-production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup component add rustfmt clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mcp-gateway-server -> target
+                      mcp-gateway-agent -> target
+
+      - name: Check formatting
+        run: |
+          cargo fmt --manifest-path mcp-gateway-server/Cargo.toml --check
+          cargo fmt --manifest-path mcp-gateway-agent/Cargo.toml --check
+
+      - name: Clippy (warnings are errors)
+        run: |
+          cargo clippy --manifest-path mcp-gateway-server/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path mcp-gateway-agent/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: |
+          cargo test --manifest-path mcp-gateway-server/Cargo.toml
+          cargo test --manifest-path mcp-gateway-agent/Cargo.toml
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mcp-gateway-dashboard/package-lock.json
+
+      - name: Dashboard install
+        working-directory: mcp-gateway-dashboard
+        run: npm ci
+
+      - name: Dashboard typecheck
+        working-directory: mcp-gateway-dashboard
+        run: npx tsc --noEmit
+
+      - name: Dashboard build
+        working-directory: mcp-gateway-dashboard
+        run: npm run build
+
+  # ── Version ───────────────────────────────────────────────────────────
+  # Computed once and shared, so images, manifest tags, and the GitHub release
+  # can never drift from each other.
   version:
+    needs: test
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -55,11 +133,12 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Gateway version: ${VERSION}"
 
-  # Build each image for one architecture on its *native* runner (no QEMU) and
-  # push it to GHCR by digest only (no tag yet). The `merge` job stitches the
-  # per-arch digests into a single multi-arch manifest.
+  # ── Build ─────────────────────────────────────────────────────────────
+  # Each image is built for one architecture on its *native* runner (no QEMU)
+  # and pushed by digest only. `merge` stitches the digests into one manifest.
   build:
-    needs: version
+    needs: [test, version]
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -78,24 +157,21 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     permissions:
       contents: read
-      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set image name
-        run: echo "IMAGE=${REGISTRY}/${GITHUB_REPOSITORY,,}/${{ matrix.component.name }}" >> "$GITHUB_ENV"
+        run: echo "IMAGE=docker.io/${DOCKERHUB_NAMESPACE}/${{ matrix.component.name }}" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        if: github.event_name == 'push'
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push by digest
         id: build
@@ -107,17 +183,15 @@ jobs:
             APP_VERSION=${{ needs.version.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.component.name }}-${{ matrix.platform.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}-${{ matrix.platform.arch }}
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ github.event_name == 'push' }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
-        if: github.event_name == 'push'
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: digests-${{ matrix.component.name }}-${{ matrix.platform.arch }}
@@ -125,24 +199,15 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Combine the per-arch digests of each component into one multi-arch manifest
-  # and publish the human-facing tags (:latest, :v<version>, :<sha>).
+  # ── Merge ─────────────────────────────────────────────────────────────
   merge:
     needs: [version, build]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
         component: [mcp-gateway-server, mcp-gateway-dashboard, mcp-gateway-agent]
-    env:
-      # The `secrets` context is not available in a step-level `if:`, so resolve
-      # "do we have Docker Hub credentials?" once here — job-level `env` may read
-      # secrets — and gate the steps below on `env.HAS_DOCKERHUB` instead.
-      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
@@ -154,56 +219,98 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Log in to Docker Hub
-        if: env.HAS_DOCKERHUB == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Set image names
-        run: |
-          echo "IMAGE=${REGISTRY}/${GITHUB_REPOSITORY,,}/${{ matrix.component }}" >> "$GITHUB_ENV"
-          echo "HUB_IMAGE=docker.io/${DOCKERHUB_NAMESPACE}/${{ matrix.component }}" >> "$GITHUB_ENV"
+      - name: Set image name
+        run: echo "IMAGE=docker.io/${DOCKERHUB_NAMESPACE}/${{ matrix.component }}" >> "$GITHUB_ENV"
 
-      - name: Create and push multi-arch manifest (GHCR)
+      # Only `latest` and the version tag are published. A per-commit SHA tag
+      # would be pruned on the next run anyway, and the version tag already maps
+      # to a GitHub release, which maps to a commit.
+      - name: Create and push multi-arch manifest
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create \
             -t "${IMAGE}:latest" \
             -t "${IMAGE}:v${{ needs.version.outputs.version }}" \
-            -t "${IMAGE}:${GITHUB_SHA}" \
-            $(printf "${IMAGE}@sha256:%s " *)
-
-      # Same per-arch digests, re-published under the Docker Hub name. imagetools
-      # copies the blobs across registries, so both registries serve an identical
-      # multi-arch manifest for this build.
-      - name: Create and push multi-arch manifest (Docker Hub)
-        if: env.HAS_DOCKERHUB == 'true'
-        working-directory: /tmp/digests
-        run: |
-          docker buildx imagetools create \
-            -t "${HUB_IMAGE}:latest" \
-            -t "${HUB_IMAGE}:v${{ needs.version.outputs.version }}" \
-            -t "${HUB_IMAGE}:${GITHUB_SHA}" \
             $(printf "${IMAGE}@sha256:%s " *)
 
       - name: Inspect manifest
         run: docker buildx imagetools inspect "${IMAGE}:v${{ needs.version.outputs.version }}"
 
-      - name: Warn if Docker Hub publishing was skipped
-        if: env.HAS_DOCKERHUB != 'true'
+  # ── Prune ─────────────────────────────────────────────────────────────
+  # Keeps storage bounded: `latest` plus the newest KEEP_VERSIONS version tags
+  # per image. Everything else — older releases, and any historical SHA tags
+  # from before this policy — is deleted from Docker Hub.
+  prune:
+    needs: [merge]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [mcp-gateway-server, mcp-gateway-dashboard, mcp-gateway-agent]
+    steps:
+      - name: Prune old tags
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          COMPONENT: ${{ matrix.component }}
         run: |
-          echo "::warning::DOCKERHUB_TOKEN is not set — published to GHCR only. \
-          Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN to publish ${HUB_IMAGE}."
+          set -euo pipefail
+          REPO="${DOCKERHUB_NAMESPACE}/${COMPONENT}"
 
+          # The Hub API uses its own JWT, not the registry credential flow.
+          TOKEN=$(curl -sS -f -H 'Content-Type: application/json' \
+            -d "$(jq -nc --arg u "$DOCKERHUB_USERNAME" --arg p "$DOCKERHUB_TOKEN" \
+                  '{username:$u,password:$p}')" \
+            https://hub.docker.com/v2/users/login/ | jq -r .token)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::Could not authenticate to the Docker Hub API"
+            exit 1
+          fi
+
+          # Collect every tag, following pagination.
+          tags=""
+          url="https://hub.docker.com/v2/repositories/${REPO}/tags?page_size=100"
+          while [ -n "$url" ] && [ "$url" != "null" ]; do
+            page=$(curl -sS -f -H "Authorization: JWT ${TOKEN}" "$url")
+            tags="${tags}"$'\n'"$(echo "$page" | jq -r '.results[].name')"
+            url=$(echo "$page" | jq -r '.next')
+          done
+          tags=$(echo "$tags" | sed '/^$/d' | sort -u)
+
+          # Newest KEEP_VERSIONS semver tags. `sort -V` so v1.1.10 beats v1.1.9,
+          # which a lexical sort gets backwards.
+          keep=$(echo "$tags" \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sed 's/^v//' | sort -V -r | head -n "${KEEP_VERSIONS}" | sed 's/^/v/' || true)
+
+          echo "Keeping: latest $(echo $keep | tr '\n' ' ')"
+
+          failed=0
+          for tag in $tags; do
+            [ "$tag" = "latest" ] && continue
+            if echo "$keep" | grep -qx "$tag"; then continue; fi
+            echo "Deleting ${REPO}:${tag}"
+            if ! curl -sS -f -X DELETE -H "Authorization: JWT ${TOKEN}" \
+                 "https://hub.docker.com/v2/repositories/${REPO}/tags/${tag}/"; then
+              echo "::warning::Failed to delete ${REPO}:${tag}"
+              failed=$((failed + 1))
+            fi
+          done
+
+          # Individual deletes may race with a concurrent push; auth problems are
+          # what matter and those already failed above.
+          if [ "$failed" -gt 0 ]; then
+            echo "::warning::${failed} tag(s) could not be deleted; they will be retried next run"
+          fi
+
+  # ── Release ───────────────────────────────────────────────────────────
   release-gateway:
     runs-on: ubuntu-latest
     needs: [version, merge]

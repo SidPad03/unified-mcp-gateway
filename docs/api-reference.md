@@ -252,6 +252,61 @@ only their own activity.
 
 ---
 
+## Configuration transfer
+
+Owner-only. See [Deployment](deployment.md#moving-a-deployment-configuration-transfer).
+
+### `POST /api/v1/config/export` — **owner**
+
+```json
+{ "passphrase": "at-least-12-chars", "include_audit": true }
+```
+
+Returns the encrypted bundle. `include_audit` defaults to `true`.
+
+### `POST /api/v1/config/import` — **owner**
+
+```json
+{ "passphrase": "at-least-12-chars", "bundle": { } }
+```
+
+Replaces every table's contents with the bundle, in one transaction, and returns
+per-table row counts. A wrong passphrase and a tampered file are both rejected as
+"could not decrypt" — the AEAD cannot distinguish them.
+
+These two routes carry a 512 MiB request-body limit rather than the 8 MiB that
+applies everywhere else, because a bundle contains a whole deployment.
+
+---
+
+## Updates
+
+### `GET /api/v1/updates/check`
+
+| Param | Description |
+|-------|-------------|
+| `current` | The version the caller is running, e.g. `1.1.6` |
+| `force` | Skip the server's 30-minute cache |
+
+```json
+{
+  "current_version": "1.1.5",
+  "latest_version": "1.1.6",
+  "update_available": true,
+  "release_url": "https://github.com/SidPad03/unified-mcp-gateway/releases/tag/gateway-v1.1.6",
+  "checked_at": "2026-08-06T10:00:00Z",
+  "source_repo": "SidPad03/unified-mcp-gateway",
+  "error": null
+}
+```
+
+Always returns 200. When the upstream check fails, `error` is set and
+`update_available` is `false` — the caller must treat those as distinct from
+being up to date. Configured by `UPDATE_CHECK_REPO`, `UPDATE_CHECK_DISABLED`, and
+`GITHUB_TOKEN`.
+
+---
+
 ## Agent releases
 
 Used by the agent's self-update mechanism. The gateway proxies a git forge's
