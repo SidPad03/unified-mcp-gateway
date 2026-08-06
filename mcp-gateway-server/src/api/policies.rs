@@ -125,9 +125,10 @@ async fn create_policy(
     // Assign the next priority as MAX+1 computed inside the INSERT, and retry on
     // the unique-priority constraint so two concurrent creates can't both grab
     // the same value and surface a raw Postgres 500 (TOCTOU on the unique index).
-    let mut priority = 0i32;
     let mut attempts = 0;
-    loop {
+    // The loop yields the priority the INSERT actually assigned; there is no
+    // meaningful value to seed it with, and a placeholder would just be dead.
+    let priority = loop {
         attempts += 1;
         let res = sqlx::query_as::<_, (i32,)>(
             "INSERT INTO policies (policy_id, name, priority, conditions, decision, reason, is_active, created_by, created_at, updated_at, tool_pattern, risk_categories, application_match)
@@ -147,14 +148,11 @@ async fn create_policy(
         .await;
 
         match res {
-            Ok((p,)) => {
-                priority = p;
-                break;
-            }
+            Ok((p,)) => break p,
             Err(e) if e.to_string().contains("priority") && attempts < 5 => continue,
             Err(e) => return Err(e.into()),
         }
-    }
+    };
 
     // Bind roles
     let mut role_ids = Vec::new();
