@@ -347,8 +347,11 @@ async fn audit_stats(
         "SELECT COUNT(*) FROM audit_events WHERE status = 'success'"
     ).fetch_one(&state.db).await?;
 
+    // `tool_error` counts as an error. A tool that returned isError=true failed,
+    // and leaving it out made the error total read as zero while the timeline
+    // showed failures.
     let (error_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_events WHERE status = 'error'"
+        "SELECT COUNT(*) FROM audit_events WHERE status IN ('error', 'tool_error')"
     ).fetch_one(&state.db).await?;
 
     let (denied_count,): (i64,) = sqlx::query_as(

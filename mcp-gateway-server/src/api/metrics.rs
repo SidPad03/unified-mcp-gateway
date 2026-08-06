@@ -102,8 +102,10 @@ async fn metrics_summary(
         "SELECT AVG(duration_ms) FROM audit_events WHERE duration_ms IS NOT NULL AND timestamp > NOW() - INTERVAL '24 hours'"
     ).fetch_optional(&state.db).await?;
 
+    // Include `tool_error` — a tool that returned isError=true is a failed call.
+    // Counting only 'error' reported a 0% error rate while tools were failing.
     let (error_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_events WHERE status = 'error' AND timestamp > NOW() - INTERVAL '24 hours'"
+        "SELECT COUNT(*) FROM audit_events WHERE status IN ('error', 'tool_error') AND timestamp > NOW() - INTERVAL '24 hours'"
     ).fetch_one(&state.db).await?;
 
     let error_rate = if calls_last_24h > 0 {
@@ -113,7 +115,7 @@ async fn metrics_summary(
     };
 
     let top_tools: Vec<(String, i64, Option<f64>, i64)> = sqlx::query_as(
-        "SELECT tool_name, COUNT(*) as cnt, AVG(duration_ms), SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END)
+        "SELECT tool_name, COUNT(*) as cnt, AVG(duration_ms), SUM(CASE WHEN status IN ('error', 'tool_error') THEN 1 ELSE 0 END)
          FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours'
          GROUP BY tool_name ORDER BY cnt DESC LIMIT 10"
     ).fetch_all(&state.db).await.unwrap_or_default();

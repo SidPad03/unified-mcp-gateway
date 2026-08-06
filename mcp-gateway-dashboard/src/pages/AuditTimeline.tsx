@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api, AuditEvent, User } from '@/lib/api';
-import { Search, Download, ChevronLeft, ChevronRight, Clock, CheckCircle, XCircle, ShieldOff, X, Filter, Trash2 } from 'lucide-react';
+import { Search, Download, ChevronLeft, ChevronRight, Clock, CheckCircle, XCircle, ShieldOff, HelpCircle, X, Filter, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { SUPPORTED_APPS } from '@/lib/connectors';
 
@@ -11,6 +11,12 @@ const STATUS_CONFIG: Record<string, { icon: typeof CheckCircle; color: string; b
   denied: { icon: ShieldOff, color: 'text-warning', bg: 'bg-warning/10' },
   timeout: { icon: Clock, color: 'text-gray-400', bg: 'bg-gray-500/10' },
 };
+
+// Fallback for a status this build doesn't know about (e.g. a newer server
+// introduced one). It must NOT be `success`: painting an unrecognized outcome
+// green is how `tool_error` silently rendered as a green check, hiding failed
+// tool calls from the audit trail. Unknown reads as unknown.
+const UNKNOWN_STATUS = { icon: HelpCircle, color: 'text-gray-400', bg: 'bg-gray-500/10' };
 
 const RISK_CATEGORIES = ['read', 'write', 'admin', 'destructive', 'execute', 'unclassified'];
 const POLICY_DECISIONS = ['allow', 'deny', 'conditional'];
@@ -380,7 +386,7 @@ export default function AuditTimeline() {
               <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-500 text-sm">No audit events found</td></tr>
             ) : (
               events.map(event => {
-                const config = STATUS_CONFIG[event.status] || STATUS_CONFIG.success;
+                const config = STATUS_CONFIG[event.status] || UNKNOWN_STATUS;
                 const Icon = config.icon;
                 const isSelected = selectedEvent?.event_id === event.event_id;
                 const username = event.user_id ? (userMap.get(event.user_id) || event.user_id.slice(0, 8)) : 'anonymous';
