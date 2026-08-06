@@ -41,6 +41,27 @@ pub fn mcp_router() -> Router<AppState> {
     Router::new().route("/mcp", post(handle_mcp))
 }
 
+/// The risk label to evaluate policies against when a `tool_registry` row has
+/// no `risk_category`.
+///
+/// `tools/list` and `tools/call` MUST agree on this. They used to disagree —
+/// list said "unclassified", call said "read" — so a policy denying the
+/// `unclassified` category hid a NULL-risk tool from discovery while still
+/// permitting a direct `tools/call`, which evaluated as "read" and fell
+/// through to the role's default allow.
+///
+/// NULL is reachable and durable: rows created before auto-classification keep
+/// it, because the discovery upsert deliberately never overwrites a stored
+/// `risk_category` (see `crate::register_discovered_tools`). "unclassified" is
+/// the value the classifier, the dashboard, and the policy editor all use, and
+/// treating an unreviewed tool as the *lowest* risk is the wrong direction for
+/// a gateway to fail.
+const DEFAULT_RISK: &str = "unclassified";
+
+fn effective_risk(risk_category: Option<&str>) -> &str {
+    risk_category.unwrap_or(DEFAULT_RISK)
+}
+
 async fn handle_mcp(
     State(state): State<AppState>,
     claims: Claims,
@@ -136,7 +157,7 @@ async fn handle_tools_list(
     for (tool_name, _original_name, description, input_schema, _backend_name, risk_category) in
         &tools
     {
-        let tool_risk = risk_category.as_deref().unwrap_or("unclassified");
+        let tool_risk = effective_risk(risk_category.as_deref());
         let (decision, _, _) = engine.evaluate(tool_name, tool_risk, claims.application.as_deref());
 
         if decision != PolicyDecision::Allow {
@@ -251,7 +272,7 @@ async fn handle_tools_call(
             }
         };
 
-    let risk = risk_category.as_deref().unwrap_or("read");
+    let risk = effective_risk(risk_category.as_deref());
     let user_id: Option<Uuid> = claims.sub.parse().ok();
 
     // Load policies scoped to user's roles and evaluate
@@ -531,5 +552,71 @@ async fn handle_tools_call(
                 error: None,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::engine::PolicyRule;
+
+    #[test]
+    fn null_risk_resolves_to_unclassified() {
+        assert_eq!(effective_risk(None), DEFAULT_RISK);
+        assert_eq!(effective_risk(None), "unclassified");
+        // A stored category is passed through untouched.
+        assert_eq!(effective_risk(Some("destructive")), "destructive");
+        assert_eq!(effective_risk(Some("read")), "read");
+    }
+
+    /// Regression test for a policy bypass.
+    ///
+    /// `tools/call` mapped a NULL `risk_category` to "read" while `tools/list`
+    /// mapped it to "unclassified". An operator who wrote "deny anything still
+    /// unclassified" saw the tool disappear from discovery and reasonably
+    /// concluded it was blocked — but a direct `tools/call` evaluated it as
+    /// "read", missed the deny rule, and fell through to the role's default
+    /// allow (`owner` defaults to allow). Both paths now share
+    /// [`effective_risk`], so they cannot diverge again.
+    #[test]
+    fn deny_unclassified_policy_also_blocks_a_null_risk_tool() {
+        let engine = PolicyEngine::new(
+            vec![PolicyRule {
+                policy_id: "00000000-0000-0000-0000-000000000001".into(),
+                name: "Deny unclassified tools".into(),
+                priority: 1,
+                tool_pattern: "*".into(),
+                decision: PolicyDecision::Deny,
+                reason: Some("tool has not been risk-reviewed".into()),
+                risk_categories: vec!["unclassified".into()],
+                application_match: None,
+            }],
+            // The permissive default that made the bypass reachable.
+            PolicyDecision::Allow,
+        );
+
+        // What tools/call now evaluates for a NULL-risk tool.
+        let (decision, _, _) = engine.evaluate("srv__legacy_tool", effective_risk(None), None);
+        assert_eq!(
+            decision,
+            PolicyDecision::Deny,
+            "a NULL-risk tool must be denied by a deny-unclassified policy"
+        );
+
+        // The pre-fix mapping, kept explicit: evaluating the same tool as
+        // "read" slips past the rule entirely. This is what made it a bypass.
+        let (as_read, _, _) = engine.evaluate("srv__legacy_tool", "read", None);
+        assert_eq!(
+            as_read,
+            PolicyDecision::Allow,
+            "sanity check: the deny rule is category-scoped, so 'read' does not match it"
+        );
+
+        // And tools/list agrees with tools/call, which is the whole point.
+        let (listed, _, _) = engine.evaluate("srv__legacy_tool", effective_risk(None), None);
+        assert_eq!(
+            listed, decision,
+            "list and call must reach the same verdict"
+        );
     }
 }
