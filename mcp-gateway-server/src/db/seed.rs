@@ -8,6 +8,14 @@ pub async fn seed_defaults(pool: &PgPool) -> Result<(), sqlx::Error> {
     seed_roles(pool).await?;
     seed_admin_user(pool).await?;
     seed_default_policies(pool).await?;
+    // Ensure existing users have keys for any application added after they were
+    // created (e.g. clawbot / codex), so those clients appear in the connect
+    // list and on the usage graph (whose app nodes come from `api_keys`).
+    // Idempotent, and it has to run on every startup — it used to sit at the
+    // end of `seed_default_policies`, which returns early as soon as any policy
+    // exists, so it only ever ran on a brand-new database where the sole user
+    // was the admin who already had keys.
+    crate::api::api_keys::backfill_app_keys_for_all_users(pool).await?;
     Ok(())
 }
 
@@ -167,10 +175,117 @@ async fn seed_default_policies(pool: &PgPool) -> Result<(), sqlx::Error> {
 
     tracing::info!("Seeded default policies (allow all + deny destructive)");
 
-    // Backfill: ensure existing users have keys for any applications added after
-    // they were created (e.g. clawbot / codex), so those clients appear in the
-    // connect list and on the usage graph. Idempotent.
-    crate::api::api_keys::backfill_app_keys_for_all_users(pool).await?;
-
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::api_keys::SUPPORTED_APPS;
+    use crate::test_support::lock_env_async;
+
+    /// A migrated, empty scratch database. Returns `None` when
+    /// `TEST_DATABASE_URL` is unset so `cargo test` still works with no
+    /// database, matching the config-transfer tests.
+    async fn test_pool() -> Option<PgPool> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        crate::db::run_migrations(&pool)
+            .await
+            .expect("migrations should apply");
+        // Children before parents so the foreign keys hold at every step.
+        for table in [
+            "audit_events",
+            "api_keys",
+            "tool_registry",
+            "backends",
+            "role_policies",
+            "policies",
+            "user_roles",
+            "users",
+            "roles",
+        ] {
+            sqlx::query(&format!("DELETE FROM {table}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        Some(pool)
+    }
+
+    /// Regression test for a backfill that never ran.
+    ///
+    /// `backfill_app_keys_for_all_users` exists so a user created before an
+    /// application was added to `SUPPORTED_APPS` still gets a key for it —
+    /// without one, that client never appears in the connect list or on the
+    /// usage graph. It used to be called from the end of
+    /// `seed_default_policies`, which returns early as soon as the database
+    /// has any policy. So it ran only on a brand-new deployment, where the
+    /// only user is the admin who was just given keys anyway, and never on the
+    /// established deployments it was written for.
+    #[tokio::test]
+    async fn backfill_reaches_users_on_a_database_that_already_has_policies() {
+        let _guard = lock_env_async().await;
+        std::env::set_var("JWT_SECRET", "seed-test-secret-at-least-16-chars");
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+
+        // A user predating the current app list, holding no keys at all.
+        let user_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (user_id, username, password_hash, email, is_active)
+             VALUES ($1, 'legacy-user', '$argon2id$fixture', 'legacy@example.com', TRUE)",
+        )
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // A policy already present, which is what trips the early return.
+        sqlx::query(
+            "INSERT INTO policies (policy_id, name, priority, conditions, decision, is_active, tool_pattern)
+             VALUES ($1, 'pre-existing policy', 999, '{}'::jsonb, 'allow', TRUE, '*')",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (before,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM api_keys WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(before, 0, "the fixture user should start with no keys");
+
+        seed_defaults(&pool).await.expect("seeding should succeed");
+
+        let (after,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM api_keys WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            after,
+            SUPPORTED_APPS.len() as i64,
+            "every supported application should have been backfilled for the pre-existing user"
+        );
+
+        // Idempotent: a second startup must not duplicate or rotate anything.
+        seed_defaults(&pool)
+            .await
+            .expect("second seed should succeed");
+        let (twice,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM api_keys WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(twice, after, "re-running the backfill must be a no-op");
+    }
 }
