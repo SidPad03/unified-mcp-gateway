@@ -79,18 +79,18 @@ This starts three containers:
 
 The images are:
 
-| Component | Docker Hub | GHCR mirror |
-|-----------|-----------|-------------|
-| Server | [`sidpad03/mcp-gateway-server`](https://hub.docker.com/r/sidpad03/mcp-gateway-server) | `ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-server` |
-| Dashboard | [`sidpad03/mcp-gateway-dashboard`](https://hub.docker.com/r/sidpad03/mcp-gateway-dashboard) | `ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-dashboard` |
-| Agent | [`sidpad03/mcp-gateway-agent`](https://hub.docker.com/r/sidpad03/mcp-gateway-agent) | `ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-agent` |
+| Component | Image |
+|-----------|-------|
+| Server | [`sidpad03/mcp-gateway-server`](https://hub.docker.com/r/sidpad03/mcp-gateway-server) |
+| Dashboard | [`sidpad03/mcp-gateway-dashboard`](https://hub.docker.com/r/sidpad03/mcp-gateway-dashboard) |
+| Agent | [`sidpad03/mcp-gateway-agent`](https://hub.docker.com/r/sidpad03/mcp-gateway-agent) |
 
-> Every build publishes the same multi-arch manifest (`linux/amd64` +
-> `linux/arm64`) to both registries, so they run natively on Intel and Apple
-> Silicon / arm64 hosts with no emulation. Docker Hub is the default in the
-> compose file; swap in the GHCR name if you prefer it. The compose file tracks
-> `:latest` — to pin a release, change the `image:` tags to `:v1.1.3`. Prefer to
-> build from source? See [Development](#development).
+> Each image is a multi-arch manifest (`linux/amd64` + `linux/arm64`), so it
+> runs natively on Intel and Apple Silicon / arm64 hosts with no emulation. The
+> compose file tracks `:latest` — to pin a release, change the `image:` tags to
+> a version like `:v1.1.6`. CI keeps the five most recent version tags plus
+> `latest`, so pin to a version you have actually deployed. Prefer to build from
+> source? See [Development](#development).
 
 ### 2. Log in to the dashboard
 
@@ -372,12 +372,12 @@ cargo run -- run      # connect to gateway
 
 The project includes CI/CD via GitHub Actions:
 
-- **Server, Dashboard & Agent**: multi-arch Docker images (`linux/amd64` + `linux/arm64`), built natively per-architecture and published to **Docker Hub** (`sidpad03/mcp-gateway-*`) and mirrored to **GHCR** on every `main` push
+- **Server, Dashboard & Agent**: multi-arch Docker images (`linux/amd64` + `linux/arm64`), built natively per-architecture and published to **Docker Hub** (`sidpad03/mcp-gateway-*`) on every `main` push. Old tags are pruned automatically — the five newest versions plus `latest` are retained
 - **Agent binaries**: cross-compiled for macOS, Linux, and Windows via `cargo-zigbuild`, published as GitHub Releases
 
-Docker Hub publishing requires two repository secrets — `DOCKERHUB_USERNAME` and
-`DOCKERHUB_TOKEN` (a Docker Hub access token with Read/Write scope). Without
-them the workflow still publishes to GHCR and logs a warning.
+Publishing requires two repository secrets — `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN`, an access token with **Read/Write/Delete** scope. Delete is
+needed by the tag-retention step.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup and deployment details.
 

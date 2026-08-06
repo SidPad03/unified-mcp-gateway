@@ -45,11 +45,14 @@ clients and MCP tool servers. Three components + Postgres.
 
 ## Operations
 
-- **Build & publish:** pushing to `main` triggers GitHub Actions, which builds each
-  image for `linux/amd64` and `linux/arm64` on its native runner, stages the
-  per-arch layers in GHCR by digest, then publishes one multi-arch manifest to both
-  Docker Hub (`sidpad03/mcp-gateway-*`, the documented default) and GHCR. Agent
-  binaries are cross-compiled with `cargo-zigbuild` and attached to GitHub Releases.
+- **Build & publish:** every change reaches `main` through a pull request, and the
+  test job (fmt, `clippy -D warnings`, Rust tests against a real Postgres,
+  dashboard typecheck and build) gates everything downstream. On merge, each image
+  is built for `linux/amd64` and `linux/arm64` on its native runner, pushed by
+  digest, and stitched into one multi-arch manifest published to Docker Hub as
+  `sidpad03/mcp-gateway-*`. A prune step then trims Docker Hub to `latest` plus the
+  five newest version tags per image. Agent binaries are cross-compiled with
+  `cargo-zigbuild` and attached to GitHub Releases.
 - **Deploy:** pull the published images with the provided `docker-compose.yml`. Pin
   the `image:` tags to a release tag rather than `:latest` if you want reproducible
   rollouts; rolling back is then a tag change plus `docker compose up -d`.

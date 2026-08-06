@@ -17,8 +17,6 @@ services:
     # Pre-built multi-arch image from Docker Hub (linux/amd64 + linux/arm64) —
     # runs natively on Intel and Apple Silicon / arm64 hosts. Pin to a version
     # (e.g. :v1.1.3) for reproducible deploys, or use :latest for the newest.
-    # The same image is mirrored to GHCR if you prefer it:
-    #   ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-server:latest
     image: sidpad03/mcp-gateway-server:latest
     ports:
       - "3200:3200"
@@ -45,7 +43,6 @@ services:
 
   mcp-gateway-dashboard:
     # Multi-arch image (linux/amd64 + linux/arm64) — see the server note above.
-    # GHCR mirror: ghcr.io/sidpad03/unified-mcp-gateway/mcp-gateway-dashboard:latest
     image: sidpad03/mcp-gateway-dashboard:latest
     ports:
       - "8080:80"

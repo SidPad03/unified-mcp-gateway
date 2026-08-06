@@ -17,6 +17,9 @@ Three things get configured: the **server** (environment variables), the
 | `RELEASE_PROXY_URL` | — | Git forge base URL for the agent release proxy |
 | `RELEASE_PROXY_REPO` | — | Repository for agent releases, e.g. `owner/unified-mcp-gateway` |
 | `RELEASE_PROXY_TOKEN` | — | API token for the release proxy (also reads `GITEA_TOKEN`) |
+| `UPDATE_CHECK_REPO` | `SidPad03/unified-mcp-gateway` | Repository the dashboard's update check queries |
+| `UPDATE_CHECK_DISABLED` | unset | Set to any value to disable the update check (air-gapped deployments) |
+| `GITHUB_TOKEN` | — | Optional; raises GitHub's rate limit for the update check |
 
 `RELEASE_PROXY_URL` and `RELEASE_PROXY_REPO` also fall back to the legacy
 `GITEA_URL` and `GITEA_AGENT_REPO` names. The agent self-update endpoints are
