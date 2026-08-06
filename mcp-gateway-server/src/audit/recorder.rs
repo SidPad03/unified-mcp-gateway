@@ -21,6 +21,9 @@ impl AuditRecorder {
         }
     }
 
+    // An audit row has many independent columns; passing them positionally is
+    // clearer here than a one-off params struct that would just mirror the schema.
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_event(
         &self,
         tool_name: &str,
@@ -41,8 +44,8 @@ impl AuditRecorder {
         let event_id = Uuid::now_v7();
         let trace_id = Uuid::now_v7();
 
-        let request_hash = request_payload.map(|p| hash_payload(p));
-        let response_hash = response_payload.map(|p| hash_payload(p));
+        let request_hash = request_payload.map(hash_payload);
+        let response_hash = response_payload.map(hash_payload);
 
         // Redact payloads before storage
         let redacted_request = request_payload.map(|p| self.redactor.redact(p));

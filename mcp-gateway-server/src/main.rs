@@ -1,3 +1,8 @@
+// The sqlx `query_as` calls throughout the API layer return wide row tuples
+// (15+ columns), which clippy flags as `type_complexity`. Factoring each into a
+// named alias adds noise without improving readability, so allow it crate-wide.
+#![allow(clippy::type_complexity)]
+
 use axum::{
     Router,
     http::{header, HeaderValue, Method},
@@ -14,10 +19,8 @@ mod agent;
 mod api;
 mod audit;
 mod backends;
-mod config;
 mod db;
 mod errors;
-mod gateway;
 mod metrics;
 mod policy;
 

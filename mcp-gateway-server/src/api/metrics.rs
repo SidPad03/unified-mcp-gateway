@@ -68,7 +68,7 @@ pub fn router() -> Router<AppState> {
 
 async fn metrics_summary(
     State(state): State<AppState>,
-    claims: Claims,
+    _claims: Claims,
 ) -> Result<Json<MetricsSummary>, AppError> {
     let (total_tool_calls,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_events")
         .fetch_one(&state.db).await?;

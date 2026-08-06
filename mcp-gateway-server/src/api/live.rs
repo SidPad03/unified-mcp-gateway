@@ -62,7 +62,7 @@ async fn handle_live_connection(state: AppState, mut socket: WebSocket, token: S
         .map_err(|_| crate::AppError::Unauthorized("Invalid or expired token".into()))
     };
 
-    if let Err(_) = auth_result {
+    if auth_result.is_err() {
         let _ = socket
             .send(Message::Text(r#"{"error":"unauthorized"}"#.into()))
             .await;
