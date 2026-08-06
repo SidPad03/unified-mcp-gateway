@@ -5,13 +5,13 @@
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     http::{header, HeaderValue, Method},
 };
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
-use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -35,6 +35,8 @@ pub struct AppState {
     pub backend_manager: Arc<backends::BackendManager>,
     pub agent_registry: Arc<agent::AgentRegistry>,
     pub agent_release_cache: Arc<tokio::sync::Mutex<Option<(std::time::Instant, Vec<api::agent_releases::AgentRelease>)>>>,
+    /// Cached GitHub release list for the dashboard update check (30-min TTL).
+    pub update_check_cache: Arc<tokio::sync::Mutex<Option<(std::time::Instant, Vec<api::updates::GithubRelease>)>>>,
     /// Broadcast channel for live audit events → dashboard WebSocket clients
     pub event_tx: broadcast::Sender<String>,
 }
@@ -98,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
         backend_manager,
         agent_registry,
         agent_release_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        update_check_cache: Arc::new(tokio::sync::Mutex::new(None)),
         event_tx,
     };
 
@@ -118,7 +121,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/metrics", axum::routing::get(metrics::prometheus_handler))
         // Cap request bodies at 8 MiB so a single oversized payload can't
         // exhaust memory. WebSocket upgrades carry no body and are unaffected.
-        .layer(RequestBodyLimitLayer::new(8 * 1024 * 1024))
+        // This is axum's DefaultBodyLimit rather than tower-http's layer so that
+        // a route needing more can raise it for itself — config import ships a
+        // whole deployment and does exactly that. A route-level limit is applied
+        // closer to the handler, so it wins over this default.
+        .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state);
