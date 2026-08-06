@@ -117,11 +117,15 @@ Query audit events.
 > `isError: true`. It is a failure, and it is counted as one in `error_count`
 > and in the metrics error rate.
 
-### `GET /api/v1/audit/export` — **scoped**
+### `GET /api/v1/audit/export` — **owner**
 
-Same filters as above, clamped to at most 500 rows per call.
+Returns the 10,000 most recent events, newest first. Unlike `GET /audit` it
+takes no filter parameters and is not scoped to the caller.
 
-### `GET /api/v1/audit/stats` — **scoped**
+### `GET /api/v1/audit/stats`
+
+Counts are deployment-wide for every caller — this endpoint is not scoped to
+the requesting user.
 
 ```json
 {
@@ -145,7 +149,7 @@ Clear the audit log.
 
 ## Users
 
-### `GET /api/v1/users` — **scoped**
+### `GET /api/v1/users` — **owner**
 
 ### `POST /api/v1/users` — **owner**
 
@@ -172,11 +176,14 @@ with zero administrators.
 
 | Endpoint | Notes |
 |----------|-------|
-| `GET /api/v1/roles` | List roles with their default policy |
+| `GET /api/v1/roles` — **owner** | List roles with their default policy |
 | `POST /api/v1/roles` — **owner** | Create a role |
-| `PATCH /api/v1/roles/{role_id}` — **owner** | Update name, default policy, or attached policies |
+| `PATCH /api/v1/roles/{role_id}` — **owner** | Update name, description, or default policy |
 | `DELETE /api/v1/roles/{role_id}` — **owner** | Delete a non-system role |
-| `GET /api/v1/roles/{role_id}/impact` — **owner** | Preview which users and tools a role change would affect |
+| `GET /api/v1/roles/{role_id}/impact` — **owner** | Preview the users, the users who would be left roleless, and the policy-binding count a role deletion would affect |
+
+Policies are attached to a role from the policy side — send `role_ids` when
+creating or updating a policy, not when updating the role.
 
 ---
 
@@ -184,7 +191,7 @@ with zero administrators.
 
 | Endpoint | Notes |
 |----------|-------|
-| `GET /api/v1/policies` | List policy rules |
+| `GET /api/v1/policies` — **owner** | List policy rules |
 | `POST /api/v1/policies` — **owner** | Create a rule |
 | `PUT /api/v1/policies/{policy_id}` — **owner** | Replace a rule |
 | `DELETE /api/v1/policies/{policy_id}` — **owner** | Delete a rule |
@@ -211,11 +218,11 @@ rules are evaluated.
 | Endpoint | Notes |
 |----------|-------|
 | `GET /api/v1/api-keys` — **scoped** | List keys (metadata only — never plaintext) |
-| `POST /api/v1/api-keys` | Create a key. The plaintext is returned **once**. |
-| `PATCH /api/v1/api-keys/{key_id}` | Rename or enable/disable a key |
-| `DELETE /api/v1/api-keys/{key_id}` | Revoke a key — takes effect immediately |
-| `GET /api/v1/api-keys/by-user/{user_id}` — **owner** | Keys belonging to a user |
-| `POST /api/v1/api-keys/provision/{user_id}` — **owner** | Create the per-application key set for a user |
+| `POST /api/v1/api-keys` — **owner** | Create a key. The plaintext is returned **once**. |
+| `PATCH /api/v1/api-keys/{key_id}` — **owner** | Rename a key. This endpoint accepts only `name`; there is no enable/disable. |
+| `DELETE /api/v1/api-keys/{key_id}` — **owner** | Revoke a key — takes effect immediately |
+| `GET /api/v1/api-keys/by-user/{user_id}` | Keys belonging to a user. Self or owner. |
+| `POST /api/v1/api-keys/provision/{user_id}` | Create the per-application key set for a user. Self or owner. |
 | `POST /api/v1/api-keys/reveal/{user_id}` | Reveal stored per-application keys so a client config can be copied |
 | `POST /api/v1/api-keys/rotate` | Regenerate a single per-application key |
 
