@@ -1,5 +1,11 @@
 # Agent Architecture
 
+> **Partly superseded.** The wire protocol, keepalive, resync and reconnect
+> behaviour on this page survive unchanged into the macOS app. The *process*
+> model does not: the daemon, PID file and launchd/systemd service are replaced
+> by an application that owns the tunnel itself. See
+> [Agent Desktop App](agent-desktop-app.md).
+
 The gateway and each `mcp-gateway-agent` hold a persistent WebSocket between
 them. That lets local MCP backends on a user's machine — stdio processes, local
 HTTP servers — be exposed through the gateway without opening any inbound port

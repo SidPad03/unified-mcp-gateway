@@ -1,5 +1,12 @@
 # MCP Gateway Agent
 
+> **Being replaced.** This page documents the terminal agent, which is what ships
+> today. It is being rewritten as a macOS application — see
+> [Agent Desktop App](agent-desktop-app.md). When that ships, the CLI, the TUI,
+> the `install.sh` / `install.ps1` installers and the published `agent-v*`
+> binaries all go away, replaced by a signed `.dmg`. Linux and Windows are not
+> covered by the first release.
+
 The agent connects MCP servers running on a remote machine — a laptop, dev box,
 or home server — to the gateway over a single authenticated WebSocket. The
 gateway then treats those tools as if they ran on the server itself.

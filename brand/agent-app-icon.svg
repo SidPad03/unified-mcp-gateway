@@ -1,0 +1,79 @@
+<!--
+  MCP Gateway Agent — macOS app icon source.
+
+  1024x1024 on Apple's macOS grid: an 824x824 squircle inset by 100 with a 185
+  corner radius, so the artwork sits correctly next to system icons in the Dock.
+  The glyph is a heavier cut of the shared mark (stroke 2.6 on the 24 grid rather
+  than 2) — a 2 px line scaled to 1024 reads thin and weak beside Apple's icons.
+
+  The violet-to-cyan tile distinguishes the agent from the gateway/dashboard,
+  which uses the same mark on a flat violet tile.
+
+  Render to PNG, then let Tauri generate the .icns set:
+      npm run tauri icon brand/agent-app-icon-1024.png
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.65" y2="1">
+      <stop offset="0%"   stop-color="#9B7BFF"/>
+      <stop offset="45%"  stop-color="#7C5CFC"/>
+      <stop offset="100%" stop-color="#3AA9D9"/>
+    </linearGradient>
+
+    <!-- Specular sheen across the upper third, the Liquid Glass tell -->
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="42%"  stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000000" flood-opacity="0.32"/>
+    </filter>
+
+    <!-- filterUnits in user space: a filter applied to a scaled group has its
+         region computed in the scaled coordinate system, which clips to a
+         visible rectangle. The filter goes on an untransformed wrapper instead. -->
+    <filter id="glyphShadow" filterUnits="userSpaceOnUse"
+            x="150" y="300" width="750" height="450">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#1a0f4d" flood-opacity="0.34"/>
+    </filter>
+
+    <clipPath id="tileClip">
+      <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
+    </clipPath>
+  </defs>
+
+  <!-- Tile -->
+  <g filter="url(#dropShadow)">
+    <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#tile)"/>
+  </g>
+
+  <!-- Glass sheen + luminous core, clipped to the squircle -->
+  <g clip-path="url(#tileClip)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#sheen)"/>
+    <ellipse cx="512" cy="512" rx="420" ry="300" fill="url(#glow)"/>
+  </g>
+
+  <!-- Glass rim -->
+  <rect x="100.5" y="100.5" width="823" height="823" rx="184.5" ry="184.5"
+        fill="none" stroke="#ffffff" stroke-opacity="0.28" stroke-width="3"/>
+
+  <!-- Mark: 24-unit grid, scale 24, centred (512 - 12*24 = 224) -->
+  <g filter="url(#glyphShadow)">
+    <g transform="translate(224 224) scale(24)"
+       fill="none" stroke="#ffffff" stroke-width="2.6"
+       stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2.5 6.5h3L10 12"/>
+      <path d="M2.5 12h7.5"/>
+      <path d="M2.5 17.5h3L10 12"/>
+      <path d="M14 8 18 12l-4 4-4-4Z"/>
+      <path d="M18 12h3.5"/>
+    </g>
+  </g>
+</svg>
