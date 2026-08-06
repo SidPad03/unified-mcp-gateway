@@ -23,12 +23,18 @@ Thank you for your interest in contributing! This document provides guidelines f
 ### Running Locally
 
 ```bash
-# Start PostgreSQL
-docker compose up postgres -d
+# Start PostgreSQL. The compose `postgres` service publishes no host port — it
+# is reachable only from inside the compose network — so for running the server
+# on the host, start one with a published port instead:
+docker run -d --name mcpgw-dev-pg -p 5432:5432 \
+  -e POSTGRES_USER=mcpgateway -e POSTGRES_PASSWORD=mcpgateway \
+  -e POSTGRES_DB=mcpgateway postgres:16-alpine
 
-# Run the server
+# Run the server. JWT_SECRET is required and must be at least 16 characters —
+# the server refuses to boot without it, and reads it from the environment
+# rather than from a .env file. DATABASE_URL defaults to the instance above.
 cd mcp-gateway-server
-cargo run
+JWT_SECRET=$(openssl rand -hex 32) cargo run
 
 # Run the dashboard (in another terminal)
 cd mcp-gateway-dashboard
