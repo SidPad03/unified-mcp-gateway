@@ -7,6 +7,10 @@ on:
       - 'mcp-gateway-agent/**'
   workflow_dispatch:
 
+# Least privilege by default; build-agent raises it to contents: write.
+permissions:
+  contents: read
+
 jobs:
   build-agent:
     runs-on: ubuntu-latest
