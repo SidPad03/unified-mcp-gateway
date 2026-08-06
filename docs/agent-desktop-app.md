@@ -319,15 +319,21 @@ see decision D4.
 - The `test` job keeps running fmt / clippy / tests against the agent crate —
   that code still exists until the rewrite lands.
 
-**CodeQL — removed (done).** It was GitHub's *default setup*
+**CodeQL — kept.** Worth recording where it lives, because it caused some
+confusion: it is GitHub's *default setup*
 (`dynamic/github-code-scanning/codeql`), a repository setting rather than a file
-in `.github/workflows/`, which is why it could not be found in the pipeline. Its
-runs were failing with `The job was not acquired by Runner of type hosted even
-after multiple attempts` on all three language matrices — GitHub failing to
-allocate hosted runners, not a finding in the code. Disabled via
-`PATCH /repos/{owner}/{repo}/code-scanning/default-setup` → `not-configured`; it
-is re-enablable in one click from Settings → Code security if the runner supply
-recovers.
+in `.github/workflows/`, so it cannot be found by reading the pipeline. Its runs
+were failing with `The job was not acquired by Runner of type hosted even after
+multiple attempts` across every language matrix. That turned out to be the
+GitHub Actions outage of 2026-08-06, not a finding against this code, so the
+scan stays enabled.
+
+One detail for whoever next touches that configuration: Rust cannot be named
+explicitly in the `languages` array of
+`PATCH /repos/{owner}/{repo}/code-scanning/default-setup` — the API rejects it.
+Rust support is in preview and is picked up by auto-detection instead, so the
+configuration must be written *without* a `languages` list or Rust will be
+dropped from the scan.
 
 No E2E in CI: `tauri-driver` has no macOS support. Replaced by a manual QA
 checklist (§12) run against the built DMG.
