@@ -802,7 +802,10 @@ No other text.`
           </div>
           <div>
             <h3 className="text-sm font-semibold text-white">About MCP Gateway</h3>
-            <p className="text-xs text-gray-500 mt-1">Version 0.1.0</p>
+            {/* Same build-time define the sidebar uses (vite.config.ts), fed by
+                the APP_VERSION build-arg in CI. Hardcoding it here meant /settings
+                reported 0.1.0 forever while the app was on a much later release. */}
+            <p className="text-xs text-gray-500 mt-1">Version {__APP_VERSION__}</p>
             <p className="text-xs text-gray-500 mt-2">
               A unified MCP gateway that aggregates tools from multiple MCP backends, enforcing RBAC policies
               and providing audit logging for all tool calls made by AI agents.
