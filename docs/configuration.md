@@ -16,14 +16,16 @@ Three things get configured: the **server** (environment variables), the
 | `RUST_LOG` | `mcp_gateway_server=info,tower_http=debug` | Log level filter |
 | `RELEASE_PROXY_URL` | — | Git forge base URL for the agent release proxy |
 | `RELEASE_PROXY_REPO` | — | Repository for agent releases, e.g. `owner/unified-mcp-gateway` |
-| `RELEASE_PROXY_TOKEN` | — | API token for the release proxy (also reads `GITEA_TOKEN`) |
+| `GITEA_TOKEN` | — | API token for the release proxy |
 | `UPDATE_CHECK_REPO` | `SidPad03/unified-mcp-gateway` | Repository the dashboard's update check queries |
 | `UPDATE_CHECK_DISABLED` | unset | Set to any value to disable the update check (air-gapped deployments) |
 | `GITHUB_TOKEN` | — | Optional; raises GitHub's rate limit for the update check |
 
 `RELEASE_PROXY_URL` and `RELEASE_PROXY_REPO` also fall back to the legacy
-`GITEA_URL` and `GITEA_AGENT_REPO` names. The agent self-update endpoints are
-inactive unless these are set.
+`GITEA_URL` and `GITEA_AGENT_REPO` names. The token has no `RELEASE_PROXY_*`
+spelling — it is read only as `GITEA_TOKEN`. The agent release endpoints fail
+unless a URL is set, so leave them unset only if you are not using agent
+self-update.
 
 Compose reads these from a `.env` file next to `docker-compose.yml`. See
 [.env.example](../.env.example).
@@ -135,10 +137,9 @@ remain until a sync succeeds. A failing backend never crashes the server.
 
 | Status | Meaning |
 |--------|---------|
-| `healthy` | Connected, tools discovered |
+| `idle` | The default: newly created and not yet checked, or the backend is disabled |
+| `healthy` | Connected, tools discovered. An agent backend that has registered is also `healthy` |
 | `unhealthy` | Last connection or discovery attempt failed |
-| `unknown` | Never successfully checked |
-| `connected` | Agent backend with an active WebSocket |
 | `disconnected` | Agent backend whose agent has gone away |
 
 ---
