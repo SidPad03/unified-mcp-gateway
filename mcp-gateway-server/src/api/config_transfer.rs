@@ -45,7 +45,6 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Key, Nonce,
 };
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
@@ -185,8 +184,10 @@ fn derive_key(passphrase: &str, salt: &[u8], p: &KdfParams) -> Result<[u8; 32], 
 }
 
 fn seal(plaintext: &[u8], passphrase: &str) -> Result<(KdfParams, String, String), AppError> {
-    let mut salt = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut salt);
+    // Generated directly rather than zero-initialised and filled in place: the
+    // latter reads as a hard-coded salt both to a human skimming the line and to
+    // static analysis, which cannot see the subsequent fill through `&mut`.
+    let salt: [u8; 16] = rand::random();
     let params = KdfParams {
         algorithm: "argon2id".into(),
         salt: B64.encode(salt),
@@ -196,8 +197,10 @@ fn seal(plaintext: &[u8], passphrase: &str) -> Result<(KdfParams, String, String
     };
     let key = derive_key(passphrase, &salt, &params)?;
 
-    let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    // Fresh per bundle — a repeated (key, nonce) pair would break ChaCha20's
+    // confidentiality outright. Same rationale as the salt above for generating
+    // it directly.
+    let nonce_bytes: [u8; 12] = rand::random();
     let ciphertext = ChaCha20Poly1305::new(Key::from_slice(&key))
         .encrypt(Nonce::from_slice(&nonce_bytes), plaintext)
         .map_err(|_| AppError::Internal("Failed to encrypt export bundle".into()))?;
