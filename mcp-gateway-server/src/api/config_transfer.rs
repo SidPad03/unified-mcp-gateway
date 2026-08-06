@@ -31,7 +31,7 @@
 //! # Schema drift
 //!
 //! Rows move as JSON objects produced by `row_to_json` and are re-inserted with
-//! `json_populate_record`, which maps a JSON object onto the *target's* row type.
+//! `jsonb_populate_record`, which maps a JSON object onto the *target's* row type.
 //! Postgres does the column matching and type coercion: keys the target doesn't
 //! have are ignored, columns the bundle lacks land as NULL. That keeps a bundle
 //! importable across versions that added or dropped a column, and — because no
@@ -262,25 +262,7 @@ async fn export_config(
         )));
     }
 
-    let mut payload = Payload::default();
-    let mut wanted: Vec<&str> = TABLES.to_vec();
-    if req.include_audit {
-        wanted.push(AUDIT_TABLE);
-    }
-
-    for table in wanted {
-        // `table` is one of our own compile-time constants, never user input.
-        let sql = format!("SELECT row_to_json(t) FROM {table} t");
-        let mut rows: Vec<serde_json::Value> =
-            sqlx::query_scalar(&sql).fetch_all(&state.db).await?;
-
-        if table == "api_keys" {
-            for row in rows.iter_mut() {
-                rekey_for_export(row);
-            }
-        }
-        payload.tables.insert(table.to_string(), rows);
-    }
+    let payload = collect_payload(&state.db, req.include_audit).await?;
 
     let json = serde_json::to_vec(&payload)
         .map_err(|e| AppError::Internal(format!("Failed to serialize bundle: {e}")))?;
@@ -305,6 +287,83 @@ async fn export_config(
         nonce,
         ciphertext,
     }))
+}
+
+/// Read every exportable table into a payload.
+///
+/// Split out from the handler so the round trip can be tested against a real
+/// database without standing up an `AppState` and an HTTP stack.
+async fn collect_payload(pool: &sqlx::PgPool, include_audit: bool) -> Result<Payload, AppError> {
+    let mut payload = Payload::default();
+    let mut wanted: Vec<&str> = TABLES.to_vec();
+    if include_audit {
+        wanted.push(AUDIT_TABLE);
+    }
+
+    for table in wanted {
+        // `table` is one of our own compile-time constants, never user input.
+        let sql = format!("SELECT row_to_json(t) FROM {table} t");
+        let mut rows: Vec<serde_json::Value> = sqlx::query_scalar(&sql).fetch_all(pool).await?;
+
+        if table == "api_keys" {
+            for row in rows.iter_mut() {
+                rekey_for_export(row);
+            }
+        }
+        payload.tables.insert(table.to_string(), rows);
+    }
+    Ok(payload)
+}
+
+/// Replace every exportable table's contents with the payload, in one
+/// transaction. Counterpart to [`collect_payload`].
+async fn restore_payload(
+    pool: &sqlx::PgPool,
+    payload: &Payload,
+) -> Result<Vec<TableCount>, AppError> {
+    // Everything below is one transaction: a failure part-way leaves the
+    // deployment exactly as it was rather than half-wiped.
+    let mut tx = pool.begin().await?;
+
+    let mut ordered: Vec<&str> = TABLES.to_vec();
+    if payload.tables.contains_key(AUDIT_TABLE) {
+        ordered.push(AUDIT_TABLE);
+    }
+
+    // Replace mode: clear children before parents.
+    for table in ordered.iter().rev() {
+        sqlx::query(&format!("DELETE FROM {table}"))
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    let mut imported = Vec::new();
+    for table in &ordered {
+        let Some(rows) = payload.tables.get(*table) else {
+            continue;
+        };
+        let mut count = 0i64;
+        for row in rows {
+            let mut row = row.clone();
+            if *table == "api_keys" {
+                rekey_for_import(&mut row)?;
+            }
+            // jsonb_populate_record maps the object onto the target's row type,
+            // so no bundle-supplied identifier ever reaches the SQL text.
+            let sql = format!(
+                "INSERT INTO {table} SELECT * FROM jsonb_populate_record(NULL::{table}, $1)"
+            );
+            sqlx::query(&sql).bind(&row).execute(&mut *tx).await?;
+            count += 1;
+        }
+        imported.push(TableCount {
+            table: (*table).to_string(),
+            rows: count,
+        });
+    }
+
+    tx.commit().await?;
+    Ok(imported)
 }
 
 /// Swap the source-encrypted `key_secret` for the plaintext key under
@@ -347,48 +406,7 @@ async fn import_config(
     let payload: Payload = serde_json::from_slice(&gunzip(&unseal(&req.bundle, &req.passphrase)?)?)
         .map_err(|_| AppError::BadRequest("Bundle payload is not readable".into()))?;
 
-    // Everything below is one transaction: a failure part-way leaves the
-    // deployment exactly as it was rather than half-wiped.
-    let mut tx = state.db.begin().await?;
-
-    let mut ordered: Vec<&str> = TABLES.to_vec();
-    if payload.tables.contains_key(AUDIT_TABLE) {
-        ordered.push(AUDIT_TABLE);
-    }
-
-    // Replace mode: clear children before parents.
-    for table in ordered.iter().rev() {
-        sqlx::query(&format!("DELETE FROM {table}"))
-            .execute(&mut *tx)
-            .await?;
-    }
-
-    let mut imported = Vec::new();
-    for table in &ordered {
-        let Some(rows) = payload.tables.get(*table) else {
-            continue;
-        };
-        let mut count = 0i64;
-        for row in rows {
-            let mut row = row.clone();
-            if *table == "api_keys" {
-                rekey_for_import(&mut row)?;
-            }
-            // json_populate_record maps the object onto the target's row type,
-            // so no bundle-supplied identifier ever reaches the SQL text.
-            let sql = format!(
-                "INSERT INTO {table} SELECT * FROM json_populate_record(NULL::{table}, $1)"
-            );
-            sqlx::query(&sql).bind(&row).execute(&mut *tx).await?;
-            count += 1;
-        }
-        imported.push(TableCount {
-            table: (*table).to_string(),
-            rows: count,
-        });
-    }
-
-    tx.commit().await?;
+    let imported = restore_payload(&state.db, &payload).await?;
 
     let total: i64 = imported.iter().map(|t| t.rows).sum();
     tracing::warn!(
@@ -447,15 +465,7 @@ async fn record_transfer(state: &AppState, claims: &Claims, action: &str, rows: 
 mod tests {
     use super::*;
 
-    /// `JWT_SECRET` is process-global and the key-rotation tests deliberately
-    /// change it, so the tests that touch it must not run concurrently with each
-    /// other. Recover from poisoning: a panic in one test should surface as that
-    /// test's own failure, not cascade into every other one.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    use crate::test_support::{lock_env, lock_env_async};
 
     fn params() -> KdfParams {
         KdfParams {
@@ -604,6 +614,168 @@ mod tests {
             super::super::api_keys::decrypt_api_key_for_transfer(sealed).unwrap(),
             "mcpgw_abc123def456"
         );
+    }
+
+    // ── Database round-trip ─────────────────────────────────────────────
+    //
+    // These exercise the part unit tests cannot reach: that a bundle actually
+    // reproduces a deployment. They need a real Postgres because the transfer is
+    // built on `row_to_json` / `jsonb_populate_record`, which have no in-process
+    // equivalent. CI provides one; locally they skip unless TEST_DATABASE_URL is
+    // set, so `cargo test` still works with no database.
+
+    async fn test_pool() -> Option<sqlx::PgPool> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        crate::db::run_migrations(&pool)
+            .await
+            .expect("migrations should apply");
+        // Start from a known-empty deployment.
+        let mut ordered: Vec<&str> = TABLES.to_vec();
+        ordered.push(AUDIT_TABLE);
+        for table in ordered.iter().rev() {
+            sqlx::query(&format!("DELETE FROM {table}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        Some(pool)
+    }
+
+    async fn seed_fixture(pool: &sqlx::PgPool) -> (uuid::Uuid, uuid::Uuid) {
+        let role_id = uuid::Uuid::new_v4();
+        let user_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO roles (role_id, name, description, permissions, is_system, default_policy)
+             VALUES ($1, 'transfer-test-role', 'fixture', '[]'::jsonb, FALSE, 'deny')",
+        )
+        .bind(role_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO users (user_id, username, password_hash, email, is_active)
+             VALUES ($1, 'transfer-test-user', '$argon2id$fixture', 'u@example.com', TRUE)",
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)")
+            .bind(user_id)
+            .bind(role_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, is_active, key_secret)
+             VALUES ($1, $2, 'deadbeef', 'mcpgw_', 'fixture-key', TRUE, $3)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(user_id)
+        .bind(super::super::api_keys::encrypt_api_key("mcpgw_fixture_raw_key").unwrap())
+        .execute(pool)
+        .await
+        .unwrap();
+        (user_id, role_id)
+    }
+
+    #[tokio::test]
+    async fn db_round_trip_restores_every_table() {
+        let _guard = lock_env_async().await;
+        std::env::set_var("JWT_SECRET", "source-secret-for-db-round-trip");
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+        seed_fixture(&pool).await;
+
+        let before = collect_payload(&pool, true).await.unwrap();
+        assert_eq!(before.tables["users"].len(), 1);
+        assert_eq!(before.tables["api_keys"].len(), 1);
+
+        // Wipe, then restore from the payload.
+        restore_payload(&pool, &before).await.unwrap();
+        let after = collect_payload(&pool, true).await.unwrap();
+
+        for table in TABLES {
+            assert_eq!(
+                before.tables[*table].len(),
+                after.tables[*table].len(),
+                "row count changed for {table}"
+            );
+        }
+        let (username,): (String,) =
+            sqlx::query_as("SELECT username FROM users WHERE username = 'transfer-test-user'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(username, "transfer-test-user");
+    }
+
+    #[tokio::test]
+    async fn db_round_trip_keeps_api_keys_revealable_under_a_new_secret() {
+        // The headline promise of the feature. Export under one JWT_SECRET,
+        // import under another, and the key must still decrypt on the target.
+        let _guard = lock_env_async().await;
+        std::env::set_var("JWT_SECRET", "source-secret-for-db-round-trip");
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+        seed_fixture(&pool).await;
+
+        let payload = collect_payload(&pool, false).await.unwrap();
+
+        std::env::set_var("JWT_SECRET", "target-secret-for-db-round-trip");
+        restore_payload(&pool, &payload).await.unwrap();
+
+        let (stored,): (Option<String>,) =
+            sqlx::query_as("SELECT key_secret FROM api_keys WHERE name = 'fixture-key'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let stored = stored.expect("key_secret should have been re-sealed on import");
+        assert_eq!(
+            super::super::api_keys::decrypt_api_key_for_transfer(&stored).unwrap(),
+            "mcpgw_fixture_raw_key",
+            "key must be revealable under the target's secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn db_import_replaces_rather_than_merges() {
+        let _guard = lock_env_async().await;
+        std::env::set_var("JWT_SECRET", "source-secret-for-db-round-trip");
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+        seed_fixture(&pool).await;
+        let payload = collect_payload(&pool, false).await.unwrap();
+
+        // A user that exists only on the target must not survive the import.
+        sqlx::query(
+            "INSERT INTO users (user_id, username, password_hash, is_active)
+             VALUES ($1, 'target-only-user', 'x', TRUE)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        restore_payload(&pool, &payload).await.unwrap();
+
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM users WHERE username = 'target-only-user'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(n, 0, "replace mode must delete rows absent from the bundle");
     }
 
     #[test]
