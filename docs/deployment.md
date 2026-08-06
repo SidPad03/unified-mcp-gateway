@@ -262,7 +262,7 @@ migration, so restore from backup if you need to go backwards across one.
 | Symptom | Cause |
 |---------|-------|
 | Server exits immediately with a `JWT_SECRET` message | Unset, too short, or left at the dev default |
-| Login returns 401 with correct credentials | The account owes a forced first-login password change; complete it in the dashboard |
+| Login succeeds but every other call returns 403 | The account owes a forced first-login password change; complete it in the dashboard. Login itself returns 200 with `must_change_password: true` |
 | Backend shows `unhealthy` | Discovery failed — check the backend URL/command and the server logs, then re-run **Sync** |
 | Agent backend shows `disconnected` | No agent is currently connected under that `agent_id` |
 | Dashboard loads but every call 401s | Session expired; the login page will say so |

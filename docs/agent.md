@@ -59,12 +59,15 @@ For the full config-file schema, see
 ## Run
 
 ```bash
-# Foreground, with the live TUI
+# Start in the background, then stop it again
 mcp-gateway-agent run
+mcp-gateway-agent stop
 
-# Or install it as a background service
+# Stay in the foreground with plain log output (for debugging)
+mcp-gateway-agent run --foreground
+
+# Or install it as a background service — this also starts it
 mcp-gateway-agent service install
-mcp-gateway-agent service start
 ```
 
 The service uses launchd on macOS, systemd on Linux, and Task Scheduler on
@@ -72,8 +75,9 @@ Windows.
 
 ### The TUI
 
-`run` (and `dashboard`) opens a live view showing connection status, registered
-tools, recent tool calls, and logs.
+`mcp-gateway-agent dashboard` opens a live view showing connection status,
+registered tools, recent tool calls, and logs. `run` does not — it daemonizes,
+and `run --foreground` prints plain logs.
 
 | Key | Action |
 |-----|--------|
@@ -89,16 +93,21 @@ tools, recent tool calls, and logs.
 | Command | Description |
 |---------|-------------|
 | `mcp-gateway-agent setup` | Interactive setup wizard |
-| `mcp-gateway-agent run` | Connect to the gateway with the live TUI |
-| `mcp-gateway-agent dashboard` | Open the TUI without reconnecting |
+| `mcp-gateway-agent run` | Start the agent in the background (`--foreground` to stay attached) |
+| `mcp-gateway-agent stop` | Stop the running agent |
+| `mcp-gateway-agent restart` | Stop and start again |
+| `mcp-gateway-agent dashboard` | Open the live TUI |
 | `mcp-gateway-agent update` | Check for and install a newer agent |
-| `mcp-gateway-agent service install` | Install as a background service |
-| `mcp-gateway-agent service start` | Start the service |
-| `mcp-gateway-agent service stop` | Stop the service |
+| `mcp-gateway-agent service install` | Install as a background service, and start it |
+| `mcp-gateway-agent service uninstall` | Stop and remove the background service |
 | `mcp-gateway-agent service status` | Show service status |
 | `mcp-gateway-agent service logs` | Show service logs |
 | `mcp-gateway-agent logs` | Tail the agent log file |
+| `mcp-gateway-agent uninstall` | Remove the agent's config, binary, and service |
 | `mcp-gateway-agent version` | Print the version |
+
+Each of `run`, `restart`, and `dashboard` accepts `--config <path>` to use a
+config file other than `~/.mcp-gateway-agent/config.toml`.
 
 ---
 

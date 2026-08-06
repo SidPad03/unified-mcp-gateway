@@ -104,10 +104,10 @@ Query audit events.
 |-------|------|-------------|
 | `tool_name` | string | Filter by tool name |
 | `backend` | string | Filter by backend name |
-| `status` | string | `success`, `error`, `tool_error`, `denied`, `timeout` |
+| `status` | string | `success`, `error`, `tool_error`, `denied` |
 | `user_id` | uuid | Filter by user (owners only; others are pinned to themselves) |
 | `risk_category` | string | `read`, `write`, `admin`, `destructive`, `execute`, `unclassified` |
-| `policy_decision` | string | `allow`, `deny`, `conditional` |
+| `policy_decision` | string | `allow`, `deny` |
 | `from` / `to` | ISO 8601 | Time bounds |
 | `application` | string | Filter by calling application |
 | `limit` | int | Page size (default 50) |

@@ -65,7 +65,11 @@ The server then:
 - Registers the tools in `tool_registry`, auto-classifying each by risk
 - Replies with `registered` and the `backend_id`
 
-The `agent_id` must match an existing backend's name.
+The `backends` row is upserted by name, so a matching row is not required up
+front — an agent whose `agent_id` is not yet known creates one on first
+registration. Pre-create the backend when you want to set its risk category
+before the agent ever connects; if you do, its name must match the `agent_id`
+exactly, or the agent registers under a second, separate backend.
 
 ### 3. Steady state — tool calls
 
