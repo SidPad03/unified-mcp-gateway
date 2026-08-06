@@ -138,6 +138,11 @@ jobs:
       fail-fast: false
       matrix:
         component: [mcp-gateway-server, mcp-gateway-dashboard, mcp-gateway-agent]
+    env:
+      # The `secrets` context is not available in a step-level `if:`, so resolve
+      # "do we have Docker Hub credentials?" once here — job-level `env` may read
+      # secrets — and gate the steps below on `env.HAS_DOCKERHUB` instead.
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
@@ -157,7 +162,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
-        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        if: env.HAS_DOCKERHUB == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -181,7 +186,7 @@ jobs:
       # copies the blobs across registries, so both registries serve an identical
       # multi-arch manifest for this build.
       - name: Create and push multi-arch manifest (Docker Hub)
-        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        if: env.HAS_DOCKERHUB == 'true'
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create \
@@ -194,7 +199,7 @@ jobs:
         run: docker buildx imagetools inspect "${IMAGE}:v${{ needs.version.outputs.version }}"
 
       - name: Warn if Docker Hub publishing was skipped
-        if: ${{ secrets.DOCKERHUB_TOKEN == '' }}
+        if: env.HAS_DOCKERHUB != 'true'
         run: |
           echo "::warning::DOCKERHUB_TOKEN is not set — published to GHCR only. \
           Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN to publish ${HUB_IMAGE}."
