@@ -47,10 +47,7 @@ pub async fn run_setup() -> anyhow::Result<(bool, bool)> {
     Ok((wizard.should_start, wizard.should_install_service))
 }
 
-async fn run_setup_loop(
-    terminal: &mut Tui,
-    wizard: &mut setup::SetupWizard,
-) -> anyhow::Result<()> {
+async fn run_setup_loop(terminal: &mut Tui, wizard: &mut setup::SetupWizard) -> anyhow::Result<()> {
     use crossterm::event::{self, Event};
     use std::time::Duration;
 

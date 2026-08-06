@@ -9,36 +9,79 @@
 //!   "unclassified"– none of the above matched
 
 const READ_KEYWORDS: &[&str] = &[
-    "get_", "list_", "search_", "find_", "fetch_", "show_",
-    "view_", "read_", "describe_", "inspect_", "check_",
-    "count_", "preview_", "download_", "diff_", "compare_",
-    "health_", "version", "info", "status", "log_preview",
-    "revisions", "history", "documentation", "validate",
+    "get_",
+    "list_",
+    "search_",
+    "find_",
+    "fetch_",
+    "show_",
+    "view_",
+    "read_",
+    "describe_",
+    "inspect_",
+    "check_",
+    "count_",
+    "preview_",
+    "download_",
+    "diff_",
+    "compare_",
+    "health_",
+    "version",
+    "info",
+    "status",
+    "log_preview",
+    "revisions",
+    "history",
+    "documentation",
+    "validate",
 ];
 
 const WRITE_KEYWORDS: &[&str] = &[
-    "create_", "add_", "update_", "edit_", "modify_", "set_",
-    "put_", "patch_", "upsert_", "replace_", "rename_",
-    "upload_", "write_", "save_", "submit_", "fork_",
-    "merge_", "push_", "start_", "stop_", "track",
-    "comment",
+    "create_", "add_", "update_", "edit_", "modify_", "set_", "put_", "patch_", "upsert_",
+    "replace_", "rename_", "upload_", "write_", "save_", "submit_", "fork_", "merge_", "push_",
+    "start_", "stop_", "track", "comment",
 ];
 
 const DESTRUCTIVE_KEYWORDS: &[&str] = &[
-    "delete_", "remove_", "drop_", "destroy_", "purge_",
-    "truncate_", "clear_", "revoke_", "dismiss_", "cancel_",
-    "prune_", "wipe_",
+    "delete_",
+    "remove_",
+    "drop_",
+    "destroy_",
+    "purge_",
+    "truncate_",
+    "clear_",
+    "revoke_",
+    "dismiss_",
+    "cancel_",
+    "prune_",
+    "wipe_",
 ];
 
 const ADMIN_KEYWORDS: &[&str] = &[
-    "secret", "variable", "action_variable", "action_secret",
-    "permission", "role", "config", "setting", "credential",
-    "token", "key", "policy",
+    "secret",
+    "variable",
+    "action_variable",
+    "action_secret",
+    "permission",
+    "role",
+    "config",
+    "setting",
+    "credential",
+    "token",
+    "key",
+    "policy",
 ];
 
 const EXECUTE_KEYWORDS: &[&str] = &[
-    "run_", "exec_", "execute_", "dispatch_", "trigger_",
-    "deploy_", "rerun_", "autofix_", "test_workflow",
+    "run_",
+    "exec_",
+    "execute_",
+    "dispatch_",
+    "trigger_",
+    "deploy_",
+    "rerun_",
+    "autofix_",
+    "test_workflow",
 ];
 
 pub fn classify_tool(tool_name: &str, description: &str) -> &'static str {
@@ -51,7 +94,8 @@ pub fn classify_tool(tool_name: &str, description: &str) -> &'static str {
     // delete). Must be checked before `destructive` so the admin+delete combination
     // classifies as admin rather than short-circuiting to destructive.
     if matches_any(&name_lower, ADMIN_KEYWORDS)
-        && (matches_any(&name_lower, WRITE_KEYWORDS) || matches_any(&name_lower, DESTRUCTIVE_KEYWORDS))
+        && (matches_any(&name_lower, WRITE_KEYWORDS)
+            || matches_any(&name_lower, DESTRUCTIVE_KEYWORDS))
     {
         return "admin";
     }
@@ -95,7 +139,10 @@ mod tests {
 
     #[test]
     fn test_read_tools() {
-        assert_eq!(classify_tool("get_my_user_info", "Get my user info"), "read");
+        assert_eq!(
+            classify_tool("get_my_user_info", "Get my user info"),
+            "read"
+        );
         assert_eq!(classify_tool("list_branches", "List branches"), "read");
         assert_eq!(classify_tool("search_repos", "search repos"), "read");
     }
@@ -110,21 +157,48 @@ mod tests {
 
     #[test]
     fn test_destructive_tools() {
-        assert_eq!(classify_tool("delete_branch", "Delete branch"), "destructive");
-        assert_eq!(classify_tool("clear_issue_labels", "Removes all labels"), "destructive");
-        assert_eq!(classify_tool("delete_wiki_page", "Delete a wiki page"), "destructive");
+        assert_eq!(
+            classify_tool("delete_branch", "Delete branch"),
+            "destructive"
+        );
+        assert_eq!(
+            classify_tool("clear_issue_labels", "Removes all labels"),
+            "destructive"
+        );
+        assert_eq!(
+            classify_tool("delete_wiki_page", "Delete a wiki page"),
+            "destructive"
+        );
     }
 
     #[test]
     fn test_admin_tools() {
-        assert_eq!(classify_tool("create_repo_action_variable", "Create a repository Actions variable"), "admin");
-        assert_eq!(classify_tool("upsert_org_action_secret", "Create or update secret"), "admin");
-        assert_eq!(classify_tool("delete_org_action_secret", "Delete secret"), "admin");
+        assert_eq!(
+            classify_tool(
+                "create_repo_action_variable",
+                "Create a repository Actions variable"
+            ),
+            "admin"
+        );
+        assert_eq!(
+            classify_tool("upsert_org_action_secret", "Create or update secret"),
+            "admin"
+        );
+        assert_eq!(
+            classify_tool("delete_org_action_secret", "Delete secret"),
+            "admin"
+        );
     }
 
     #[test]
     fn test_execute_tools() {
-        assert_eq!(classify_tool("dispatch_repo_action_workflow", "Trigger a workflow"), "execute");
-        assert_eq!(classify_tool("rerun_repo_action_run", "Rerun a run"), "execute");
+        assert_eq!(
+            classify_tool("dispatch_repo_action_workflow", "Trigger a workflow"),
+            "execute"
+        );
+        assert_eq!(
+            classify_tool("rerun_repo_action_run", "Rerun a run"),
+            "execute"
+        );
     }
 }

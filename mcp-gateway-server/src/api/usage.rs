@@ -6,8 +6,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{AppError, AppState};
 use super::auth::Claims;
+use crate::{AppError, AppState};
 
 #[derive(Serialize)]
 pub struct UserNode {
@@ -132,8 +132,8 @@ async fn usage_graph(
     // Users column: each user with activity in range. In single-user mode we
     // keep the one selected user even with no calls (so the node still renders);
     // in all-users mode we only surface users who were actually active.
-    let user_rows: Vec<(Uuid, String, i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        &format!(
+    let user_rows: Vec<(Uuid, String, i64, Option<chrono::DateTime<chrono::Utc>>)> =
+        sqlx::query_as(&format!(
             "SELECT u.user_id, u.username, COALESCE(cnt.total, 0) AS call_count, cnt.last_seen
              FROM users u
              LEFT JOIN (
@@ -145,11 +145,10 @@ async fn usage_graph(
              WHERE ($1::uuid IS NULL OR u.user_id = $1)
              ORDER BY call_count DESC, u.username",
             interval
-        )
-    )
-    .bind(target_user)
-    .fetch_all(&state.db)
-    .await?;
+        ))
+        .bind(target_user)
+        .fetch_all(&state.db)
+        .await?;
 
     let users: Vec<UserNode> = user_rows
         .into_iter()
@@ -163,17 +162,20 @@ async fn usage_graph(
         .collect();
 
     // user → application edges, from audit events.
-    let user_app_edges: Vec<(Uuid, Option<String>, i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        &format!(
-            "SELECT user_id, application, COUNT(*) AS cnt, MAX(timestamp) AS last_call
+    let user_app_edges: Vec<(
+        Uuid,
+        Option<String>,
+        i64,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(&format!(
+        "SELECT user_id, application, COUNT(*) AS cnt, MAX(timestamp) AS last_call
              FROM audit_events
              WHERE ($1::uuid IS NULL OR user_id = $1)
                AND timestamp > NOW() - INTERVAL '{}'
                AND application IS NOT NULL AND user_id IS NOT NULL
              GROUP BY user_id, application",
-            interval
-        )
-    )
+        interval
+    ))
     .bind(target_user)
     .fetch_all(&state.db)
     .await?;
@@ -195,7 +197,7 @@ async fn usage_graph(
     let app_rows: Vec<(Option<String>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT application, MAX(last_used) FROM api_keys
          WHERE ($1::uuid IS NULL OR user_id = $1) AND application IS NOT NULL
-         GROUP BY application"
+         GROUP BY application",
     )
     .bind(target_user)
     .fetch_all(&state.db)
@@ -212,20 +214,24 @@ async fn usage_graph(
     .fetch_all(&state.db)
     .await?;
 
-    let applications: Vec<AppNode> = app_rows.into_iter().filter_map(|(app, last_used)| {
-        let app = app?;
-        let is_connected = last_used.map(|t| t > five_min_ago).unwrap_or(false);
-        let call_count = app_counts.iter()
-            .find(|(a, _)| a.as_deref() == Some(&*app))
-            .map(|(_, c)| *c)
-            .unwrap_or(0);
-        Some(AppNode {
-            application: app,
-            is_connected,
-            last_seen: last_used.map(|t| t.to_rfc3339()),
-            call_count,
+    let applications: Vec<AppNode> = app_rows
+        .into_iter()
+        .filter_map(|(app, last_used)| {
+            let app = app?;
+            let is_connected = last_used.map(|t| t > five_min_ago).unwrap_or(false);
+            let call_count = app_counts
+                .iter()
+                .find(|(a, _)| a.as_deref() == Some(&*app))
+                .map(|(_, c)| *c)
+                .unwrap_or(0);
+            Some(AppNode {
+                application: app,
+                is_connected,
+                last_seen: last_used.map(|t| t.to_rfc3339()),
+                call_count,
+            })
         })
-    }).collect();
+        .collect();
 
     // Backends
     let backends: Vec<(String, String, String, i64)> = sqlx::query_as(
@@ -237,14 +243,25 @@ async fn usage_graph(
     .fetch_all(&state.db)
     .await?;
 
-    let backend_nodes: Vec<BackendNode> = backends.into_iter().map(|(name, transport, health, tool_count)| {
-        BackendNode { backend_name: name, transport, health_status: health, tool_count }
-    }).collect();
+    let backend_nodes: Vec<BackendNode> = backends
+        .into_iter()
+        .map(|(name, transport, health, tool_count)| BackendNode {
+            backend_name: name,
+            transport,
+            health_status: health,
+            tool_count,
+        })
+        .collect();
 
     // Tools: start from tool_registry (always visible), enrich with audit call counts + last_call
-    let tool_rows: Vec<(String, String, Option<String>, i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        &format!(
-            "SELECT t.tool_name, b.name as backend_name, t.risk_category,
+    let tool_rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        i64,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(&format!(
+        "SELECT t.tool_name, b.name as backend_name, t.risk_category,
                     COALESCE(ae.cnt, 0) as call_count, ae.last_call
              FROM tool_registry t
              JOIN backends b ON t.backend_id = b.backend_id
@@ -257,16 +274,24 @@ async fn usage_graph(
              WHERE t.is_enabled = TRUE AND b.is_enabled = TRUE
              ORDER BY call_count DESC, t.tool_name
              LIMIT 100",
-            interval
-        )
-    )
+        interval
+    ))
     .bind(target_user)
     .fetch_all(&state.db)
     .await?;
 
-    let tools: Vec<ToolNode> = tool_rows.into_iter().map(|(tool_name, backend_name, risk_category, call_count, last_call)| {
-        ToolNode { tool_name, backend_name, risk_category, call_count, last_call: last_call.map(|t| t.to_rfc3339()) }
-    }).collect();
+    let tools: Vec<ToolNode> = tool_rows
+        .into_iter()
+        .map(
+            |(tool_name, backend_name, risk_category, call_count, last_call)| ToolNode {
+                tool_name,
+                backend_name,
+                risk_category,
+                call_count,
+                last_call: last_call.map(|t| t.to_rfc3339()),
+            },
+        )
+        .collect();
 
     // Edges: app → backend
     let app_backend_edges: Vec<(Option<String>, String, i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
@@ -282,18 +307,21 @@ async fn usage_graph(
     .fetch_all(&state.db)
     .await?;
 
-    let app_to_backend: Vec<GraphEdge> = app_backend_edges.into_iter().filter_map(|(app, backend, cnt, last)| {
-        Some(GraphEdge {
-            source: app?,
-            target: backend,
-            call_count: cnt,
-            last_call: last.map(|t| t.to_rfc3339()),
+    let app_to_backend: Vec<GraphEdge> = app_backend_edges
+        .into_iter()
+        .filter_map(|(app, backend, cnt, last)| {
+            Some(GraphEdge {
+                source: app?,
+                target: backend,
+                call_count: cnt,
+                last_call: last.map(|t| t.to_rfc3339()),
+            })
         })
-    }).collect();
+        .collect();
 
     // Edges: backend → tool (from registry + audit counts)
-    let backend_tool_edges: Vec<(String, String, i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        &format!(
+    let backend_tool_edges: Vec<(String, String, i64, Option<chrono::DateTime<chrono::Utc>>)> =
+        sqlx::query_as(&format!(
             "SELECT b.name as backend_name, t.tool_name,
                     COALESCE(ae.cnt, 0) as call_count, ae.last_call
              FROM tool_registry t
@@ -308,20 +336,20 @@ async fn usage_graph(
              ORDER BY call_count DESC
              LIMIT 50",
             interval
-        )
-    )
-    .bind(target_user)
-    .fetch_all(&state.db)
-    .await?;
+        ))
+        .bind(target_user)
+        .fetch_all(&state.db)
+        .await?;
 
-    let backend_to_tool: Vec<GraphEdge> = backend_tool_edges.into_iter().map(|(backend, tool, cnt, last)| {
-        GraphEdge {
+    let backend_to_tool: Vec<GraphEdge> = backend_tool_edges
+        .into_iter()
+        .map(|(backend, tool, cnt, last)| GraphEdge {
             source: backend,
             target: tool,
             call_count: cnt,
             last_call: last.map(|t| t.to_rfc3339()),
-        }
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(UsageGraph {
         users,
@@ -375,7 +403,7 @@ async fn usage_connections(
     let rows: Vec<(Option<String>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
         "SELECT application, MAX(last_used) FROM api_keys
          WHERE ($1::uuid IS NULL OR user_id = $1) AND application IS NOT NULL
-         GROUP BY application"
+         GROUP BY application",
     )
     .bind(target_user)
     .fetch_all(&state.db)
@@ -384,15 +412,18 @@ async fn usage_connections(
     let now = chrono::Utc::now();
     let five_min_ago = now - chrono::Duration::minutes(5);
 
-    let result: Vec<ConnectionStatus> = rows.into_iter().filter_map(|(app, last_used)| {
-        let app = app?;
-        let is_connected = last_used.map(|t| t > five_min_ago).unwrap_or(false);
-        Some(ConnectionStatus {
-            application: app,
-            is_connected,
-            last_seen: last_used.map(|t| t.to_rfc3339()),
+    let result: Vec<ConnectionStatus> = rows
+        .into_iter()
+        .filter_map(|(app, last_used)| {
+            let app = app?;
+            let is_connected = last_used.map(|t| t > five_min_ago).unwrap_or(false);
+            Some(ConnectionStatus {
+                application: app,
+                is_connected,
+                last_seen: last_used.map(|t| t.to_rfc3339()),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(result))
 }

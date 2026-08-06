@@ -29,15 +29,9 @@ pub enum AgentMessage {
         backends: Vec<AgentSubBackendInfo>,
     },
     #[serde(rename = "tool_result")]
-    ToolResult {
-        request_id: String,
-        result: Value,
-    },
+    ToolResult { request_id: String, result: Value },
     #[serde(rename = "tool_error")]
-    ToolError {
-        request_id: String,
-        error: String,
-    },
+    ToolError { request_id: String, error: String },
     #[serde(rename = "ping")]
     Ping,
 }
@@ -244,7 +238,11 @@ async fn handle_agent_connection(state: AppState, mut socket: WebSocket, token: 
         match tokio::time::timeout_at(deadline, socket.recv()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
                 match serde_json::from_str::<AgentMessage>(&text) {
-                    Ok(AgentMessage::Register { agent_id, tools, backends }) => break (agent_id, tools, backends),
+                    Ok(AgentMessage::Register {
+                        agent_id,
+                        tools,
+                        backends,
+                    }) => break (agent_id, tools, backends),
                     Ok(_) => continue,
                     Err(e) => {
                         tracing::debug!(error = %e, "Ignoring non-register message");

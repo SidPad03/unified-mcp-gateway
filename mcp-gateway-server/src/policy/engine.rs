@@ -39,7 +39,10 @@ impl PolicyEngine {
     pub fn new(rules: Vec<PolicyRule>, default_decision: PolicyDecision) -> Self {
         let mut rules = rules;
         rules.sort_by_key(|r| r.priority);
-        Self { rules, default_decision }
+        Self {
+            rules,
+            default_decision,
+        }
     }
 
     pub fn default_decision(&self) -> &PolicyDecision {
@@ -90,12 +93,11 @@ impl PolicyEngine {
         }
 
         // Resolve the most permissive default_policy across all roles
-        let default_rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT default_policy FROM roles WHERE name = ANY($1)"
-        )
-        .bind(role_names)
-        .fetch_all(pool)
-        .await?;
+        let default_rows: Vec<(String,)> =
+            sqlx::query_as("SELECT default_policy FROM roles WHERE name = ANY($1)")
+                .bind(role_names)
+                .fetch_all(pool)
+                .await?;
 
         let default_decision = if default_rows.iter().any(|(dp,)| dp == "allow") {
             PolicyDecision::Allow
@@ -117,22 +119,33 @@ impl PolicyEngine {
 
         let rules: Vec<PolicyRule> = rows
             .into_iter()
-            .map(|(id, name, priority, tool_pattern, decision_str, reason, risk_cats, application_match)| {
-                let decision = match decision_str.as_str() {
-                    "deny" => PolicyDecision::Deny,
-                    _ => PolicyDecision::Allow,
-                };
-                PolicyRule {
-                    policy_id: id.to_string(),
+            .map(
+                |(
+                    id,
                     name,
                     priority,
                     tool_pattern,
-                    decision,
+                    decision_str,
                     reason,
-                    risk_categories: risk_cats.unwrap_or_default(),
+                    risk_cats,
                     application_match,
-                }
-            })
+                )| {
+                    let decision = match decision_str.as_str() {
+                        "deny" => PolicyDecision::Deny,
+                        _ => PolicyDecision::Allow,
+                    };
+                    PolicyRule {
+                        policy_id: id.to_string(),
+                        name,
+                        priority,
+                        tool_pattern,
+                        decision,
+                        reason,
+                        risk_categories: risk_cats.unwrap_or_default(),
+                        application_match,
+                    }
+                },
+            )
             .collect();
 
         Ok(Self::new(rules, default_decision))
@@ -140,7 +153,9 @@ impl PolicyEngine {
 }
 
 pub fn matches_glob(pattern: &str, value: &str) -> bool {
-    pattern.split(',').any(|p| matches_single_glob(p.trim(), value))
+    pattern
+        .split(',')
+        .any(|p| matches_single_glob(p.trim(), value))
 }
 
 fn matches_single_glob(pattern: &str, value: &str) -> bool {

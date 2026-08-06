@@ -26,7 +26,9 @@ impl Redactor {
     pub fn redact(&self, input: &str) -> String {
         let mut result = input.to_string();
         for (pattern, replacement) in &self.patterns {
-            result = pattern.replace_all(&result, replacement.as_str()).to_string();
+            result = pattern
+                .replace_all(&result, replacement.as_str())
+                .to_string();
         }
         result
     }
@@ -39,14 +41,20 @@ mod tests {
     #[test]
     fn redacts_bare_gateway_key_in_json() {
         let out = Redactor::new().redact(r#"{"arg":"mcpgw_abcdef0123456789abcdef"}"#);
-        assert!(!out.contains("mcpgw_abcdef"), "bare mcpgw_ key leaked: {out}");
+        assert!(
+            !out.contains("mcpgw_abcdef"),
+            "bare mcpgw_ key leaked: {out}"
+        );
         assert!(out.contains("[REDACTED_API_KEY]"));
     }
 
     #[test]
     fn redacts_quoted_json_credential_field() {
         let out = Redactor::new().redact(r#"{"password":"hunter2secret"}"#);
-        assert!(!out.contains("hunter2secret"), "json password leaked: {out}");
+        assert!(
+            !out.contains("hunter2secret"),
+            "json password leaked: {out}"
+        );
         assert!(out.contains("[REDACTED_CREDENTIAL]"));
     }
 }

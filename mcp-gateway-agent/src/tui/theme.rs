@@ -10,7 +10,9 @@ pub const TEXT_NORMAL: Color = Color::White;
 pub const BORDER: Color = Color::DarkGray;
 
 pub fn title_style() -> Style {
-    Style::default().fg(BRAND_PRIMARY).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(BRAND_PRIMARY)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn status_ok() -> Style {
@@ -18,7 +20,9 @@ pub fn status_ok() -> Style {
 }
 
 pub fn status_warn() -> Style {
-    Style::default().fg(STATUS_WARN).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(STATUS_WARN)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn status_err() -> Style {
@@ -38,7 +42,9 @@ pub fn border() -> Style {
 }
 
 pub fn highlight() -> Style {
-    Style::default().fg(BRAND_ACCENT).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(BRAND_ACCENT)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub const ASCII_LOGO: &str = r#"  __  __  ___ ___    ___      _

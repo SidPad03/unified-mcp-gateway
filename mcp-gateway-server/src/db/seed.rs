@@ -1,5 +1,5 @@
-use argon2::{Argon2, PasswordHasher};
 use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHasher};
 use rand::rngs::OsRng;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -15,7 +15,7 @@ async fn seed_roles(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO roles (role_id, name, description, permissions, is_system, default_policy)
          VALUES ($1, $2, $3, '[]'::jsonb, TRUE, 'allow')
-         ON CONFLICT (name) DO NOTHING"
+         ON CONFLICT (name) DO NOTHING",
     )
     .bind(Uuid::new_v4())
     .bind("owner")
@@ -27,11 +27,10 @@ async fn seed_roles(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 async fn seed_admin_user(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let existing: Option<(String,)> = sqlx::query_as(
-        "SELECT username FROM users WHERE username = 'admin'"
-    )
-    .fetch_optional(pool)
-    .await?;
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT username FROM users WHERE username = 'admin'")
+            .fetch_optional(pool)
+            .await?;
 
     if existing.is_some() {
         return Ok(());
@@ -65,16 +64,15 @@ async fn seed_admin_user(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    let owner_role: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT role_id FROM roles WHERE name = 'owner'"
-    )
-    .fetch_optional(pool)
-    .await?;
+    let owner_role: Option<(Uuid,)> =
+        sqlx::query_as("SELECT role_id FROM roles WHERE name = 'owner'")
+            .fetch_optional(pool)
+            .await?;
 
     if let Some((role_id,)) = owner_role {
         sqlx::query(
             "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)
-             ON CONFLICT DO NOTHING"
+             ON CONFLICT DO NOTHING",
         )
         .bind(user_id)
         .bind(role_id)
@@ -99,21 +97,18 @@ async fn seed_admin_user(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 async fn seed_default_policies(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let existing: Option<(i64,)> = sqlx::query_as(
-        "SELECT COUNT(*) FROM policies"
-    )
-    .fetch_optional(pool)
-    .await?;
+    let existing: Option<(i64,)> = sqlx::query_as("SELECT COUNT(*) FROM policies")
+        .fetch_optional(pool)
+        .await?;
 
     if existing.map(|(c,)| c).unwrap_or(0) > 0 {
         return Ok(());
     }
 
-    let owner_role: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT role_id FROM roles WHERE name = 'owner'"
-    )
-    .fetch_optional(pool)
-    .await?;
+    let owner_role: Option<(Uuid,)> =
+        sqlx::query_as("SELECT role_id FROM roles WHERE name = 'owner'")
+            .fetch_optional(pool)
+            .await?;
 
     let owner_id = owner_role.map(|(id,)| id);
 
@@ -136,8 +131,13 @@ async fn seed_default_policies(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
 
     if let Some(role_id) = owner_id {
-        sqlx::query("INSERT INTO role_policies (role_id, policy_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
-            .bind(role_id).bind(deny_id).execute(pool).await?;
+        sqlx::query(
+            "INSERT INTO role_policies (role_id, policy_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(role_id)
+        .bind(deny_id)
+        .execute(pool)
+        .await?;
     }
 
     // Policy 2: Allow everything else for owner (catch-all after the deny).
@@ -156,8 +156,13 @@ async fn seed_default_policies(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
 
     if let Some(role_id) = owner_id {
-        sqlx::query("INSERT INTO role_policies (role_id, policy_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
-            .bind(role_id).bind(allow_id).execute(pool).await?;
+        sqlx::query(
+            "INSERT INTO role_policies (role_id, policy_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(role_id)
+        .bind(allow_id)
+        .execute(pool)
+        .await?;
     }
 
     tracing::info!("Seeded default policies (allow all + deny destructive)");

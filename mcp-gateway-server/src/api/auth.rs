@@ -1,23 +1,18 @@
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
-use axum::{
-    extract::State,
-    http::header,
-    routing::post,
-    Json, Router,
-};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use axum::{extract::State, http::header, routing::post, Json, Router};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use axum::extract::FromRef;
 use crate::{AppError, AppState};
+use axum::extract::FromRef;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: String,       // user_id
+    pub sub: String, // user_id
     pub username: String,
     pub roles: Vec<String>,
     pub exp: usize,
@@ -210,13 +205,12 @@ where
         // Re-validate against the DB on every request so a revoked/deactivated
         // user or a role change takes effect immediately instead of persisting
         // for the token's lifetime (and surviving indefinitely via /refresh).
-        let user_row: Option<(bool, bool)> = sqlx::query_as(
-            "SELECT is_active, must_change_password FROM users WHERE user_id = $1",
-        )
-        .bind(user_id)
-        .fetch_optional(&app_state.db)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        let user_row: Option<(bool, bool)> =
+            sqlx::query_as("SELECT is_active, must_change_password FROM users WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_optional(&app_state.db)
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?;
 
         let (is_active, must_change_password) =
             user_row.ok_or_else(|| AppError::Unauthorized("User no longer exists".into()))?;
@@ -286,13 +280,12 @@ pub(crate) async fn resolve_api_key(raw_key: &str, state: &AppState) -> Result<C
     }
 
     // Load user
-    let user: Option<(String, bool)> = sqlx::query_as(
-        "SELECT username, is_active FROM users WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+    let user: Option<(String, bool)> =
+        sqlx::query_as("SELECT username, is_active FROM users WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
 
     let (username, user_active) =
         user.ok_or_else(|| AppError::Unauthorized("User not found for API key".into()))?;
@@ -413,8 +406,16 @@ mod tests {
         ));
 
         // Wrong method on my own record — blocked.
-        assert!(!is_self_password_change(&Method::GET, &format!("/users/{}", me), me));
-        assert!(!is_self_password_change(&Method::DELETE, &format!("/users/{}", me), me));
+        assert!(!is_self_password_change(
+            &Method::GET,
+            &format!("/users/{}", me),
+            me
+        ));
+        assert!(!is_self_password_change(
+            &Method::DELETE,
+            &format!("/users/{}", me),
+            me
+        ));
 
         // Someone else's record — blocked.
         assert!(!is_self_password_change(
@@ -424,7 +425,11 @@ mod tests {
         ));
 
         // A different endpoint entirely — blocked.
-        assert!(!is_self_password_change(&Method::PATCH, "/policies/abc", me));
+        assert!(!is_self_password_change(
+            &Method::PATCH,
+            "/policies/abc",
+            me
+        ));
 
         // The un-stripped, /api/v1-prefixed path must NOT match — this is the
         // exact comparison that broke the flow.

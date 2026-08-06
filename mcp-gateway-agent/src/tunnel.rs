@@ -99,20 +99,32 @@ pub async fn run_tunnel(
             "Connecting to gateway..."
         );
 
-        emit(&events, AgentEvent::ConnectionStatus(ConnectionState::Connecting));
-        emit(&events, AgentEvent::Log {
-            level: LogLevel::Info,
-            message: format!("Connecting to {} (attempt {})...", config.agent.gateway_url, attempt),
-        });
+        emit(
+            &events,
+            AgentEvent::ConnectionStatus(ConnectionState::Connecting),
+        );
+        emit(
+            &events,
+            AgentEvent::Log {
+                level: LogLevel::Info,
+                message: format!(
+                    "Connecting to {} (attempt {})...",
+                    config.agent.gateway_url, attempt
+                ),
+            },
+        );
 
         let started = std::time::Instant::now();
         match connect_and_run(config, &manager, &events).await {
             Ok(()) => {
                 tracing::info!("Connection closed cleanly, reconnecting...");
-                emit(&events, AgentEvent::Log {
-                    level: LogLevel::Info,
-                    message: "Connection closed, reconnecting...".to_string(),
-                });
+                emit(
+                    &events,
+                    AgentEvent::Log {
+                        level: LogLevel::Info,
+                        message: "Connection closed, reconnecting...".to_string(),
+                    },
+                );
                 // Only reset the backoff if the connection actually stayed up: a
                 // gateway that accepts then immediately closes returns Ok too, and
                 // resetting here would busy-reconnect ~once/sec forever.
@@ -127,13 +139,21 @@ pub async fn run_tunnel(
                     retry_in = ?delay,
                     "Connection failed, will retry"
                 );
-                emit(&events, AgentEvent::ConnectionStatus(
-                    ConnectionState::Reconnecting(attempt),
-                ));
-                emit(&events, AgentEvent::Log {
-                    level: LogLevel::Error,
-                    message: format!("Connection failed: {}. Retrying in {}s", e, delay.as_secs()),
-                });
+                emit(
+                    &events,
+                    AgentEvent::ConnectionStatus(ConnectionState::Reconnecting(attempt)),
+                );
+                emit(
+                    &events,
+                    AgentEvent::Log {
+                        level: LogLevel::Error,
+                        message: format!(
+                            "Connection failed: {}. Retrying in {}s",
+                            e,
+                            delay.as_secs()
+                        ),
+                    },
+                );
             }
         }
 
@@ -160,12 +180,8 @@ async fn connect_and_run(
                 .with_custom_certificate_verifier(Arc::new(NoVerifier))
                 .with_no_client_auth();
             let connector = tokio_tungstenite::Connector::Rustls(Arc::new(tls_config));
-            tokio_tungstenite::connect_async_tls_with_config(
-                &url,
-                None,
-                false,
-                Some(connector),
-            ).await
+            tokio_tungstenite::connect_async_tls_with_config(&url, None, false, Some(connector))
+                .await
         } else {
             tokio_tungstenite::connect_async(&url).await
         }
@@ -177,10 +193,13 @@ async fn connect_and_run(
         .map_err(|e| anyhow::anyhow!("WebSocket connect failed: {}", e))?;
 
     tracing::info!("WebSocket connected to gateway");
-    emit(events, AgentEvent::Log {
-        level: LogLevel::Info,
-        message: "WebSocket connected to gateway".to_string(),
-    });
+    emit(
+        events,
+        AgentEvent::Log {
+            level: LogLevel::Info,
+            message: "WebSocket connected to gateway".to_string(),
+        },
+    );
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -205,10 +224,13 @@ async fn connect_and_run(
     write.send(Message::Text(register_json.into())).await?;
 
     tracing::info!(tool_count = tools.len(), "Sent register message");
-    emit(events, AgentEvent::Log {
-        level: LogLevel::Info,
-        message: format!("Registered {} tools with gateway", tools.len()),
-    });
+    emit(
+        events,
+        AgentEvent::Log {
+            level: LogLevel::Info,
+            message: format!("Registered {} tools with gateway", tools.len()),
+        },
+    );
 
     // Wait for registered confirmation (10s timeout)
     let confirm_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -218,7 +240,10 @@ async fn connect_and_run(
                 match serde_json::from_str::<GatewayMessage>(&text) {
                     Ok(GatewayMessage::Registered { backend_id }) => break backend_id,
                     Ok(GatewayMessage::Error { message }) => {
-                        return Err(anyhow::anyhow!("Gateway rejected registration: {}", message));
+                        return Err(anyhow::anyhow!(
+                            "Gateway rejected registration: {}",
+                            message
+                        ));
                     }
                     _ => continue,
                 }
@@ -226,15 +251,25 @@ async fn connect_and_run(
             Ok(Some(Ok(_))) => continue,
             Ok(Some(Err(e))) => return Err(anyhow::anyhow!("WS error: {}", e)),
             Ok(None) => return Err(anyhow::anyhow!("Connection closed before registration")),
-            Err(_) => return Err(anyhow::anyhow!("Timeout waiting for registration confirmation")),
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "Timeout waiting for registration confirmation"
+                ))
+            }
         }
     };
 
     tracing::info!(backend_id = %backend_id, "Registered with gateway");
-    emit(events, AgentEvent::Registered {
-        backend_id: backend_id.clone(),
-    });
-    emit(events, AgentEvent::ConnectionStatus(ConnectionState::Connected));
+    emit(
+        events,
+        AgentEvent::Registered {
+            backend_id: backend_id.clone(),
+        },
+    );
+    emit(
+        events,
+        AgentEvent::ConnectionStatus(ConnectionState::Connected),
+    );
 
     // Set up write channel: tool execution tasks send responses through this
     let (write_tx, mut write_rx) = mpsc::channel::<Message>(64);

@@ -6,8 +6,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{AppError, AppState};
 use super::auth::Claims;
+use crate::{AppError, AppState};
 
 #[derive(sqlx::FromRow)]
 struct AuditEventRow {
@@ -148,9 +148,8 @@ async fn query_audit(
     }
 
     // Count query (same filters)
-    let mut count_qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
-        "SELECT COUNT(*) FROM audit_events WHERE 1=1"
-    );
+    let mut count_qb =
+        sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT COUNT(*) FROM audit_events WHERE 1=1");
     if let Some(ref tool) = query.tool_name {
         count_qb.push(" AND tool_name ILIKE '%' || ");
         count_qb.push_bind(tool.clone());
@@ -201,8 +200,9 @@ async fn query_audit(
     let events: Vec<AuditEventRow> = qb.build_query_as().fetch_all(&state.db).await?;
     let total: (i64,) = count_qb.build_query_as().fetch_one(&state.db).await?;
 
-    let result: Vec<AuditEventResponse> = events.into_iter().map(|e| {
-        AuditEventResponse {
+    let result: Vec<AuditEventResponse> = events
+        .into_iter()
+        .map(|e| AuditEventResponse {
             event_id: e.event_id.to_string(),
             timestamp: e.timestamp.to_rfc3339(),
             trace_id: e.trace_id.to_string(),
@@ -222,8 +222,8 @@ async fn query_audit(
             risk_flags: e.risk_flags,
             metadata: e.metadata,
             application: e.application,
-        }
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(AuditExportResponse {
         events: result,
@@ -248,8 +248,9 @@ async fn export_audit(
 
     let total = events.len() as i64;
 
-    let result: Vec<AuditEventResponse> = events.into_iter().map(|e| {
-        AuditEventResponse {
+    let result: Vec<AuditEventResponse> = events
+        .into_iter()
+        .map(|e| AuditEventResponse {
             event_id: e.event_id.to_string(),
             timestamp: e.timestamp.to_rfc3339(),
             trace_id: e.trace_id.to_string(),
@@ -269,8 +270,8 @@ async fn export_audit(
             risk_flags: e.risk_flags,
             metadata: e.metadata,
             application: e.application,
-        }
-    }).collect();
+        })
+        .collect();
 
     Ok(Json(AuditExportResponse {
         events: result,
@@ -337,38 +338,46 @@ async fn audit_stats(
     _claims: Claims,
 ) -> Result<Json<AuditStats>, AppError> {
     let (total_events,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_events")
-        .fetch_one(&state.db).await?;
+        .fetch_one(&state.db)
+        .await?;
 
     let (events_24h,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours'"
-    ).fetch_one(&state.db).await?;
+        "SELECT COUNT(*) FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours'",
+    )
+    .fetch_one(&state.db)
+    .await?;
 
-    let (success_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_events WHERE status = 'success'"
-    ).fetch_one(&state.db).await?;
+    let (success_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE status = 'success'")
+            .fetch_one(&state.db)
+            .await?;
 
     // `tool_error` counts as an error. A tool that returned isError=true failed,
     // and leaving it out made the error total read as zero while the timeline
     // showed failures.
-    let (error_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_events WHERE status IN ('error', 'tool_error')"
-    ).fetch_one(&state.db).await?;
+    let (error_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE status IN ('error', 'tool_error')")
+            .fetch_one(&state.db)
+            .await?;
 
-    let (denied_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_events WHERE status = 'denied'"
-    ).fetch_one(&state.db).await?;
+    let (denied_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE status = 'denied'")
+            .fetch_one(&state.db)
+            .await?;
 
-    let avg_duration: Option<(Option<f64>,)> = sqlx::query_as(
-        "SELECT AVG(duration_ms) FROM audit_events WHERE duration_ms IS NOT NULL"
-    ).fetch_optional(&state.db).await?;
+    let avg_duration: Option<(Option<f64>,)> =
+        sqlx::query_as("SELECT AVG(duration_ms) FROM audit_events WHERE duration_ms IS NOT NULL")
+            .fetch_optional(&state.db)
+            .await?;
 
     let top_tools: Vec<(String, i64)> = sqlx::query_as(
         "SELECT tool_name, COUNT(*) as cnt FROM audit_events GROUP BY tool_name ORDER BY cnt DESC LIMIT 10"
     ).fetch_all(&state.db).await?;
 
-    let status_breakdown: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT status, COUNT(*) FROM audit_events GROUP BY status"
-    ).fetch_all(&state.db).await?;
+    let status_breakdown: Vec<(String, i64)> =
+        sqlx::query_as("SELECT status, COUNT(*) FROM audit_events GROUP BY status")
+            .fetch_all(&state.db)
+            .await?;
 
     let hourly_volume: Vec<(chrono::DateTime<chrono::Utc>, i64)> = sqlx::query_as(
         "SELECT date_trunc('hour', timestamp) as hr, COUNT(*) FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours' GROUP BY hr ORDER BY hr"
@@ -381,8 +390,20 @@ async fn audit_stats(
         error_count,
         denied_count,
         avg_duration_ms: avg_duration.and_then(|(v,)| v).unwrap_or(0.0),
-        top_tools: top_tools.into_iter().map(|(tool_name, count)| ToolStat { tool_name, count }).collect(),
-        status_breakdown: status_breakdown.into_iter().map(|(status, count)| StatusStat { status, count }).collect(),
-        hourly_volume: hourly_volume.into_iter().map(|(hour, count)| HourlyStat { hour: hour.to_rfc3339(), count }).collect(),
+        top_tools: top_tools
+            .into_iter()
+            .map(|(tool_name, count)| ToolStat { tool_name, count })
+            .collect(),
+        status_breakdown: status_breakdown
+            .into_iter()
+            .map(|(status, count)| StatusStat { status, count })
+            .collect(),
+        hourly_volume: hourly_volume
+            .into_iter()
+            .map(|(hour, count)| HourlyStat {
+                hour: hour.to_rfc3339(),
+                count,
+            })
+            .collect(),
     }))
 }

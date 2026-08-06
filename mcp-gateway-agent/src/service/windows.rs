@@ -11,16 +11,26 @@ pub fn install() -> anyhow::Result<()> {
     let status = std::process::Command::new("schtasks")
         .args([
             "/Create",
-            "/TN", TASK_NAME,
-            "/TR", &format!("cmd /C \"{bin}\" run --foreground >> \"{}\" 2>&1", stdout_log.display()),
-            "/SC", "ONLOGON",
-            "/RL", "LIMITED",
+            "/TN",
+            TASK_NAME,
+            "/TR",
+            &format!(
+                "cmd /C \"{bin}\" run --foreground >> \"{}\" 2>&1",
+                stdout_log.display()
+            ),
+            "/SC",
+            "ONLOGON",
+            "/RL",
+            "LIMITED",
             "/F",
         ])
         .status()?;
 
     if !status.success() {
-        anyhow::bail!("schtasks /Create failed with exit code: {:?}", status.code());
+        anyhow::bail!(
+            "schtasks /Create failed with exit code: {:?}",
+            status.code()
+        );
     }
 
     // Start the task immediately
@@ -76,7 +86,10 @@ pub fn logs() -> anyhow::Result<()> {
     let stdout_log = crate::config::logs_dir().join("agent.stdout.log");
 
     if !stdout_log.exists() {
-        println!("No log files found at {}", crate::config::logs_dir().display());
+        println!(
+            "No log files found at {}",
+            crate::config::logs_dir().display()
+        );
         println!("Logs are created when the agent runs as a background service.");
         println!("Install the service with: mcp-gateway-agent service install");
         return Ok(());
@@ -89,7 +102,10 @@ pub fn logs() -> anyhow::Result<()> {
     let status = std::process::Command::new("powershell")
         .args([
             "-Command",
-            &format!("Get-Content -Path '{}' -Tail 50 -Wait", stdout_log.display()),
+            &format!(
+                "Get-Content -Path '{}' -Tail 50 -Wait",
+                stdout_log.display()
+            ),
         ])
         .status()?;
 

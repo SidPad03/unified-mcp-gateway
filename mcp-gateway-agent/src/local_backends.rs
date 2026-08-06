@@ -107,8 +107,9 @@ impl LocalBackendManager {
 
     /// Sub-backend metadata for the register message.
     pub fn sub_backends(&self) -> Vec<SubBackendInfo> {
-        self.configs.iter().map(|c| {
-            SubBackendInfo {
+        self.configs
+            .iter()
+            .map(|c| SubBackendInfo {
                 name: c.name.clone(),
                 transport: c.transport.clone(),
                 command: c.command.clone(),
@@ -116,8 +117,8 @@ impl LocalBackendManager {
                 url: c.url.clone(),
                 env_keys: c.env.keys().cloned().collect(),
                 tool_count: self.tool_counts.get(&c.name).copied().unwrap_or(0),
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Route a tool call to the correct local backend.
@@ -528,8 +529,7 @@ impl LocalBackendManager {
                     description,
                     input_schema,
                 };
-                self.tool_routes
-                    .insert(namespaced, config.name.clone());
+                self.tool_routes.insert(namespaced, config.name.clone());
                 self.all_tools.push(tool);
                 tool_count += 1;
             }

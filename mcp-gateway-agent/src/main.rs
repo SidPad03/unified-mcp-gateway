@@ -38,14 +38,12 @@ async fn main() -> anyhow::Result<()> {
             init_logging();
             update::run_update_command(check_only, yes).await
         }
-        Commands::Service { action } => {
-            match action {
-                ServiceAction::Install => service::install(),
-                ServiceAction::Uninstall => service::uninstall(),
-                ServiceAction::Status => service::status(),
-                ServiceAction::Logs => service::logs(),
-            }
-        }
+        Commands::Service { action } => match action {
+            ServiceAction::Install => service::install(),
+            ServiceAction::Uninstall => service::uninstall(),
+            ServiceAction::Status => service::status(),
+            ServiceAction::Logs => service::logs(),
+        },
         Commands::Logs { lines } => run_logs(lines),
         Commands::Uninstall => run_uninstall(),
         Commands::Version => {
@@ -59,8 +57,7 @@ async fn main() -> anyhow::Result<()> {
 fn init_logging() {
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "mcp_gateway_agent=info".into()),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "mcp_gateway_agent=info".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -137,7 +134,10 @@ fn run_daemonized(config_path: Option<String>) -> anyhow::Result<()> {
     // Check if already running
     if let Some(pid) = read_pid_file() {
         if is_process_running(pid) {
-            println!("Agent is already running (PID {}). Use 'restart' to restart.", pid);
+            println!(
+                "Agent is already running (PID {}). Use 'restart' to restart.",
+                pid
+            );
             return Ok(());
         }
         // Stale PID file
@@ -152,9 +152,13 @@ fn run_daemonized(config_path: Option<String>) -> anyhow::Result<()> {
     let stderr_path = logs.join("agent.stderr.log");
 
     let stdout_file = std::fs::OpenOptions::new()
-        .create(true).append(true).open(&stdout_path)?;
+        .create(true)
+        .append(true)
+        .open(&stdout_path)?;
     let stderr_file = std::fs::OpenOptions::new()
-        .create(true).append(true).open(&stderr_path)?;
+        .create(true)
+        .append(true)
+        .open(&stderr_path)?;
 
     let mut cmd = std::process::Command::new(&exe);
     cmd.arg("run").arg("--foreground");
@@ -265,7 +269,9 @@ async fn run_dashboard(config_path: Option<String>) -> anyhow::Result<()> {
 
     // Emit initial backend info
     for backend in &config.backends {
-        let tool_count = manager.all_tools().iter()
+        let tool_count = manager
+            .all_tools()
+            .iter()
             .filter(|t| t.name.starts_with(&format!("{}_", backend.name)))
             .count();
         let _ = event_tx.send(tui::events::AgentEvent::BackendStarted {
@@ -296,12 +302,13 @@ fn load_config(config_path: Option<String>) -> anyhow::Result<config::Config> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(config::default_config_path);
 
-    let config_content = std::fs::read_to_string(&config_path)
-        .map_err(|e| anyhow::anyhow!(
+    let config_content = std::fs::read_to_string(&config_path).map_err(|e| {
+        anyhow::anyhow!(
             "Failed to read config file '{}': {}. Run 'mcp-gateway-agent setup' to create one.",
             config_path.display(),
             e
-        ))?;
+        )
+    })?;
 
     let config: config::Config = toml::from_str(&config_content)
         .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
@@ -336,9 +343,7 @@ fn run_logs(lines: u32) -> anyhow::Result<()> {
             args.push(stderr_log.to_string_lossy().to_string());
         }
 
-        let status = std::process::Command::new("tail")
-            .args(&args)
-            .status()?;
+        let status = std::process::Command::new("tail").args(&args).status()?;
 
         if !status.success() {
             eprintln!("tail exited with: {:?}", status.code());
@@ -383,8 +388,14 @@ fn run_uninstall() -> anyhow::Result<()> {
     };
 
     println!("This will remove:");
-    println!("  - Config, cache and logs: {}", config::config_dir().display());
-    println!("  - Binary: {}", config::bin_dir().join("mcp-gateway-agent").display());
+    println!(
+        "  - Config, cache and logs: {}",
+        config::config_dir().display()
+    );
+    println!(
+        "  - Binary: {}",
+        config::bin_dir().join("mcp-gateway-agent").display()
+    );
     println!("  - {} (if installed)", service_type);
     println!("  - PATH entry from shell config");
     print!("\nAre you sure? [y/N] ");
