@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // release metadata deserialized from the API; some fields not read yet
 pub struct AgentRelease {
     pub version: String,
     pub release_notes: String,
@@ -9,6 +10,7 @@ pub struct AgentRelease {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // asset metadata deserialized from the API; some fields not read yet
 pub struct ReleaseAsset {
     pub name: String,
     pub arch: String,
@@ -71,7 +73,7 @@ pub async fn check_update(
     let client = build_http_client(config.agent.tls_skip_verify)?;
     let resp = client
         .get(&url)
-        .header("Authorization", format!("Bearer {}", &config.agent.api_key))
+        .header("Authorization", format!("Bearer {}", config.agent.api_key))
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await?;
@@ -114,7 +116,7 @@ pub async fn download_and_apply(
     let client = build_http_client(config.agent.tls_skip_verify)?;
     let resp = client
         .get(&download_url)
-        .header("Authorization", format!("Bearer {}", &config.agent.api_key))
+        .header("Authorization", format!("Bearer {}", config.agent.api_key))
         .timeout(std::time::Duration::from_secs(300))
         .send()
         .await?;

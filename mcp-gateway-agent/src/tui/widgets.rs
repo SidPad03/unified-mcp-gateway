@@ -124,6 +124,7 @@ pub fn validation_indicator(state: ValidationState) -> Span<'static> {
     }
 }
 
+#[allow(dead_code)] // TUI helper, not currently wired into any view
 pub fn status_line<'a>(label: &'a str, connected: bool) -> Line<'a> {
     let indicator = if connected {
         Span::styled("● ", theme::status_ok())
@@ -136,6 +137,7 @@ pub fn status_line<'a>(label: &'a str, connected: bool) -> Line<'a> {
     ])
 }
 
+#[allow(dead_code)] // TUI helper, not currently wired into any view
 pub fn key_hint(key: &str, action: &str) -> Span<'static> {
     Span::styled(
         format!("{}:{}", key, action),

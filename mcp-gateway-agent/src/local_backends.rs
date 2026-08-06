@@ -147,6 +147,7 @@ impl LocalBackendManager {
         }
     }
 
+    #[allow(dead_code)] // graceful backend shutdown; not yet wired into agent exit
     pub async fn shutdown_all(&mut self) {
         for (name, handle) in self.backends.drain() {
             match handle {
@@ -356,11 +357,14 @@ impl LocalBackendManager {
                         Ok(v) => v,
                         Err(_) => continue,
                     };
-                    // Skip notifications (no id)
-                    if parsed.get("id").is_none()
-                        || parsed.get("id") == Some(&Value::Null)
-                    {
-                        continue;
+                    // Accept only the response whose id matches our request. This
+                    // skips notifications (no id) AND server-initiated requests, which
+                    // also carry an id (e.g. sampling/createMessage, roots/list) and
+                    // would otherwise be mistaken for our tool response, returning
+                    // garbage and desyncing the pipe for every later call.
+                    match parsed.get("id") {
+                        Some(Value::String(resp_id)) if resp_id == &id => {}
+                        _ => continue,
                     }
                     if let Some(error) = parsed.get("error") {
                         let msg = error

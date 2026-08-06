@@ -69,6 +69,10 @@ const PONG_TIMEOUT: Duration = Duration::from_secs(45);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// WebSocket connect timeout.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Minimum time a connection must stay up before it counts as "stable" and resets
+/// the reconnect backoff. Guards against a gateway that accepts then immediately
+/// closes (which also returns Ok) triggering a ~1/sec reconnect storm.
+const MIN_STABLE_UPTIME: Duration = Duration::from_secs(30);
 
 // ── Tunnel with auto-reconnect ──────────────────────────────────────────
 
@@ -101,6 +105,7 @@ pub async fn run_tunnel(
             message: format!("Connecting to {} (attempt {})...", config.agent.gateway_url, attempt),
         });
 
+        let started = std::time::Instant::now();
         match connect_and_run(config, &manager, &events).await {
             Ok(()) => {
                 tracing::info!("Connection closed cleanly, reconnecting...");
@@ -108,8 +113,13 @@ pub async fn run_tunnel(
                     level: LogLevel::Info,
                     message: "Connection closed, reconnecting...".to_string(),
                 });
-                delay = Duration::from_secs(1);
-                attempt = 0;
+                // Only reset the backoff if the connection actually stayed up: a
+                // gateway that accepts then immediately closes returns Ok too, and
+                // resetting here would busy-reconnect ~once/sec forever.
+                if started.elapsed() >= MIN_STABLE_UPTIME {
+                    delay = Duration::from_secs(1);
+                    attempt = 0;
+                }
             }
             Err(e) => {
                 tracing::error!(

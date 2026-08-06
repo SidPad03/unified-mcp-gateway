@@ -40,6 +40,7 @@ pub struct Dashboard {
     pub should_quit: bool,
     pub should_setup: bool,
     pub should_update: bool,
+    #[allow(dead_code)] // reserved for an uptime display
     start_time: Instant,
 }
 
@@ -82,11 +83,10 @@ impl Dashboard {
                     self.log_scroll -= 1;
                 }
             }
-            KeyCode::Down => {
-                if self.log_scroll < self.logs.len().saturating_sub(1) {
+            KeyCode::Down
+                if self.log_scroll < self.logs.len().saturating_sub(1) => {
                     self.log_scroll += 1;
                 }
-            }
             _ => {}
         }
     }

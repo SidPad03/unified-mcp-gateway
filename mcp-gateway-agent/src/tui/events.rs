@@ -20,6 +20,7 @@ impl fmt::Display for ConnectionState {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // UpdateAvailable + request_id are emitted by not-yet-wired paths
 pub enum AgentEvent {
     ConnectionStatus(ConnectionState),
     Registered {
@@ -50,6 +51,7 @@ pub enum AgentEvent {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Warn level defined for completeness; not emitted yet
 pub enum LogLevel {
     Info,
     Warn,
