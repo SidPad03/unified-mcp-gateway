@@ -229,7 +229,13 @@ export default function UserManagement() {
     if (newPassword !== confirmPassword) { setError('Passwords do not match'); return; }
     setIsSubmitting(true);
     try {
-      await api.updateUser(passwordUserId, { password: newPassword });
+      const res = await api.updateUser(passwordUserId, { password: newPassword });
+      // The server returns a fresh token only when you changed your OWN password
+      // (the change revoked your current one). Store it so an admin changing their
+      // own password stays logged in instead of a silent 401 on the next request.
+      if (res.token) {
+        localStorage.setItem('mcpgw_token', res.token);
+      }
       setPasswordSuccess(true);
       setTimeout(() => {
         setShowPasswordModal(false);

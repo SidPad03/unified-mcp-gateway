@@ -7,6 +7,7 @@ import { SUPPORTED_APPS } from '@/lib/connectors';
 const STATUS_CONFIG: Record<string, { icon: typeof CheckCircle; color: string; bg: string }> = {
   success: { icon: CheckCircle, color: 'text-success', bg: 'bg-success/10' },
   error: { icon: XCircle, color: 'text-danger', bg: 'bg-danger/10' },
+  tool_error: { icon: XCircle, color: 'text-danger', bg: 'bg-danger/10' },
   denied: { icon: ShieldOff, color: 'text-warning', bg: 'bg-warning/10' },
   timeout: { icon: Clock, color: 'text-gray-400', bg: 'bg-gray-500/10' },
 };
@@ -264,6 +265,7 @@ export default function AuditTimeline() {
                 <option value="">All Statuses</option>
                 <option value="success">Success</option>
                 <option value="error">Error</option>
+                <option value="tool_error">Tool Error</option>
                 <option value="denied">Denied</option>
                 <option value="timeout">Timeout</option>
               </select>

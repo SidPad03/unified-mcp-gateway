@@ -26,10 +26,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (res.status === 401 && path !== '/auth/login') {
     localStorage.removeItem('mcpgw_token');
     localStorage.removeItem('mcpgw_user');
+    // Also drop cached secrets so an expired session doesn't leave them behind.
+    // The OpenAI key is kept in sessionStorage (see Settings.tsx), so clear it
+    // there — removing it from localStorage would no-op and leak it to the next
+    // user of this tab.
+    localStorage.removeItem('mcpgw_raw_keys');
+    sessionStorage.removeItem('mcpgw_openai_token');
+    const err = await res.json().catch(() => ({ error: 'Session expired' }));
+    // Carry the reason across the hard redirect so the Login page can explain WHY
+    // the user landed there (e.g. an expired session after a password change),
+    // instead of a silent bounce that reads like the app just logged them out.
+    sessionStorage.setItem('mcpgw_auth_message', err.error || 'Your session expired — please sign in again.');
     if (window.location.pathname !== '/login') {
       window.location.href = '/login';
     }
-    const err = await res.json().catch(() => ({ error: 'Session expired' }));
     throw new Error(err.error || 'Unauthorized');
   }
 
@@ -80,8 +90,11 @@ export const api = {
   getUsers: () => request<User[]>('/users'),
   createUser: (data: CreateUserRequest) =>
     request<User>('/users', { method: 'POST', body: JSON.stringify(data) }),
+  // Returns a fresh session `token` when the caller changed their OWN password
+  // (the change revokes the old token, so the server re-issues one to avoid a
+  // surprise logout). Absent for admin edits of other users.
   updateUser: (id: string, data: Partial<UpdateUserRequest>) =>
-    request(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    request<{ status: string; token?: string }>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   // Users (delete)
   deleteUser: (id: string) =>
@@ -109,6 +122,8 @@ export const api = {
 
   // Metrics
   getMetricsSummary: () => request<MetricsSummary>('/metrics/summary'),
+  // Security posture (owner-only): raw signals for the posture checklist card.
+  getSecurityPosture: () => request<SecurityPosture>('/security/posture'),
 
   // API Keys
   getApiKeys: () => request<ApiKey[]>('/api-keys'),
@@ -266,6 +281,20 @@ export interface MetricsSummary {
   latency_percentiles: { p50: number; p95: number; p99: number };
   calls_by_risk: { risk_category: string; count: number }[];
   hourly_volume: { hour: string; count: number }[];
+}
+
+export interface SecurityPostureOwner {
+  username: string;
+  last_login?: string;
+}
+
+export interface SecurityPosture {
+  listen_addr: string;
+  listen_addr_public: boolean;
+  admin_password_change_pending: boolean;
+  unowned_agent_backends: string[];
+  active_owner_count: number;
+  owners: SecurityPostureOwner[];
 }
 
 export interface CreateBackendRequest {

@@ -7,6 +7,7 @@ import {
 } from 'recharts';
 import { Activity, TrendingUp, Clock, AlertTriangle, Server, Zap, Settings2, Eye, EyeOff, RefreshCw, X } from 'lucide-react';
 import clsx from 'clsx';
+import SecurityPostureCard from '@/components/SecurityPostureCard';
 
 // ── Chart constants ─────────────────────────────────────────────────
 const RISK_COLORS: Record<string, string> = {
@@ -469,6 +470,9 @@ export default function MetricsOverview() {
           </button>
         </div>
       </div>
+
+      {/* Non-hideable posture checklist (owner-only; self-hides for others). */}
+      <SecurityPostureCard />
 
       {pageError && (
         <div className="mb-4 px-4 py-3 bg-danger/10 border border-danger/20 rounded-xl flex items-center justify-between">

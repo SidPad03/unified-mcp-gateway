@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { Zap, Eye, EyeOff } from 'lucide-react';
 
 interface Props {
@@ -13,6 +13,18 @@ export default function Login({ auth }: Props) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Surface the reason a protected request bounced us here (e.g. an expired
+  // session after a password change), stashed by the API layer before its hard
+  // redirect. One-shot: clear it so it doesn't persist across later visits.
+  useEffect(() => {
+    const msg = sessionStorage.getItem('mcpgw_auth_message');
+    if (msg) {
+      setNotice(msg);
+      sessionStorage.removeItem('mcpgw_auth_message');
+    }
+  }, []);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -65,6 +77,12 @@ export default function Login({ auth }: Props) {
               </button>
             </div>
           </div>
+
+          {notice && !auth.error && (
+            <div className="px-3 py-2 bg-accent/10 border border-accent/20 rounded-lg">
+              <p className="text-xs text-accent">{notice}</p>
+            </div>
+          )}
 
           {auth.error && (
             <div className="px-3 py-2 bg-danger/10 border border-danger/20 rounded-lg">

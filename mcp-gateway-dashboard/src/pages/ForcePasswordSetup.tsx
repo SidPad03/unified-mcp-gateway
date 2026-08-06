@@ -4,7 +4,7 @@ import { api, User } from '@/lib/api';
 
 interface Props {
   user: User;
-  onComplete: () => void;
+  onComplete: (token?: string) => void;
   onLogout: () => void;
 }
 
@@ -34,8 +34,11 @@ export default function ForcePasswordSetup({ user, onComplete, onLogout }: Props
 
     setIsSaving(true);
     try {
-      await api.updateUser(user.user_id, { password });
-      onComplete();
+      const res = await api.updateUser(user.user_id, { password });
+      // Pass the re-issued token up so the session continues — the change just
+      // revoked the token we logged in with; without it the next request 401s
+      // and bounces to /login with no explanation.
+      onComplete(res.token);
     } catch (err: any) {
       setError(err.message || 'Failed to set password');
     } finally {

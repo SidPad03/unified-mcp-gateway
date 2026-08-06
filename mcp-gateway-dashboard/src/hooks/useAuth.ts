@@ -38,12 +38,24 @@ export function useAuth() {
   const logout = useCallback(() => {
     localStorage.removeItem('mcpgw_token');
     localStorage.removeItem('mcpgw_user');
+    // Clear secrets that must not outlive the session: cached raw per-app API
+    // keys and the user's OpenAI key. Otherwise they stay readable after logout.
+    // The OpenAI key lives in sessionStorage (see Settings.tsx), so it must be
+    // removed from there — a localStorage removal would silently no-op and leave
+    // the key readable to whoever logs in next in the same tab.
+    localStorage.removeItem('mcpgw_raw_keys');
+    sessionStorage.removeItem('mcpgw_openai_token');
     setUser(null);
   }, []);
 
   // Clear the first-login "must change password" flag once the user has set a
   // new password, persisting the change so a page reload doesn't re-prompt.
-  const completePasswordChange = useCallback(() => {
+  const completePasswordChange = useCallback((newToken?: string) => {
+    // A self password-change revokes the old token; the server hands back a fresh
+    // one so the session continues instead of a surprise logout. Store it if present.
+    if (newToken) {
+      localStorage.setItem('mcpgw_token', newToken);
+    }
     setUser(prev => {
       if (!prev) return prev;
       const updated = { ...prev, must_change_password: false };

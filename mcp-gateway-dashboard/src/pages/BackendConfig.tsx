@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, Backend, ApiKey, User } from '@/lib/api';
-import { Plus, Trash2, Server, Wifi, Terminal, Globe, X, RefreshCw, Link, Copy, Check, RotateCcw, Key, Pencil, Laptop, Boxes } from 'lucide-react';
+import { Plus, Trash2, Server, Wifi, Terminal, Globe, X, RefreshCw, Link, Copy, Check, RotateCcw, Key, Pencil, Laptop, Boxes, Eye, EyeOff } from 'lucide-react';
 import clsx from 'clsx';
 
 interface Props {
@@ -40,6 +40,9 @@ export default function BackendConfig({ isAdmin }: Props) {
   const [httpForm, setHttpForm] = useState<HttpForm>(emptyHttpForm());
   const [error, setError] = useState('');
   const [pageError, setPageError] = useState('');
+  // Header/env values (e.g. bearer tokens) are masked by default; track which
+  // rows the user has explicitly revealed. Keyed by `${form}-${index}`.
+  const [revealedValues, setRevealedValues] = useState<Set<string>>(new Set());
   const [selectedBackend, setSelectedBackend] = useState<Backend | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
@@ -136,7 +139,8 @@ export default function BackendConfig({ isAdmin }: Props) {
       const cfg = backend.config as any;
       setHttpForm({
         url: cfg.url || '',
-        env: Object.entries(cfg.env || {}).map(([key, value]) => ({ key, value: String(value) })),
+        // HTTP KV pairs are stored as `headers`; fall back to legacy `env` records.
+        env: Object.entries(cfg.headers || cfg.env || {}).map(([key, value]) => ({ key, value: String(value) })),
       });
       if (httpForm.env.length === 0) setHttpForm(prev => ({ ...prev, env: [{ key: '', value: '' }] }));
     }
@@ -404,9 +408,11 @@ export default function BackendConfig({ isAdmin }: Props) {
         env,
       };
     } else {
-      const env: Record<string, string> = {};
-      httpForm.env.forEach(e => { if (e.key.trim()) env[e.key.trim()] = e.value; });
-      return { url: httpForm.url, env };
+      // HTTP/SSE backends have no subprocess, so these KV pairs are sent as request
+      // headers (e.g. Authorization), not environment variables.
+      const headers: Record<string, string> = {};
+      httpForm.env.forEach(e => { if (e.key.trim()) headers[e.key.trim()] = e.value; });
+      return { url: httpForm.url, headers };
     }
   };
 
@@ -567,6 +573,15 @@ export default function BackendConfig({ isAdmin }: Props) {
     setStdioForm({ ...stdioForm, args: next.length ? next : [''] });
   };
 
+  const toggleReveal = (form: 'stdio' | 'http', idx: number) => {
+    const key = `${form}-${idx}`;
+    setRevealedValues(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
   const updateEnv = (form: 'stdio' | 'http', idx: number, field: 'key' | 'value', val: string) => {
     if (form === 'stdio') {
       const next = [...stdioForm.env];
@@ -607,13 +622,21 @@ export default function BackendConfig({ isAdmin }: Props) {
   };
 
   const renderEnvFields = (form: 'stdio' | 'http') => {
-    const entries = form === 'stdio' ? stdioForm.env : httpForm.env;
+    const isHttp = form === 'http';
+    const entries = isHttp ? httpForm.env : stdioForm.env;
+    const label = isHttp ? 'HTTP Headers' : 'Environment Variables';
+    const addLabel = isHttp ? '+ Add Header' : '+ Add Variable';
+    const keyPlaceholder = isHttp ? 'Authorization' : 'KEY';
+    const valuePlaceholder = isHttp ? 'Bearer <token>' : 'value';
     return (
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider">Environment Variables</label>
-          <button type="button" onClick={() => addEnv(form)} className="text-xs text-accent hover:text-accent-hover transition-colors">+ Add Variable</button>
+          <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider">{label}</label>
+          <button type="button" onClick={() => addEnv(form)} className="text-xs text-accent hover:text-accent-hover transition-colors">{addLabel}</button>
         </div>
+        {isHttp && (
+          <p className="text-[11px] text-gray-500 mb-2">Sent as request headers on every call to this backend (e.g. <span className="font-mono">Authorization = Bearer &lt;token&gt;</span>).</p>
+        )}
         <div className="space-y-2">
           {entries.map((entry, i) => (
             <div key={i} className="flex items-center gap-2">
@@ -621,17 +644,29 @@ export default function BackendConfig({ isAdmin }: Props) {
                 type="text"
                 value={entry.key}
                 onChange={e => updateEnv(form, i, 'key', e.target.value)}
-                placeholder="KEY"
+                placeholder={keyPlaceholder}
                 className="w-[40%] px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none focus:border-accent/50"
               />
               <span className="text-gray-600 text-xs">=</span>
-              <input
-                type="text"
-                value={entry.value}
-                onChange={e => updateEnv(form, i, 'value', e.target.value)}
-                placeholder="value"
-                className="flex-1 px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none focus:border-accent/50"
-              />
+              <div className="flex-1 relative">
+                <input
+                  type={revealedValues.has(`${form}-${i}`) ? 'text' : 'password'}
+                  value={entry.value}
+                  onChange={e => updateEnv(form, i, 'value', e.target.value)}
+                  placeholder={valuePlaceholder}
+                  autoComplete="off"
+                  className="w-full px-2.5 py-1.5 pr-8 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none focus:border-accent/50"
+                />
+                <button
+                  type="button"
+                  onClick={() => toggleReveal(form, i)}
+                  tabIndex={-1}
+                  aria-label={revealedValues.has(`${form}-${i}`) ? 'Hide value' : 'Show value'}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-300 transition-colors"
+                >
+                  {revealedValues.has(`${form}-${i}`) ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
               <button type="button" onClick={() => removeEnv(form, i)} className="p-1 text-gray-600 hover:text-danger transition-colors">
                 <X className="w-3.5 h-3.5" />
               </button>
