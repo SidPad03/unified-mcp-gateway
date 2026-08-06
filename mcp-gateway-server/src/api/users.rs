@@ -177,17 +177,20 @@ async fn update_user(
         .0 > 0;
 
         if target_is_owner {
+            // Count only ACTIVE owners — an inactive owner row must not mask the
+            // fact that this is the last person who can actually administer.
             let owner_count: (i64,) = sqlx::query_as(
                 "SELECT COUNT(DISTINCT ur.user_id) FROM user_roles ur
                  JOIN roles r ON r.role_id = ur.role_id
-                 WHERE r.name = 'owner'"
+                 JOIN users u ON u.user_id = ur.user_id
+                 WHERE r.name = 'owner' AND u.is_active = TRUE"
             )
             .fetch_one(&state.db)
             .await?;
 
             if owner_count.0 <= 1 {
                 return Err(AppError::BadRequest(
-                    "Cannot demote or deactivate the last owner user".into(),
+                    "Cannot demote or deactivate the last active owner user".into(),
                 ));
             }
         }
@@ -260,34 +263,33 @@ async fn delete_user(
         return Err(AppError::NotFound("User not found".into()));
     }
 
-    // Prevent deleting the last admin
-    let target_roles: Vec<(String,)> = sqlx::query_as(
-        "SELECT r.name FROM roles r JOIN user_roles ur ON r.role_id = ur.role_id WHERE ur.user_id = $1"
+    // Prevent deleting the last ACTIVE owner. Lock the active-owner rows FOR UPDATE
+    // and do the check + delete in one transaction, so two concurrent deletes can't
+    // both pass the count check and leave the system with zero administrators.
+    let mut tx = state.db.begin().await?;
+
+    let active_owners: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT u.user_id FROM users u
+         JOIN user_roles ur ON ur.user_id = u.user_id
+         JOIN roles r ON r.role_id = ur.role_id
+         WHERE r.name = 'owner' AND u.is_active = TRUE
+         FOR UPDATE OF u"
     )
-    .bind(id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await?;
 
-    let is_owner = target_roles.iter().any(|(r,)| r == "owner");
-    if is_owner {
-        let owner_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(DISTINCT ur.user_id) FROM user_roles ur
-             JOIN roles r ON r.role_id = ur.role_id
-             WHERE r.name = 'owner'"
-        )
-        .fetch_one(&state.db)
-        .await?;
-
-        if owner_count.0 <= 1 {
-            return Err(AppError::BadRequest("Cannot delete the last owner user".into()));
-        }
+    let target_is_last_active_owner =
+        active_owners.iter().any(|(uid,)| *uid == id) && active_owners.len() <= 1;
+    if target_is_last_active_owner {
+        return Err(AppError::BadRequest("Cannot delete the last active owner user".into()));
     }
 
     // CASCADE handles user_roles and api_keys; policies.created_by is SET NULL
     sqlx::query("DELETE FROM users WHERE user_id = $1")
         .bind(id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     Ok(Json(serde_json::json!({ "status": "deleted" })))
 }

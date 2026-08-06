@@ -1,12 +1,12 @@
-/// Keyword-based risk classification for discovered MCP tools.
-///
-/// Categories:
-///   "read"        – read-only / informational
-///   "write"       – creates or modifies resources
-///   "admin"       – settings, secrets, permissions
-///   "destructive" – deletes, drops, truncates
-///   "execute"     – runs workflows, dispatches actions
-///   "unclassified"– none of the above matched
+//! Keyword-based risk classification for discovered MCP tools.
+//!
+//! Categories:
+//!   "read"        – read-only / informational
+//!   "write"       – creates or modifies resources
+//!   "admin"       – settings, secrets, permissions
+//!   "destructive" – deletes, drops, truncates
+//!   "execute"     – runs workflows, dispatches actions
+//!   "unclassified"– none of the above matched
 
 const READ_KEYWORDS: &[&str] = &[
     "get_", "list_", "search_", "find_", "fetch_", "show_",
@@ -45,7 +45,18 @@ pub fn classify_tool(tool_name: &str, description: &str) -> &'static str {
     let name_lower = tool_name.to_lowercase();
     let desc_lower = description.to_lowercase();
 
-    // Check destructive first (highest risk)
+    // Admin / secrets / settings take precedence: managing secrets, tokens, or
+    // permissions is a governance concern even when the verb itself is destructive
+    // or a write (e.g. `delete_org_action_secret` is admin, not a plain destructive
+    // delete). Must be checked before `destructive` so the admin+delete combination
+    // classifies as admin rather than short-circuiting to destructive.
+    if matches_any(&name_lower, ADMIN_KEYWORDS)
+        && (matches_any(&name_lower, WRITE_KEYWORDS) || matches_any(&name_lower, DESTRUCTIVE_KEYWORDS))
+    {
+        return "admin";
+    }
+
+    // Destructive (highest risk among the remaining verbs)
     if matches_any(&name_lower, DESTRUCTIVE_KEYWORDS)
         || desc_lower.contains("permanently delete")
         || desc_lower.contains("cannot be undone")
@@ -59,14 +70,6 @@ pub fn classify_tool(tool_name: &str, description: &str) -> &'static str {
         || desc_lower.contains("dispatch")
     {
         return "execute";
-    }
-
-    // Admin / secrets / settings
-    if matches_any(&name_lower, ADMIN_KEYWORDS) && matches_any(&name_lower, WRITE_KEYWORDS) {
-        return "admin";
-    }
-    if matches_any(&name_lower, ADMIN_KEYWORDS) && matches_any(&name_lower, DESTRUCTIVE_KEYWORDS) {
-        return "admin";
     }
 
     // Write / mutate

@@ -54,7 +54,9 @@ impl BackendManager {
             .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
             .unwrap_or_default();
 
-        tracing::info!(backend = name, command, ?args, "Spawning stdio backend");
+        // Log arg count, not the args themselves: stdio MCP args commonly carry
+        // tokens/secrets (env is already omitted for the same reason).
+        tracing::info!(backend = name, command, arg_count = args.len(), "Spawning stdio backend");
 
         let mut cmd = Command::new(command);
         cmd.args(&args)
@@ -150,12 +152,18 @@ impl BackendManager {
         tool_name: &str,
         arguments: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let backends = self.backends.read().await;
-        let running = backends.get(backend_id)
-            .ok_or_else(|| format!("Backend process not running"))?;
+        // Clone the process handle and release the read guard before the awaited
+        // round-trip; holding it across `jsonrpc_call` (up to 60s) would block every
+        // lifecycle writer (spawn/stop/shutdown) for the duration of the call.
+        let process = {
+            let backends = self.backends.read().await;
+            backends.get(backend_id)
+                .ok_or_else(|| "Backend process not running".to_string())?
+                .process.clone()
+        };
 
         let result = Self::jsonrpc_call(
-            &running.process,
+            &process,
             "tools/call",
             Some(serde_json::json!({
                 "name": tool_name,
@@ -216,7 +224,7 @@ impl BackendManager {
             return Err(format!("Initialize returned HTTP {}: {}", status, body));
         }
 
-        let init_json: serde_json::Value = init_resp.json().await
+        let init_json = Self::read_streamable_response(init_resp).await
             .map_err(|e| format!("Failed to parse initialize response: {}", e))?;
 
         tracing::info!(backend = name, resp = ?init_json, "HTTP MCP initialize succeeded");
@@ -250,7 +258,7 @@ impl BackendManager {
             return Err(format!("tools/list returned HTTP {}: {}", status, body));
         }
 
-        let tools_json: serde_json::Value = tools_resp.json().await
+        let tools_json = Self::read_streamable_response(tools_resp).await
             .map_err(|e| format!("Failed to parse tools/list response: {}", e))?;
 
         // Parse tools from the result
@@ -304,12 +312,13 @@ impl BackendManager {
             .map_err(|e| format!("Backend request failed: {}", e))?;
 
         let status = resp.status();
-        let resp_json: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Failed to parse backend response: {}", e))?;
-
         if !status.is_success() {
-            return Err(format!("Backend returned HTTP {}: {}", status, resp_json));
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Backend returned HTTP {}: {}", status, body));
         }
+
+        let resp_json = Self::read_streamable_response(resp).await
+            .map_err(|e| format!("Failed to parse backend response: {}", e))?;
 
         if let Some(result) = resp_json.get("result") {
             Ok(result.clone())
@@ -468,24 +477,109 @@ impl BackendManager {
         }
     }
 
+    /// Read a JSON-RPC reply from a streamable-http POST response.
+    ///
+    /// A streamable-http server answers each POST with either a single JSON
+    /// object (`application/json`) or a one-shot SSE stream (`text/event-stream`),
+    /// deciding per response -- n8n commonly returns the latter. We read the body
+    /// once and parse it according to `Content-Type` so a `tools/call` doesn't fail
+    /// to deserialize after `initialize` happened to come back as plain JSON.
+    async fn read_streamable_response(
+        resp: reqwest::Response,
+    ) -> Result<serde_json::Value, String> {
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+        if content_type.contains("text/event-stream") {
+            return Self::parse_sse_body(&body)
+                .ok_or_else(|| format!("No JSON-RPC message in SSE response: {}", body));
+        }
+
+        // application/json (or unlabelled). Fall back to SSE framing if the body
+        // isn't valid JSON but looks like an event stream.
+        match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(v) => Ok(v),
+            Err(e) => Self::parse_sse_body(&body)
+                .ok_or_else(|| format!("Failed to parse response body: {} (body: {})", e, body)),
+        }
+    }
+
+    /// Extract the JSON-RPC payload from the `data:` frames of an SSE body,
+    /// preferring a frame that carries a `result` or `error` over other messages
+    /// (e.g. progress notifications) the server may interleave.
+    fn parse_sse_body(body: &str) -> Option<serde_json::Value> {
+        let mut fallback: Option<serde_json::Value> = None;
+        for frame in body.split("\n\n") {
+            let data = frame
+                .lines()
+                .filter_map(|l| l.strip_prefix("data:"))
+                .map(|r| r.trim())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if data.is_empty() {
+                continue;
+            }
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                if val.get("result").is_some() || val.get("error").is_some() {
+                    return Some(val);
+                }
+                fallback.get_or_insert(val);
+            }
+        }
+        fallback
+    }
+
     fn build_http_client(config: &serde_json::Value) -> Result<reqwest::Client, String> {
         let mut builder = reqwest::Client::builder();
 
-        // Apply custom headers from config (e.g., Authorization)
-        if let Some(headers_obj) = config.get("headers").and_then(|h| h.as_object()) {
-            let mut header_map = reqwest::header::HeaderMap::new();
-            for (key, val) in headers_obj {
-                if let Some(val_str) = val.as_str() {
-                    if let (Ok(name), Ok(value)) = (
-                        reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-                        reqwest::header::HeaderValue::from_str(val_str),
-                    ) {
-                        header_map.insert(name, value);
+        // Attach custom request headers (e.g. Authorization) to every outbound call.
+        // HTTP/SSE backends have no subprocess, so the KV pairs the dashboard form
+        // stores under `env` are meaningless as environment variables -- they are only
+        // useful as request headers. Fold both `env` and `headers` into the header map
+        // so a stored `Authorization = Bearer <token>` pair actually reaches the backend.
+        // `headers` is applied last, so an explicit header entry wins over an `env`
+        // entry of the same name.
+        let mut header_map = reqwest::header::HeaderMap::new();
+
+        // The MCP streamable-http transport may answer any request with either a
+        // plain JSON object or an SSE stream, chosen per response, so the client
+        // must advertise that it accepts BOTH. Servers like n8n reject a POST with
+        // 406 Not Acceptable unless `Accept` lists both media types. Seed it as a
+        // default first (before user headers) so every streamable-http request --
+        // initialize, tools/list, and tools/call alike -- carries it. Because we
+        // insert user headers afterward, a stored `Accept` overwrites this default;
+        // a missing one falls back to it. The SSE GET path sets its own per-request
+        // `Accept: text/event-stream`, which reqwest keeps (a client default only
+        // fills a header the request hasn't already set), so that path is unaffected.
+        header_map.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json, text/event-stream"),
+        );
+
+        for field in ["env", "headers"] {
+            if let Some(obj) = config.get(field).and_then(|h| h.as_object()) {
+                for (key, val) in obj {
+                    if let Some(val_str) = val.as_str() {
+                        if let (Ok(name), Ok(mut value)) = (
+                            reqwest::header::HeaderName::from_bytes(key.as_bytes()),
+                            reqwest::header::HeaderValue::from_str(val_str),
+                        ) {
+                            value.set_sensitive(true); // keep bearer tokens out of debug logs
+                            header_map.insert(name, value);
+                        }
                     }
                 }
             }
-            builder = builder.default_headers(header_map);
         }
+        builder = builder.default_headers(header_map);
 
         builder.build().map_err(|e| format!("Failed to build HTTP client: {}", e))
     }
@@ -533,9 +627,18 @@ impl BackendManager {
                         Err(_) => continue, // skip non-JSON lines (e.g. log output)
                     };
 
-                    // Check if this is a notification (no id) -- skip it
-                    if parsed.get("id").is_none() || parsed.get("id") == Some(&serde_json::Value::Null) {
-                        continue;
+                    // Accept only the response whose id matches the request we sent.
+                    // This skips notifications (no id) AND server-initiated requests,
+                    // which also carry an id (e.g. sampling/createMessage, roots/list).
+                    // Critically, it also discards a STALE response left buffered in the
+                    // shared pipe after a previous call timed out: without this check the
+                    // next caller (possibly a different user) would receive that earlier
+                    // caller's result, and the pipe would stay shifted by one for every
+                    // later call until the backend was restarted. Mismatched lines are
+                    // consumed and skipped, so the pipe self-resynchronizes.
+                    match parsed.get("id") {
+                        Some(serde_json::Value::String(resp_id)) if resp_id == &id => {}
+                        _ => continue,
                     }
 
                     if let Some(error) = parsed.get("error") {
@@ -551,9 +654,24 @@ impl BackendManager {
         }
     }
 
-    fn resolve_sse_url(base_url: &str, relative: &str) -> String {
+    fn resolve_sse_url(base_url: &str, relative: &str) -> Result<String, String> {
         if relative.starts_with("http://") || relative.starts_with("https://") {
-            return relative.to_string();
+            // The `endpoint` event comes from the (untrusted) SSE backend, and the
+            // gateway POSTs to it carrying the stored Authorization header (a
+            // client-wide default header). Only accept an absolute URL if it stays
+            // on the SAME ORIGIN as the configured backend, so a malicious or
+            // compromised backend can't redirect our credentialed POST to an
+            // attacker host (token exfiltration) or an internal SSRF target like
+            // http://169.254.169.254/. Off-origin endpoints must use a relative
+            // path, which always resolves back to the backend's own origin below.
+            if url_origin(relative) == url_origin(base_url) && !url_origin(relative).is_empty() {
+                return Ok(relative.to_string());
+            }
+            return Err(format!(
+                "SSE backend returned a cross-origin endpoint URL ('{}'); refusing to send \
+                 the backend's credentials off-origin",
+                relative
+            ));
         }
         // Extract scheme + host from base URL
         if let Some(idx) = base_url.find("://") {
@@ -561,12 +679,12 @@ impl BackendManager {
             if let Some(slash_idx) = after_scheme.find('/') {
                 let origin = &base_url[..idx + 3 + slash_idx];
                 if relative.starts_with('/') {
-                    return format!("{}{}", origin, relative);
+                    return Ok(format!("{}{}", origin, relative));
                 }
-                return format!("{}/{}", origin, relative);
+                return Ok(format!("{}/{}", origin, relative));
             }
         }
-        format!("{}/{}", base_url.trim_end_matches('/'), relative.trim_start_matches('/'))
+        Ok(format!("{}/{}", base_url.trim_end_matches('/'), relative.trim_start_matches('/')))
     }
 
     async fn jsonrpc_notify(
@@ -655,7 +773,10 @@ impl SseConnection {
         let post_url = loop {
             match tokio::time::timeout_at(deadline, endpoint_rx.recv()).await {
                 Ok(Some(event)) if event.event_type == "endpoint" => {
-                    break BackendManager::resolve_sse_url(&base_url, &event.data);
+                    match BackendManager::resolve_sse_url(&base_url, &event.data) {
+                        Ok(u) => break u,
+                        Err(e) => return Err(e),
+                    }
                 }
                 Ok(Some(_)) => continue,
                 Ok(None) => return Err("SSE stream closed before sending endpoint event".into()),
@@ -680,8 +801,9 @@ impl SseConnection {
             }
         });
 
-        // Drop the raw SSE reader handle reference - the forward task keeps receiving
-        let _ = handle;
+        // Detach the raw SSE reader task: dropping its JoinHandle does not cancel
+        // the tokio task, so it keeps receiving; the forward task above drains it.
+        drop(handle);
 
         Ok(Self {
             post_url,
@@ -711,4 +833,93 @@ impl SseConnection {
 struct SseEvent {
     event_type: String,
     data: String,
+}
+
+/// Return the origin (`scheme://host[:port]`) of a URL — everything before the
+/// path — or "" when there is no scheme. Dependency-free parse in the same style
+/// as `resolve_sse_url`; used to keep a credentialed SSE POST on the backend's
+/// own origin.
+fn url_origin(url: &str) -> &str {
+    match url.find("://") {
+        Some(idx) => {
+            let rest = &url[idx + 3..];
+            match rest.find('/') {
+                Some(slash) => &url[..idx + 3 + slash],
+                None => url,
+            }
+        }
+        None => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sse_same_origin_absolute_endpoint_is_allowed() {
+        let out = BackendManager::resolve_sse_url(
+            "https://tools.vendor.com/sse",
+            "https://tools.vendor.com/messages?s=1",
+        );
+        assert_eq!(out.unwrap(), "https://tools.vendor.com/messages?s=1");
+    }
+
+    #[test]
+    fn sse_relative_endpoint_resolves_to_backend_origin() {
+        let out = BackendManager::resolve_sse_url("https://tools.vendor.com/sse", "/messages?s=1");
+        assert_eq!(out.unwrap(), "https://tools.vendor.com/messages?s=1");
+    }
+
+    #[test]
+    fn sse_cross_origin_absolute_endpoint_is_rejected() {
+        // A malicious backend must not redirect the credentialed POST to another
+        // host (bearer-token exfiltration / SSRF into internal targets).
+        let out = BackendManager::resolve_sse_url(
+            "https://tools.vendor.com/sse",
+            "https://attacker.evil/collect",
+        );
+        assert!(out.is_err(), "cross-origin endpoint must be rejected: {out:?}");
+    }
+
+    #[test]
+    fn sse_scheme_downgrade_endpoint_is_rejected() {
+        let out = BackendManager::resolve_sse_url(
+            "https://tools.vendor.com/sse",
+            "http://tools.vendor.com/messages",
+        );
+        assert!(out.is_err(), "https->http downgrade must be rejected: {out:?}");
+    }
+
+    #[test]
+    fn sse_body_extracts_jsonrpc_result_frame() {
+        // n8n answers a streamable-http POST with a single SSE `message` event
+        // carrying the JSON-RPC reply.
+        let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[]}}\n\n";
+        let out = BackendManager::parse_sse_body(body).expect("should extract frame");
+        assert_eq!(out["id"], 2);
+        assert!(out.get("result").is_some());
+    }
+
+    #[test]
+    fn sse_body_prefers_result_over_interleaved_notifications() {
+        // A progress notification may precede the actual result frame; we must
+        // return the frame with `result`, not the first parseable message.
+        let body = "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n\
+                    data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n";
+        let out = BackendManager::parse_sse_body(body).expect("should extract result frame");
+        assert_eq!(out["result"]["ok"], true);
+    }
+
+    #[test]
+    fn sse_body_returns_error_frame() {
+        let body = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"nope\"}}\n\n";
+        let out = BackendManager::parse_sse_body(body).expect("should extract error frame");
+        assert_eq!(out["error"]["code"], -32000);
+    }
+
+    #[test]
+    fn sse_body_with_no_json_returns_none() {
+        assert!(BackendManager::parse_sse_body(": keep-alive comment\n\n").is_none());
+    }
 }

@@ -1,6 +1,6 @@
 use axum::{
     extract::{Query, State},
-    routing::{delete, get},
+    routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -88,7 +88,9 @@ async fn query_audit(
     claims: Claims,
     Query(query): Query<AuditQuery>,
 ) -> Result<Json<AuditExportResponse>, AppError> {
-    let limit = query.limit.unwrap_or(50).min(500);
+    // Clamp to [1, 500]: `.min(500)` alone let a negative `limit` (e.g. -1) through
+    // to the SQL LIMIT, bypassing the row cap.
+    let limit = query.limit.unwrap_or(50).clamp(1, 500);
     let offset = query.offset.unwrap_or(0);
 
     // Non-admin users can only see their own events
@@ -332,7 +334,7 @@ async fn clear_audit(
 
 async fn audit_stats(
     State(state): State<AppState>,
-    claims: Claims,
+    _claims: Claims,
 ) -> Result<Json<AuditStats>, AppError> {
     let (total_events,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_events")
         .fetch_one(&state.db).await?;
