@@ -43,6 +43,26 @@ pub fn router() -> Router<AppState> {
         .route("/agent/releases/:tag/download", get(download_release))
 }
 
+/// Base URL of the git forge that hosts agent releases, preferring the current
+/// name and falling back to the legacy Gitea one.
+///
+/// Returns an error rather than panicking when neither is set. This used to be
+/// an `.expect()`, which unwound the request handler: neither variable is
+/// required at startup, and neither `.env.example` nor `docker-compose.yml`
+/// sets one, so on a default deployment any authenticated GET of
+/// `/api/v1/agent/releases` panicked instead of returning a response.
+fn release_proxy_url() -> Result<String, AppError> {
+    std::env::var("RELEASE_PROXY_URL")
+        .or_else(|_| std::env::var("GITEA_URL"))
+        .map_err(|_| {
+            AppError::Internal(
+                "Agent release proxy is not configured: set RELEASE_PROXY_URL (or the legacy \
+                 GITEA_URL) on the server to enable the agent release endpoints."
+                    .into(),
+            )
+        })
+}
+
 async fn fetch_releases(state: &AppState) -> Result<Vec<AgentRelease>, AppError> {
     // Check cache
     {
@@ -54,9 +74,7 @@ async fn fetch_releases(state: &AppState) -> Result<Vec<AgentRelease>, AppError>
         }
     }
 
-    let gitea_url = std::env::var("RELEASE_PROXY_URL")
-        .or_else(|_| std::env::var("GITEA_URL"))
-        .expect("RELEASE_PROXY_URL or GITEA_URL must be set");
+    let gitea_url = release_proxy_url()?;
     let gitea_repo = std::env::var("RELEASE_PROXY_REPO")
         .or_else(|_| std::env::var("GITEA_AGENT_REPO"))
         .unwrap_or_else(|_| "SidPad03/unified-mcp-gateway".to_string());
@@ -271,6 +289,47 @@ async fn download_release(
     ];
 
     Ok((StatusCode::OK, headers, bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::lock_env;
+
+    /// Regression test: an unconfigured release proxy must surface as an error,
+    /// not a panic in the request handler. `.expect()` here took down the
+    /// request on any default deployment, since neither variable is set by
+    /// `.env.example` or `docker-compose.yml` and startup does not require them.
+    #[test]
+    fn unconfigured_release_proxy_errors_instead_of_panicking() {
+        let _guard = lock_env();
+        let saved_proxy = std::env::var("RELEASE_PROXY_URL").ok();
+        let saved_legacy = std::env::var("GITEA_URL").ok();
+
+        std::env::remove_var("RELEASE_PROXY_URL");
+        std::env::remove_var("GITEA_URL");
+        assert!(
+            matches!(release_proxy_url(), Err(AppError::Internal(_))),
+            "neither variable set should be a recoverable error"
+        );
+
+        // The legacy name is still honoured on its own.
+        std::env::set_var("GITEA_URL", "https://forge.example.com");
+        assert_eq!(release_proxy_url().unwrap(), "https://forge.example.com");
+
+        // And the current name takes precedence over it.
+        std::env::set_var("RELEASE_PROXY_URL", "https://proxy.example.com");
+        assert_eq!(release_proxy_url().unwrap(), "https://proxy.example.com");
+
+        match saved_proxy {
+            Some(v) => std::env::set_var("RELEASE_PROXY_URL", v),
+            None => std::env::remove_var("RELEASE_PROXY_URL"),
+        }
+        match saved_legacy {
+            Some(v) => std::env::set_var("GITEA_URL", v),
+            None => std::env::remove_var("GITEA_URL"),
+        }
+    }
 }
 
 // Gitea API types
