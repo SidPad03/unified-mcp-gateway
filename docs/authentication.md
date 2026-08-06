@@ -131,7 +131,7 @@ the deciding policy, latency, and redacted request/response payloads.
 
 The redactor strips bearer tokens, labeled credentials (`password`, `token`,
 `api_key`, `secret`, `authorization` — quoted or bare), raw `mcpgw_` keys, email
-addresses, and SSN-shaped strings before anything is stored.
+addresses, and SSN- and phone-shaped strings before anything is stored.
 
 Audit statuses:
 
@@ -139,9 +139,8 @@ Audit statuses:
 |--------|---------|
 | `success` | The tool returned a normal result |
 | `tool_error` | The backend returned `isError: true` — a **failed** call |
-| `error` | The gateway could not complete the call |
+| `error` | The gateway could not complete the call, including when the backend timed out |
 | `denied` | Policy blocked the call |
-| `timeout` | The backend did not respond in time |
 
 `tool_error` counts as an error in `error_count` and in the metrics error rate.
 
