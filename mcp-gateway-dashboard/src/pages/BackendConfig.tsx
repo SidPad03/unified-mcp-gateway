@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api, Backend, ApiKey, User } from '@/lib/api';
+import { api, Backend, ApiKey } from '@/lib/api';
 import { Plus, Trash2, Server, Wifi, Terminal, Globe, X, RefreshCw, Link, Copy, Check, RotateCcw, Pencil, Laptop, Boxes, Eye, EyeOff } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -56,8 +56,6 @@ export default function BackendConfig({ isAdmin }: Props) {
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [connectTab, setConnectTab] = useState<'claude' | 'claudedesktop' | 'cursor' | 'vscode' | 'openwebui' | 'clawbot' | 'codex' | 'lmstudio'>('claude');
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
-  const [selectedKeyId, setSelectedKeyId] = useState<string>('');
-  const [newKeyName, setNewKeyName] = useState('');
   const [newKeyUserId, setNewKeyUserId] = useState<string>('');
   const [generatedKeys, _setGeneratedKeys] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem('mcpgw_raw_keys') || '{}'); } catch { return {}; }
@@ -71,11 +69,8 @@ export default function BackendConfig({ isAdmin }: Props) {
   };
   const [copied, setCopied] = useState(false);
   const [connectLoading, setConnectLoading] = useState(false);
-  const [connectSubmitting, setConnectSubmitting] = useState(false);
   const [connectError, setConnectError] = useState('');
-  const [users, setUsers] = useState<User[]>([]);
   const [gatewayUrl, setGatewayUrl] = useState(() => localStorage.getItem('mcpgw_gateway_url') || '');
-  const [gatewayUrlSaved, setGatewayUrlSaved] = useState(false);
   const [regeneratingKey, setRegeneratingKey] = useState(false);
   const [regenError, setRegenError] = useState('');
 
@@ -183,56 +178,6 @@ export default function BackendConfig({ isAdmin }: Props) {
     }
   };
 
-  const provisionKeys = async () => {
-    if (connectSubmitting) return;
-    setConnectError('');
-    setConnectSubmitting(true);
-    try {
-      let currentUser: any = {};
-      try {
-        currentUser = JSON.parse(localStorage.getItem('mcpgw_user') || '{}');
-      } catch {
-        currentUser = {};
-      }
-      const targetUserId = (isAdmin && newKeyUserId) ? newKeyUserId : currentUser.user_id;
-      if (!targetUserId) return;
-      const result = await api.createApiKey({
-        name: `${connectTab}-key`,
-        user_id: targetUserId,
-        application: connectTab,
-      });
-      setGeneratedKeys(prev => ({ ...prev, [connectTab]: result.raw_key }));
-      const keys = await api.getApiKeys();
-      setApiKeys(keys);
-    } catch (e: any) {
-      setConnectError(e.message || 'Failed to generate key');
-    } finally {
-      setConnectSubmitting(false);
-    }
-  };
-
-  const generateApiKey = async () => {
-    if (connectSubmitting) return;
-    const keyName = newKeyName.trim() || 'mcpgw-client-key';
-    setConnectError('');
-    setConnectSubmitting(true);
-    try {
-      const result = await api.createApiKey({
-        name: keyName,
-        user_id: newKeyUserId || undefined,
-      });
-      setGeneratedKeys(prev => ({ ...prev, [connectTab]: result.raw_key }));
-      setSelectedKeyId(result.key_id);
-      setNewKeyName('');
-      const keys = await api.getApiKeys();
-      setApiKeys(keys);
-    } catch (e: any) {
-      setConnectError(e.message || 'Failed to generate API key');
-    } finally {
-      setConnectSubmitting(false);
-    }
-  };
-
   const getAppKey = (app: string): ApiKey | undefined => {
     let currentUserId: string | undefined;
     try {
@@ -245,12 +190,6 @@ export default function BackendConfig({ isAdmin }: Props) {
   };
 
   const getDefaultGatewayUrl = () => 'https://localhost:8080/mcp';
-
-  const saveGatewayUrl = () => {
-    localStorage.setItem('mcpgw_gateway_url', gatewayUrl);
-    setGatewayUrlSaved(true);
-    setTimeout(() => setGatewayUrlSaved(false), 2000);
-  };
 
   const getGatewayUrl = () => gatewayUrl || getDefaultGatewayUrl();
 
