@@ -273,9 +273,9 @@ All tool calls go through the gateway's policy engine, RBAC, and audit logging �
 
 ### Security & Access Control
 - **JWT + API Key** authentication (API keys use `mcpgw_` prefix, SHA-256 hashed)
-- **RBAC** — Owner, operator, and viewer roles with tool-level permissions
+- **RBAC** — a built-in `owner` role plus any roles you create, each with a default allow/deny and its own attached policy rules
 - **Policy Engine** — Priority-ordered allow/deny rules with glob patterns, risk categories, and per-application matching
-- **Risk Classification** — Tools auto-classified as `read`, `write`, `admin`, or `external-api`
+- **Risk Classification** — Tools auto-classified as `read`, `write`, `admin`, `destructive`, `execute`, or `unclassified`
 - **Audit Logging** — Every tool call recorded with configurable redaction
 
 ### Observability
@@ -316,7 +316,7 @@ All endpoints under `/api/v1`. Auth via `Authorization: Bearer <jwt_or_api_key>`
 | PATCH | `/tools/{id}` | Enable/disable tool |
 | GET | `/backends` | List backends with health |
 | POST | `/backends` | Add backend |
-| PUT/DELETE | `/backends/{id}` | Update/delete backend |
+| PATCH/DELETE | `/backends/{id}` | Update/delete backend |
 | GET | `/audit` | Query audit events |
 | GET | `/audit/stats` | Aggregated audit statistics |
 | GET | `/metrics/summary` | Metrics dashboard data |
@@ -332,8 +332,8 @@ All endpoints under `/api/v1`. Auth via `Authorization: Bearer <jwt_or_api_key>`
 | Endpoint | Description |
 |----------|-------------|
 | POST `/mcp` | Streamable HTTP MCP endpoint |
-| GET `/sse` | SSE MCP transport |
 | WS `/agent/ws` | Agent WebSocket connection |
+| WS `/api/v1/ws/live` | Live event feed for the dashboard |
 
 ## Environment Variables
 
@@ -348,7 +348,7 @@ All endpoints under `/api/v1`. Auth via `Authorization: Bearer <jwt_or_api_key>`
 | `RUST_LOG` | `mcp_gateway_server=info,tower_http=debug` | Log level filter |
 | `RELEASE_PROXY_URL` | — | Git forge URL for agent release proxy (e.g., Gitea, GitHub) |
 | `RELEASE_PROXY_REPO` | — | Repository for agent releases (e.g., `owner/unified-mcp-gateway`) |
-| `RELEASE_PROXY_TOKEN` | — | API token for release proxy authentication (also reads `GITEA_TOKEN`) |
+| `GITEA_TOKEN` | — | API token for release proxy authentication |
 
 ## Development
 
