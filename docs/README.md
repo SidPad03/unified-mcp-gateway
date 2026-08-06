@@ -20,6 +20,7 @@ and other MCP clients) and your MCP tool servers, providing:
 | [API Reference](api-reference.md) | Every REST endpoint under `/api/v1`, plus the MCP and WebSocket endpoints |
 | [MCP Gateway Agent](agent.md) | Installing, configuring, and running the remote agent |
 | [Agent Architecture](agent-architecture.md) | The agent↔server WebSocket protocol and connection lifecycle |
+| [Agent Desktop App](agent-desktop-app.md) | **Planned** — the macOS app that replaces the terminal agent |
 
 For a condensed overview of the same system design, see
 [ARCHITECTURE.md](../ARCHITECTURE.md) at the repository root. For vulnerability

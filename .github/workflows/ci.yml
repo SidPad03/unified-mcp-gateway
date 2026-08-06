@@ -149,13 +149,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The agent is not published as an image. It is being rewritten as a
+        # macOS application (docs/agent-desktop-app.md); its release artifact is
+        # a signed .dmg attached to a GitHub release, not a Linux container.
         component:
           - name: mcp-gateway-server
             context: ./mcp-gateway-server
           - name: mcp-gateway-dashboard
             context: ./mcp-gateway-dashboard
-          - name: mcp-gateway-agent
-            context: ./mcp-gateway-agent
         platform:
           - arch: amd64
             runner: ubuntu-latest
@@ -216,7 +217,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [mcp-gateway-server, mcp-gateway-dashboard, mcp-gateway-agent]
+        component: [mcp-gateway-server, mcp-gateway-dashboard]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
@@ -264,7 +265,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [mcp-gateway-server, mcp-gateway-dashboard, mcp-gateway-agent]
+        component: [mcp-gateway-server, mcp-gateway-dashboard]
     steps:
       - name: Prune old tags
         env:
