@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api, MetricsSummary } from '@/lib/api';
 import {
-  BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell,
   AreaChart, Area,
 } from 'recharts';
