@@ -264,6 +264,17 @@ fn decrypt_api_key(stored: &str) -> Result<String, AppError> {
     String::from_utf8(plaintext).map_err(|_| AppError::Internal("Corrupt stored key".into()))
 }
 
+/// Recover a stored key for the configuration-transfer flow.
+///
+/// Returns `None` when the value cannot be recovered — a key written before
+/// at-rest encryption existed, or one sealed under a different `JWT_SECRET`.
+/// Both are expected rather than exceptional: such a key still authenticates
+/// after transfer (its `key_hash` is host-independent), it merely cannot be
+/// revealed again. See [`crate::api::config_transfer`].
+pub(crate) fn decrypt_api_key_for_transfer(stored: &str) -> Option<String> {
+    decrypt_api_key(stored).ok()
+}
+
 async fn provision_app_keys(
     State(state): State<AppState>,
     claims: Claims,

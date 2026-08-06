@@ -3,12 +3,14 @@ pub mod api_keys;
 pub mod auth;
 pub mod audit;
 pub mod backends;
+pub mod config_transfer;
 pub mod live;
 pub mod mcp;
 pub mod metrics;
 pub mod policies;
 pub mod roles;
 pub mod tools;
+pub mod updates;
 pub mod usage;
 pub mod users;
 
@@ -28,4 +30,6 @@ pub fn router() -> Router<AppState> {
         .merge(api_keys::router())
         .merge(agent_releases::router())
         .merge(usage::router())
+        .merge(config_transfer::router())
+        .merge(updates::router())
 }

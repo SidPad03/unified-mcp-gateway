@@ -48,6 +48,9 @@ rand = "0.8"
 # Authenticated encryption for API keys stored at rest (so the dashboard can
 # reveal a client's key for the "copy config" flow without keeping plaintext).
 chacha20poly1305 = "0.10"
+# Config export/import bundles: gzip before sealing, base64 for the envelope.
+flate2 = "1"
+base64 = "0.22"
 
 # Config
 dotenvy = "0.15"
