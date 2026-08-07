@@ -194,7 +194,7 @@ nothing to configure in the dashboard first — the Mac registers itself.
 Add your MCP servers from **Backends → Add backend**. **Test connection** starts
 the backend, completes the MCP handshake and lists the tools it found before
 anything is saved, so a mistyped command is caught immediately. Backends can be
-added, edited, disabled and removed while the agent is connected.
+added, edited, disabled and deleted while the agent is connected.
 
 ### What it shows
 
@@ -248,7 +248,7 @@ Full documentation: [docs/agent.md](docs/agent.md). Design and rationale:
 - **MCP Gateway Agent**, a macOS app, runs on your Mac
 - Connects local MCP servers (stdio/http) to the gateway via authenticated WebSocket
 - Browser sign-in (OAuth 2.0 + PKCE) — no API key to copy; the credential lives in the Keychain
-- Backends added, edited and removed live, with a supervisor that restarts crashed ones
+- Backends added, edited and deleted live, with a supervisor that restarts crashed ones
 - Live view of connection state, tool calls, merged logs, audit and usage
 - Auto-reconnect with exponential backoff
 - Start at login, and signed self-updates from GitHub Releases

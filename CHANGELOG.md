@@ -32,7 +32,7 @@ The terminal agent is replaced by a macOS application.
   `/usage/graph` the filter is applied inside the SQL rather than to the results:
   the tool query takes the top 100 by call count across *every* backend, so on a
   busy gateway one machine's tools could otherwise be absent entirely.
-- **Backends can be added, edited, disabled and removed while connected**, with
+- **Backends can be added, edited, disabled and deleted while connected**, with
   a debounced re-registration. **Test connection** starts a backend, completes
   the MCP handshake and lists its tools before anything is written to disk.
 - **Every local backend has a supervisor.** A process that exits is noticed, its

@@ -48,7 +48,7 @@ machine name shown under **More options** (your computer's name, by default).
 
 ### Adding your MCP servers
 
-**Backends → Add Backend.** For a local process choose *stdio* and give it the
+**Backends → Add backend.** For a local process choose *stdio* and give it the
 command and arguments you would type in a terminal; for a local HTTP MCP server
 choose *HTTP* and give it the URL.
 
@@ -56,7 +56,7 @@ Use **Test connection** before saving. It starts the backend, completes the MCP
 handshake, lists the tools it found, and shuts it down again — so a mistyped
 command is caught immediately rather than becoming a mystery later.
 
-Backends can be added, edited, disabled and removed while the agent is
+Backends can be added, edited, disabled and deleted while the agent is
 connected. The gateway is told about the change within about half a second.
 
 ---
