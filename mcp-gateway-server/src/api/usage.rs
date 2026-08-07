@@ -65,6 +65,14 @@ pub struct UsageGraph {
 pub struct UsageQuery {
     pub user_id: Option<String>,
     pub range: Option<String>,
+    /// Narrow the whole graph to one backend — the macOS agent passes its own
+    /// `backend_id` so the Usage page shows this machine and nothing else.
+    ///
+    /// This has to be applied in SQL rather than by the client: the tool query
+    /// below takes the top 100 tools by call count **across every backend**, so
+    /// on a busy gateway one machine's tools can fall off the end entirely and
+    /// never reach the client to be filtered.
+    pub backend: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -126,6 +134,15 @@ async fn usage_graph(
 
     let interval = range_to_interval(query.range.as_deref().unwrap_or("7d"));
 
+    // `None` means "every backend"; every query below uses the
+    // `($2::text IS NULL OR … = $2)` pattern so one code path serves both.
+    let backend_filter: Option<String> = query
+        .backend
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty() && *b != "all")
+        .map(str::to_string);
+
     let now = chrono::Utc::now();
     let five_min_ago = now - chrono::Duration::minutes(5);
 
@@ -140,6 +157,7 @@ async fn usage_graph(
                  SELECT user_id, COUNT(*) AS total, MAX(timestamp) AS last_seen
                  FROM audit_events
                  WHERE timestamp > NOW() - INTERVAL '{}' AND user_id IS NOT NULL
+                   AND ($2::text IS NULL OR backend_name = $2)
                  GROUP BY user_id
              ) cnt ON cnt.user_id = u.user_id
              WHERE ($1::uuid IS NULL OR u.user_id = $1)
@@ -147,6 +165,7 @@ async fn usage_graph(
             interval
         ))
         .bind(target_user)
+        .bind(&backend_filter)
         .fetch_all(&state.db)
         .await?;
 
@@ -171,12 +190,14 @@ async fn usage_graph(
         "SELECT user_id, application, COUNT(*) AS cnt, MAX(timestamp) AS last_call
              FROM audit_events
              WHERE ($1::uuid IS NULL OR user_id = $1)
+               AND ($2::text IS NULL OR backend_name = $2)
                AND timestamp > NOW() - INTERVAL '{}'
                AND application IS NOT NULL AND user_id IS NOT NULL
              GROUP BY user_id, application",
         interval
     ))
     .bind(target_user)
+    .bind(&backend_filter)
     .fetch_all(&state.db)
     .await?;
 
@@ -206,11 +227,12 @@ async fn usage_graph(
     // Get call counts per application in range
     let app_counts: Vec<(Option<String>, i64)> = sqlx::query_as(
         &format!(
-            "SELECT application, COUNT(*) FROM audit_events WHERE ($1::uuid IS NULL OR user_id = $1) AND timestamp > NOW() - INTERVAL '{}' GROUP BY application",
+            "SELECT application, COUNT(*) FROM audit_events WHERE ($1::uuid IS NULL OR user_id = $1) AND ($2::text IS NULL OR backend_name = $2) AND timestamp > NOW() - INTERVAL '{}' GROUP BY application",
             interval
         )
     )
     .bind(target_user)
+    .bind(&backend_filter)
     .fetch_all(&state.db)
     .await?;
 
@@ -224,6 +246,12 @@ async fn usage_graph(
                 .find(|(a, _)| a.as_deref() == Some(&*app))
                 .map(|(_, c)| *c)
                 .unwrap_or(0);
+            // `api_keys` has no backend column, so scoping the application list
+            // has to happen here: when one backend is asked for, an app that
+            // never called it does not belong in the graph.
+            if backend_filter.is_some() && call_count == 0 {
+                return None;
+            }
             Some(AppNode {
                 application: app,
                 is_connected,
@@ -237,9 +265,10 @@ async fn usage_graph(
     let backends: Vec<(String, String, String, i64)> = sqlx::query_as(
         "SELECT b.name, b.transport, b.health_status, COUNT(t.tool_id)
          FROM backends b LEFT JOIN tool_registry t ON t.backend_id = b.backend_id AND t.is_enabled = TRUE
-         WHERE b.is_enabled = TRUE
+         WHERE b.is_enabled = TRUE AND ($1::text IS NULL OR b.name = $1)
          GROUP BY b.name, b.transport, b.health_status"
     )
+    .bind(&backend_filter)
     .fetch_all(&state.db)
     .await?;
 
@@ -261,6 +290,9 @@ async fn usage_graph(
         i64,
         Option<chrono::DateTime<chrono::Utc>>,
     )> = sqlx::query_as(&format!(
+        // The backend filter is inside this query, not applied to its results:
+        // `LIMIT 100` ranks by call count across every backend, so a busy
+        // gateway can push one machine's tools past the cut entirely.
         "SELECT t.tool_name, b.name as backend_name, t.risk_category,
                     COALESCE(ae.cnt, 0) as call_count, ae.last_call
              FROM tool_registry t
@@ -268,15 +300,19 @@ async fn usage_graph(
              LEFT JOIN (
                  SELECT tool_name, COUNT(*) as cnt, MAX(timestamp) as last_call
                  FROM audit_events
-                 WHERE ($1::uuid IS NULL OR user_id = $1) AND timestamp > NOW() - INTERVAL '{}'
+                 WHERE ($1::uuid IS NULL OR user_id = $1)
+                   AND ($2::text IS NULL OR backend_name = $2)
+                   AND timestamp > NOW() - INTERVAL '{}'
                  GROUP BY tool_name
              ) ae ON ae.tool_name = t.tool_name
              WHERE t.is_enabled = TRUE AND b.is_enabled = TRUE
+               AND ($2::text IS NULL OR b.name = $2)
              ORDER BY call_count DESC, t.tool_name
              LIMIT 100",
         interval
     ))
     .bind(target_user)
+    .bind(&backend_filter)
     .fetch_all(&state.db)
     .await?;
 
@@ -298,12 +334,13 @@ async fn usage_graph(
         &format!(
             "SELECT application, backend_name, COUNT(*) as cnt, MAX(timestamp) as last_call
              FROM audit_events
-             WHERE ($1::uuid IS NULL OR user_id = $1) AND timestamp > NOW() - INTERVAL '{}' AND application IS NOT NULL
+             WHERE ($1::uuid IS NULL OR user_id = $1) AND ($2::text IS NULL OR backend_name = $2) AND timestamp > NOW() - INTERVAL '{}' AND application IS NOT NULL
              GROUP BY application, backend_name",
             interval
         )
     )
     .bind(target_user)
+    .bind(&backend_filter)
     .fetch_all(&state.db)
     .await?;
 
@@ -329,15 +366,19 @@ async fn usage_graph(
              LEFT JOIN (
                  SELECT tool_name, COUNT(*) as cnt, MAX(timestamp) as last_call
                  FROM audit_events
-                 WHERE ($1::uuid IS NULL OR user_id = $1) AND timestamp > NOW() - INTERVAL '{}'
+                 WHERE ($1::uuid IS NULL OR user_id = $1)
+                   AND ($2::text IS NULL OR backend_name = $2)
+                   AND timestamp > NOW() - INTERVAL '{}'
                  GROUP BY tool_name
              ) ae ON ae.tool_name = t.tool_name
              WHERE t.is_enabled = TRUE AND b.is_enabled = TRUE
+               AND ($2::text IS NULL OR b.name = $2)
              ORDER BY call_count DESC
              LIMIT 50",
             interval
         ))
         .bind(target_user)
+        .bind(&backend_filter)
         .fetch_all(&state.db)
         .await?;
 

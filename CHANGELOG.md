@@ -4,6 +4,139 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-08-06
+
+The terminal agent is replaced by a macOS application.
+
+> **Versioning was reset.** The 1.1.x line below was numbered ahead of where the
+> project actually was. Server, dashboard and agent are all back on 1.0.0, and
+> every release, tag and Docker Hub tag from the old line is withdrawn — so the
+> entries below this one describe software with higher version numbers than this
+> release. They are kept for the history, not as a sequence.
+
+### Added
+
+- **MCP Gateway Agent is now a macOS app.** A Rust core — the tunnel, the backend
+  supervisor, config, the wire protocol — linked into a SwiftUI application
+  through a C ABI. It has Overview, Backends, Activity, Logs, Audit and Usage
+  pages, a menu-bar extra, a ⌘, Settings window, start at login, and signed
+  self-updates. Requires macOS 26 or later; universal (Apple Silicon and Intel).
+- **Sign in through the browser.** OAuth 2.0 authorization code with PKCE:
+  `GET /api/v1/agent/authorize`, `POST /api/v1/agent/authorize/approve`,
+  `POST /api/v1/agent/token`. Setting up a Mac is now "type your gateway address,
+  sign in" — there is no API key to create, copy or paste. The credential the
+  agent ends up holding is still an ordinary `mcpgw_` key, so the tunnel protocol
+  is unchanged.
+- **`GET /usage/graph` and `GET /audit/stats` take an optional `backend`
+  filter**, so the app can scope both to the machine it runs on. On
+  `/usage/graph` the filter is applied inside the SQL rather than to the results:
+  the tool query takes the top 100 by call count across *every* backend, so on a
+  busy gateway one machine's tools could otherwise be absent entirely.
+- **Backends can be added, edited, disabled and deleted while connected**, with
+  a debounced re-registration. **Test connection** starts a backend, completes
+  the MCP handshake and lists its tools before anything is written to disk.
+- **Every local backend has a supervisor.** A process that exits is noticed, its
+  tools are withdrawn from the gateway, and it is restarted with a backoff capped
+  at 30 seconds. PIDs, uptime and restart counts are visible in the app.
+
+### Fixed
+
+- **`GET /audit/stats` leaked across accounts.** It returned deployment-wide
+  totals and the global top-tools list to any authenticated caller. It now
+  applies the same non-owner scoping `GET /audit` always has.
+- **A backend that crashed stayed "running" forever.** Child processes were
+  stored and never awaited, so a dead backend kept its tools registered and
+  failed every call until the whole agent was restarted.
+- **One bad backend took the whole agent down.** Startup returned on the first
+  failure; backends now start concurrently and in isolation.
+- **Backend `stderr` went nowhere.** It was inherited from the parent, which in
+  an app means `/dev/null` — so a server that printed a traceback and exited left
+  no trace. It is captured and shown on the Logs page, with secrets redacted
+  using the server's rules.
+- **Concurrent calls to the same tool corrupted each other's record.** The TUI
+  matched a completion to a call by tool name; correlation is by `request_id`.
+- **The setup wizard reported a dead gateway as valid.** Its check was true
+  whenever the connect *returned*, including connection-refused. It now inspects
+  the result and reads the first frame — necessary because the gateway upgrades
+  the socket before validating the token.
+- **Timestamps were UTC shown as local time**, from a `secs % 86400` on the UNIX
+  epoch.
+- **Tools were registered for backends that had failed to start**, so the gateway
+  advertised tools that could not answer.
+- **Backends could not be found when launched from Finder.** A GUI app inherits
+  launchd's `PATH`, not the user's, so `uvx`, `npx` and anything from Homebrew
+  were missing. The app reads `PATH` from the login shell at launch.
+- **The app checked for updates once and then never again.** The background
+  check returned early unless the updater was `idle`, which stops being true the
+  moment the first check finishes, and nothing was driving the six-hour cadence
+  its own documentation described. It now polls on a timer that outlives the
+  window — the app runs from the menu bar with no window open — and re-checks
+  from `up to date` and `failed`.
+- **Updating took two clicks and asked a misleading question.** Installing left
+  the app at "ready to relaunch" waiting for a second click, and that relaunch
+  went through the ordinary quit path, so it asked whether you were sure and
+  warned that quitting stops this Mac's MCP servers. Installing now quits and
+  reopens the app by itself, and skips that confirmation, which does not apply
+  when the app is coming straight back.
+
+### Changed
+
+- **The server's HTTP client moved from OpenSSL to rustls.** `reqwest` was the
+  only thing pulling `native-tls` — and with it `openssl-sys` and a C toolchain —
+  into an otherwise pure-Rust build; `sqlx` and `jsonwebtoken` were already on
+  rustls. It now uses `rustls-tls-native-roots`, which reads the **same system
+  trust store**, so a private CA installed into the image (the runtime still runs
+  `update-ca-certificates` on start) keeps working.
+
+  One nuance if you use a hand-rolled internal CA: rustls validates certificates
+  more strictly than OpenSSL — notably it requires a Subject Alternative Name and
+  rejects certificates that rely on the deprecated Common Name fallback. A
+  certificate OpenSSL accepted may be refused. Reissuing it with a SAN is the
+  fix.
+- **The API key moved from `config.toml` to the macOS Keychain.** An existing
+  config is migrated on first launch and rewritten without it. Config writes are
+  atomic (temp file + rename, `0600`).
+- **CI runs on self-hosted runners.** Everything except the macOS agent app now
+  builds on the `homelab` runner fleet. Since those are x86_64 and the images are
+  multi-arch, the arm64 image is **cross-compiled inside the Dockerfile** rather
+  than emulated, and the separate per-arch build + manifest-merge jobs collapse
+  into one buildx invocation per component. Pull requests now build both
+  architectures without pushing, so a broken cross-build is caught before merge.
+- **The agent is no longer published as a container image.** Existing
+  `sidpad03/mcp-gateway-agent` tags are left on Docker Hub but are not updated.
+- The dashboard's **Add Agent** modal is gone. A Mac authorizes itself.
+- **The update notice moved to the window chrome.** In the app it is a small
+  download button in the top-right corner, so it is reachable from every page
+  rather than only Overview, where it used to be a card competing with the hero
+  for that view's one focal slot. In the dashboard it is an **Update available**
+  line in the sidebar footer, shown to owners because `/settings` is an owner
+  route. Both the footer and the Settings panel read one shared check, so
+  pressing **Check for updates** settles the footer instead of leaving the two
+  disagreeing.
+- **A copy pass over the dashboard and the app.** Sentence case throughout, with
+  macOS menu items left in title case per the HIG; one name per action, so a
+  backend is deleted rather than removed-or-deleted depending on the surface;
+  verb-first buttons; confirmations that name what is about to go; and
+  placeholders that are examples rather than restatements of the label.
+
+### Removed
+
+- **`GET /api/v1/agent/releases*`** and the `RELEASE_PROXY_URL` /
+  `RELEASE_PROXY_REPO` / `GITEA_*` variables. The app updates itself from GitHub
+  Releases; the gateway is not involved.
+- `install.sh`, `install.ps1`, the ratatui TUI, the CLI subcommands, the
+  launchd/systemd/Task Scheduler service management, and
+  `mcp-gateway-agent/Dockerfile`.
+
+### Breaking
+
+- **There is no terminal agent.** Linux and Windows are not covered by this
+  release. `mcp-gateway-agent run`, `setup`, `service …` and the rest no longer
+  exist; the `agent-v1.0.0`–`agent-v1.1.3` binaries are withdrawn. An existing
+  `config.toml` is read and migrated, so backends carry over.
+- The app is ad-hoc signed rather than notarized. **First launch needs
+  right-click → Open**; see [docs/agent.md](docs/agent.md#install).
+
 ## [1.1.1] - 2026-07-07
 
 ### Fixed

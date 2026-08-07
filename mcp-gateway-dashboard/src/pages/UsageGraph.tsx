@@ -84,13 +84,13 @@ const getAppMeta = (key: string) => {
 
 // ── Risk category colors & labels ──────────────────────────────────
 const RISK_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
-  read:         { bg: '#22c55e18', text: '#22c55e', dot: '#22c55e' },
-  write:        { bg: '#3b82f618', text: '#3b82f6', dot: '#3b82f6' },
-  admin:        { bg: '#f59e0b18', text: '#f59e0b', dot: '#f59e0b' },
-  destructive:  { bg: '#ef444418', text: '#ef4444', dot: '#ef4444' },
-  execute:      { bg: '#a855f718', text: '#a855f7', dot: '#a855f7' },
-  'external-api': { bg: '#6b728018', text: '#6b7280', dot: '#6b7280' },
-  unclassified: { bg: '#6b728018', text: '#6b7280', dot: '#6b7280' },
+  read:         { bg: 'var(--neutral-wash)', text: 'var(--text-4)', dot: 'var(--text-4)' },
+  write:        { bg: 'var(--neutral-wash)', text: 'var(--text-3)', dot: 'var(--text-3)' },
+  execute:      { bg: 'var(--neutral-wash)', text: 'var(--text-2)', dot: 'var(--text-2)' },
+  admin:        { bg: 'var(--warn-wash)', text: 'var(--warn)', dot: 'var(--warn)' },
+  destructive:  { bg: 'var(--deny-wash)', text: 'var(--deny)', dot: 'var(--deny)' },
+  'external-api': { bg: 'var(--neutral-wash)', text: 'var(--text-3)', dot: 'var(--text-3)' },
+  unclassified: { bg: 'transparent', text: 'var(--text-4)', dot: 'var(--line-strong)' },
 };
 
 const getRiskColor = (risk: string | null | undefined) =>
@@ -110,14 +110,14 @@ function NodeShell({
     <div className="relative group">
       {glowColor && (
         <div
-          className="absolute -inset-1 rounded-2xl opacity-20 blur-md transition-opacity duration-300 group-hover:opacity-35 pointer-events-none"
+          className="absolute -inset-1 rounded-panel opacity-20 blur-md transition-opacity duration-300 group-hover:opacity-35 pointer-events-none"
           style={{ background: glowColor }}
         />
       )}
       <div
         className={clsx(
-          'relative px-4 py-3 rounded-2xl min-w-[160px] border transition-all duration-200 group-hover:border-white/10 cursor-pointer',
-          selected && 'ring-1 ring-accent/50',
+          'relative px-4 py-3 rounded-panel min-w-[160px] border transition-all duration-200 group-hover:border-white/10 cursor-pointer',
+          selected && 'ring-1 ring-beam-edge/50',
         )}
         style={{
           background: 'linear-gradient(135deg, rgba(15,15,23,0.95) 0%, rgba(22,22,31,0.9) 100%)',
@@ -145,7 +145,7 @@ function AppIcon({ appKey, size = 8 }: { appKey: string; size?: number }) {
 
   return (
     <div
-      className="rounded-lg flex items-center justify-center shrink-0 overflow-hidden"
+      className="rounded-row flex items-center justify-center shrink-0 overflow-hidden"
       style={{
         width: boxPx, height: boxPx,
         background: meta.iconBg || `${meta.color}18`,
@@ -169,7 +169,7 @@ function AppIcon({ appKey, size = 8 }: { appKey: string; size?: number }) {
 
 // ── User Node ──────────────────────────────────────────────────────
 // Leftmost column: shows which user accessed which application.
-const USER_NODE_COLOR = '#38bdf8'; // sky — distinct from app brand colors
+const USER_NODE_COLOR = 'var(--text-3)'; // structure, not identity — the apps carry the colour here
 function UserNodeComponent({ data, selected }: NodeProps) {
   const username = String(data.username || 'unknown');
   const calls = Number(data.call_count) || 0;
@@ -180,12 +180,12 @@ function UserNodeComponent({ data, selected }: NodeProps) {
       <Handle
         type="source"
         position={Position.Right}
-        className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full"
+        className="!w-2.5 !h-2.5 !border-2 !border-panel !rounded-full"
         style={{ background: USER_NODE_COLOR }}
       />
       <div className="flex items-center gap-3">
         <div
-          className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-[11px] font-semibold"
+          className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-2xs font-semibold"
           style={{
             background: `${USER_NODE_COLOR}18`,
             border: `1px solid ${USER_NODE_COLOR}30`,
@@ -195,8 +195,8 @@ function UserNodeComponent({ data, selected }: NodeProps) {
           {initials}
         </div>
         <div className="min-w-0">
-          <span className="text-[13px] font-semibold text-white truncate block">{username}</span>
-          <p className="text-[10px] text-gray-500 mt-0.5 tabular-nums">
+          <span className="text-sm font-semibold text-ink truncate block">{username}</span>
+          <p className="text-micro text-ink-3 mt-0.5 tabular-nums">
             {calls > 0 ? `${calls.toLocaleString()} calls` : 'no activity'}
           </p>
         </div>
@@ -218,36 +218,36 @@ function AppNodeComponent({ data, selected }: NodeProps) {
       <Handle
         type="target"
         position={Position.Left}
-        className="!w-2 !h-2 !border-2 !border-[#0a0a0f] !rounded-full !opacity-60"
+        className="!w-2 !h-2 !border-2 !border-panel !rounded-full !opacity-60"
         style={{ background: USER_NODE_COLOR }}
       />
       <Handle
         type="source"
         position={Position.Right}
-        className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full"
+        className="!w-2.5 !h-2.5 !border-2 !border-panel !rounded-full"
         style={{ background: meta.lineColor || meta.color }}
       />
       <div className="flex items-center gap-3">
         <AppIcon appKey={appKey} />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-white truncate">
+            <span className="text-sm font-semibold text-ink truncate">
               {meta.label}
             </span>
             <div className="relative flex items-center justify-center w-2 h-2 shrink-0">
               {connected && (
                 <div
                   className="absolute inset-0 rounded-full animate-ping opacity-40"
-                  style={{ background: '#22c55e' }}
+                  style={{ background: 'var(--beam)' }}
                 />
               )}
               <div
                 className="w-2 h-2 rounded-full"
-                style={{ background: connected ? '#22c55e' : '#3f3f46' }}
+                style={{ background: connected ? 'var(--beam)' : 'var(--line-strong)' }}
               />
             </div>
           </div>
-          <p className="text-[10px] text-gray-500 mt-0.5 tabular-nums">
+          <p className="text-micro text-ink-3 mt-0.5 tabular-nums">
             {calls > 0 ? `${calls.toLocaleString()} calls` : 'no activity'}
           </p>
         </div>
@@ -264,49 +264,49 @@ function BackendNodeComponent({ data, selected }: NodeProps) {
   const toolCount = Number(data.tool_count) || 0;
   const expanded = Boolean(data.expanded);
   const healthColor =
-    health === 'healthy' ? '#22c55e' : health === 'unhealthy' ? '#ef4444' : '#6b7280';
+    health === 'healthy' ? 'var(--beam)' : health === 'unhealthy' ? 'var(--deny)' : 'var(--text-3)';
 
   return (
-    <NodeShell glowColor={health === 'healthy' ? '#22c55e20' : undefined} selected={selected}>
+    <NodeShell glowColor={health === 'healthy' ? 'var(--beam-wash)' : undefined} selected={selected}>
       <Handle
         type="target"
         position={Position.Left}
-        className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full"
-        style={{ background: '#7c5cfc' }}
+        className="!w-2.5 !h-2.5 !border-2 !border-panel !rounded-full"
+        style={{ background: 'var(--line-strong)' }}
       />
       {expanded && (
         <Handle
           type="source"
           position={Position.Right}
-          className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full"
-          style={{ background: '#7c5cfc' }}
+          className="!w-2.5 !h-2.5 !border-2 !border-panel !rounded-full"
+          style={{ background: 'var(--line-strong)' }}
         />
       )}
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 border border-accent/15">
-          {transport === 'agent' ? <Laptop className="w-4 h-4 text-accent" /> : <Server className="w-4 h-4 text-accent" />}
+        <div className="w-8 h-8 rounded-row bg-beam-wash flex items-center justify-center shrink-0 border border-beam-edge">
+          {transport === 'agent' ? <Laptop className="w-4 h-4 text-beam" /> : <Server className="w-4 h-4 text-beam" />}
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-white truncate">{name}</span>
+            <span className="text-sm font-semibold text-ink truncate">{name}</span>
             <div className="w-2 h-2 rounded-full shrink-0" style={{ background: healthColor }} />
           </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             <span
-              className="text-[9px] uppercase tracking-wider font-medium px-1.5 py-px rounded"
+              className="text-micro uppercase tracking-wider font-medium px-1.5 py-px rounded-control"
               style={{
-                background: '#7c5cfc12',
-                color: '#7c5cfc',
-                border: '1px solid #7c5cfc18',
+                background: 'var(--neutral-wash)',
+                color: 'var(--text-3)',
+                border: '1px solid var(--line)',
               }}
             >
               {transport}
             </span>
-            <span className="text-[10px] text-gray-500">{toolCount} tools</span>
+            <span className="text-micro text-ink-3">{toolCount} tools</span>
           </div>
         </div>
         <ChevronRight
-          className="w-4 h-4 text-gray-500 shrink-0 transition-transform duration-300"
+          className="w-4 h-4 text-ink-3 shrink-0 transition-transform duration-300"
           style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
         />
       </div>
@@ -334,24 +334,24 @@ function ToolNodeComponent({ data, selected }: NodeProps) {
         <Handle
           type="target"
           position={Position.Left}
-          className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full"
+          className="!w-2.5 !h-2.5 !border-2 !border-panel !rounded-full"
           style={{ background: rc.dot }}
         />
         <div className="max-w-[180px]">
-          <p className="text-[12px] font-medium text-gray-200 truncate" title={toolName}>
+          <p className="text-xs font-medium text-ink truncate" title={toolName}>
             {displayName}
           </p>
           <div className="flex items-center gap-2 mt-1">
             {risk && (
               <span
-                className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-px rounded"
+                className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-px rounded-control"
                 style={{ background: rc.bg, color: rc.text }}
               >
                 {risk}
               </span>
             )}
             {calls > 0 && (
-              <span className="text-[10px] text-gray-500 tabular-nums">
+              <span className="text-micro text-ink-3 tabular-nums">
                 {calls.toLocaleString()}
               </span>
             )}
@@ -371,20 +371,20 @@ function SubBackendNodeComponent({ data, selected }: NodeProps) {
   return (
     <div className="tool-node-enter" style={{ animationDelay: `${(Number(data.animIndex) || 0) * 0.06}s` }}>
       <NodeShell selected={selected}>
-        <Handle type="target" position={Position.Left} className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full" style={{ background: '#7c5cfc' }} />
+        <Handle type="target" position={Position.Left} className="!w-2.5 !h-2.5 !border-2 !border-panel !rounded-full" style={{ background: 'var(--line-strong)' }} />
         {expanded && (
-          <Handle type="source" position={Position.Right} className="!w-2.5 !h-2.5 !border-2 !border-[#0a0a0f] !rounded-full" style={{ background: '#7c5cfc' }} />
+          <Handle type="source" position={Position.Right} className="!w-2.5 !h-2.5 !border-2 !border-panel !rounded-full" style={{ background: 'var(--line-strong)' }} />
         )}
         <div className="flex items-center gap-3 max-w-[180px]">
-          <div className="w-6 h-6 rounded-md bg-accent/10 flex items-center justify-center shrink-0 border border-accent/15">
-            <Server className="w-3 h-3 text-accent" />
+          <div className="w-6 h-6 rounded-control bg-beam-wash flex items-center justify-center shrink-0 border border-beam-edge">
+            <Server className="w-3 h-3 text-beam" />
           </div>
           <div className="min-w-0">
-            <p className="text-[12px] font-medium text-gray-200 truncate">{name}</p>
-            <span className="text-[10px] text-gray-500">{toolCount} tools</span>
+            <p className="text-xs font-medium text-ink truncate">{name}</p>
+            <span className="text-micro text-ink-3">{toolCount} tools</span>
           </div>
           <ChevronRight
-            className="w-3.5 h-3.5 text-gray-500 shrink-0 transition-transform duration-300"
+            className="w-3.5 h-3.5 text-ink-3 shrink-0 transition-transform duration-300"
             style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
           />
         </div>
@@ -436,11 +436,11 @@ function DetailPanel({
   onClose: () => void;
 }) {
   const statusIcon = (status: string) => {
-    if (status === 'success') return <CheckCircle className="w-3 h-3 text-emerald-400" />;
+    if (status === 'success') return <CheckCircle className="w-3 h-3 text-beam" />;
     if (status === 'error' || status === 'tool_error')
-      return <XCircle className="w-3 h-3 text-red-400" />;
-    if (status === 'denied') return <ShieldOff className="w-3 h-3 text-amber-400" />;
-    return <Activity className="w-3 h-3 text-gray-400" />;
+      return <XCircle className="w-3 h-3 text-deny" />;
+    if (status === 'denied') return <ShieldOff className="w-3 h-3 text-warn" />;
+    return <Activity className="w-3 h-3 text-ink-2" />;
   };
 
   const renderHeader = () => {
@@ -452,7 +452,7 @@ function DetailPanel({
         return (
           <div className="flex items-center gap-3">
             <div
-              className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-[11px] font-semibold"
+              className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-2xs font-semibold"
               style={{
                 background: `${USER_NODE_COLOR}18`,
                 border: `1px solid ${USER_NODE_COLOR}30`,
@@ -462,8 +462,8 @@ function DetailPanel({
               {initials}
             </div>
             <div>
-              <p className="text-sm font-semibold text-white">{username}</p>
-              <span className="text-[10px] text-gray-500">
+              <p className="text-sm font-semibold text-ink">{username}</p>
+              <span className="text-micro text-ink-3">
                 {calls > 0 ? `${calls.toLocaleString()} calls` : 'no activity'} in range
               </span>
             </div>
@@ -478,13 +478,13 @@ function DetailPanel({
           <div className="flex items-center gap-3">
             <AppIcon appKey={appKey} />
             <div>
-              <p className="text-sm font-semibold text-white">{meta.label}</p>
+              <p className="text-sm font-semibold text-ink">{meta.label}</p>
               <div className="flex items-center gap-2 mt-0.5">
                 <div
                   className="w-2 h-2 rounded-full"
-                  style={{ background: connected ? '#22c55e' : '#3f3f46' }}
+                  style={{ background: connected ? 'var(--beam)' : 'var(--line-strong)' }}
                 />
-                <span className="text-[10px] text-gray-500">
+                <span className="text-micro text-ink-3">
                   {connected ? 'Connected' : 'Disconnected'}
                 </span>
               </div>
@@ -498,15 +498,15 @@ function DetailPanel({
         const health = String(selection.data?.health_status ?? '');
         return (
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 border border-accent/15">
-              <Server className="w-4 h-4 text-accent" />
+            <div className="w-8 h-8 rounded-row bg-beam-wash flex items-center justify-center shrink-0 border border-beam-edge">
+              <Server className="w-4 h-4 text-beam" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-white">{name}</p>
+              <p className="text-sm font-semibold text-ink">{name}</p>
               <div className="flex items-center gap-1.5 mt-0.5">
                 <span
-                  className="text-[9px] uppercase tracking-wider font-medium px-1.5 py-px rounded"
-                  style={{ background: '#7c5cfc12', color: '#7c5cfc' }}
+                  className="text-micro uppercase tracking-wider font-medium px-1.5 py-px rounded-control"
+                  style={{ background: 'var(--neutral-wash)', color: 'var(--text-3)' }}
                 >
                   {transport}
                 </span>
@@ -515,10 +515,10 @@ function DetailPanel({
                   style={{
                     background:
                       health === 'healthy'
-                        ? '#22c55e'
+                        ? 'var(--beam)'
                         : health === 'unhealthy'
-                          ? '#ef4444'
-                          : '#6b7280',
+                          ? 'var(--deny)'
+                          : 'var(--text-3)',
                   }}
                 />
               </div>
@@ -538,24 +538,24 @@ function DetailPanel({
         return (
           <div>
             <div className="flex items-center gap-2">
-              <Wrench className="w-4 h-4 text-gray-400" />
-              <p className="text-sm font-semibold text-white">{displayName}</p>
+              <Wrench className="w-4 h-4 text-ink-2" />
+              <p className="text-sm font-semibold text-ink">{displayName}</p>
             </div>
             <div className="flex items-center gap-2 mt-1.5">
               {risk && (
                 <span
-                  className="text-[9px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded"
+                  className="text-micro uppercase tracking-wider font-semibold px-2 py-0.5 rounded-control"
                   style={{ background: rc.bg, color: rc.text }}
                 >
                   {risk}
                 </span>
               )}
-              <span className="text-[10px] text-gray-500">
+              <span className="text-micro text-ink-3">
                 {Number(selection.data?.call_count ?? 0).toLocaleString()} calls
               </span>
             </div>
             {toolName.includes('__') && (
-              <p className="text-[10px] text-gray-600 mt-1 font-mono">{toolName}</p>
+              <p className="text-micro text-ink-4 mt-1 font-mono">{toolName}</p>
             )}
           </div>
         );
@@ -565,12 +565,12 @@ function DetailPanel({
         const subToolCount = Number(selection.data?.tool_count ?? 0);
         return (
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 border border-accent/15">
-              <Server className="w-4 h-4 text-accent" />
+            <div className="w-8 h-8 rounded-row bg-beam-wash flex items-center justify-center shrink-0 border border-beam-edge">
+              <Server className="w-4 h-4 text-beam" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-white">{subName}</p>
-              <span className="text-[10px] text-gray-500">{subToolCount} tools</span>
+              <p className="text-sm font-semibold text-ink">{subName}</p>
+              <span className="text-micro text-ink-3">{subToolCount} tools</span>
             </div>
           </div>
         );
@@ -582,12 +582,12 @@ function DetailPanel({
           <div>
             <div className="flex items-center gap-2 text-sm">
               <UsersIcon className="w-4 h-4" style={{ color: USER_NODE_COLOR }} />
-              <span className="font-semibold text-white">User</span>
-              <ArrowRight className="w-3.5 h-3.5 text-gray-600" />
+              <span className="font-semibold text-ink">User</span>
+              <ArrowRight className="w-3.5 h-3.5 text-ink-4" />
               <AppIcon appKey={appKey} size={6} />
-              <span className="font-semibold text-white">{meta.label}</span>
+              <span className="font-semibold text-ink">{meta.label}</span>
             </div>
-            <p className="text-[10px] text-gray-500 mt-1">
+            <p className="text-micro text-ink-3 mt-1">
               {(selection.callCount ?? 0).toLocaleString()} calls in this connection
             </p>
           </div>
@@ -600,11 +600,11 @@ function DetailPanel({
           <div>
             <div className="flex items-center gap-2 text-sm">
               <AppIcon appKey={srcAppKey} size={6} />
-              <span className="font-semibold text-white">{srcMeta.label}</span>
-              <ArrowRight className="w-3.5 h-3.5 text-gray-600" />
-              <span className="font-semibold text-white">{selection.targetName}</span>
+              <span className="font-semibold text-ink">{srcMeta.label}</span>
+              <ArrowRight className="w-3.5 h-3.5 text-ink-4" />
+              <span className="font-semibold text-ink">{selection.targetName}</span>
             </div>
-            <p className="text-[10px] text-gray-500 mt-1">
+            <p className="text-micro text-ink-3 mt-1">
               {(selection.callCount ?? 0).toLocaleString()} calls in this connection
             </p>
           </div>
@@ -619,11 +619,11 @@ function DetailPanel({
         return (
           <div>
             <div className="flex items-center gap-2 text-sm">
-              <span className="font-semibold text-white">{selection.sourceName}</span>
-              <ArrowRight className="w-3.5 h-3.5 text-gray-600" />
-              <span className="font-semibold text-white">{displayTarget}</span>
+              <span className="font-semibold text-ink">{selection.sourceName}</span>
+              <ArrowRight className="w-3.5 h-3.5 text-ink-4" />
+              <span className="font-semibold text-ink">{displayTarget}</span>
             </div>
-            <p className="text-[10px] text-gray-500 mt-1">
+            <p className="text-micro text-ink-3 mt-1">
               {(selection.callCount ?? 0).toLocaleString()} calls in this connection
             </p>
           </div>
@@ -634,7 +634,7 @@ function DetailPanel({
 
   return (
     <div
-      className="absolute top-2 right-2 bottom-2 w-80 z-20 rounded-xl border overflow-hidden flex flex-col"
+      className="absolute top-2 right-2 bottom-2 w-80 z-20 rounded-card border overflow-hidden flex flex-col"
       style={{
         background: 'linear-gradient(180deg, rgba(15,15,23,0.98) 0%, rgba(10,10,15,0.98) 100%)',
         borderColor: 'rgba(30,30,46,0.6)',
@@ -647,7 +647,7 @@ function DetailPanel({
         <div className="flex-1 min-w-0">{renderHeader()}</div>
         <button
           onClick={onClose}
-          className="p-1 text-gray-600 hover:text-gray-300 rounded transition-colors shrink-0 ml-2"
+          className="p-1 text-ink-4 hover:text-ink-2 rounded-control transition-colors shrink-0 ml-2"
         >
           <X className="w-4 h-4" />
         </button>
@@ -656,24 +656,24 @@ function DetailPanel({
       {/* Events */}
       <div className="flex-1 overflow-y-auto">
         <div className="px-4 pt-3 pb-1">
-          <p className="text-[10px] uppercase tracking-widest text-gray-600 font-semibold">
-            Recent Events
+          <p className="text-micro uppercase tracking-widest text-ink-4 font-semibold">
+            Recent events
           </p>
         </div>
         {loadingEvents && events.length === 0 ? (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-4 h-4 text-accent animate-spin" />
+            <Loader2 className="w-4 h-4 text-beam animate-spin" />
           </div>
         ) : events.length === 0 ? (
           <div className="px-4 py-6 text-center">
-            <p className="text-xs text-gray-600">No events found</p>
+            <p className="text-xs text-ink-4">No recent events</p>
           </div>
         ) : (
           <div className="px-3 pb-3 space-y-1">
             {events.map((evt, idx) => (
               <div
                 key={evt.event_id}
-                className="px-3 py-2.5 rounded-lg border border-white/[0.03] hover:border-white/[0.06] transition-all duration-300"
+                className="px-3 py-2.5 rounded-row border border-white/[0.03] hover:border-white/[0.06] transition-all duration-300"
                 style={{
                   background: idx === 0 ? 'rgba(124,92,252,0.06)' : 'rgba(255,255,255,0.02)',
                   borderColor: idx === 0 ? 'rgba(124,92,252,0.15)' : undefined,
@@ -682,27 +682,27 @@ function DetailPanel({
               >
                 <div className="flex items-center gap-2">
                   {statusIcon(evt.status)}
-                  <span className="text-[11px] font-medium text-gray-300 truncate flex-1">
+                  <span className="text-2xs font-medium text-ink-2 truncate flex-1">
                     {evt.tool_name.includes('__')
                       ? evt.tool_name.split('__').slice(1).join('__')
                       : evt.tool_name}
                   </span>
-                  <span className="text-[9px] text-gray-600 shrink-0 tabular-nums">
+                  <span className="text-micro text-ink-4 shrink-0 tabular-nums">
                     {evt.duration_ms != null ? `${Math.round(evt.duration_ms)}ms` : ''}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 mt-1">
-                  <Clock className="w-2.5 h-2.5 text-gray-700" />
-                  <span className="text-[9px] text-gray-600">{timeAgo(evt.timestamp)}</span>
+                  <Clock className="w-2.5 h-2.5 text-ink-4" />
+                  <span className="text-micro text-ink-4">{timeAgo(evt.timestamp)}</span>
                   {evt.application && (
                     <>
-                      <span className="text-[9px] text-gray-700">via</span>
-                      <span className="text-[9px] text-gray-500">{getAppMeta(evt.application).label}</span>
+                      <span className="text-micro text-ink-4">via</span>
+                      <span className="text-micro text-ink-3">{getAppMeta(evt.application).label}</span>
                     </>
                   )}
                 </div>
                 {evt.error_message && (
-                  <p className="text-[9px] text-red-400/70 mt-1 truncate">{evt.error_message}</p>
+                  <p className="text-micro text-deny mt-1 truncate">{evt.error_message}</p>
                 )}
               </div>
             ))}
@@ -1247,7 +1247,7 @@ export default function UsageGraph({ isAdmin }: Props) {
           source: `backend-${expandedBackend}`,
           target: `sub-${expandedBackend}-${sub.name}`,
           animated: true,
-          style: { stroke: '#7c5cfc', strokeWidth: 1.5, opacity: 0.45 },
+          style: { stroke: 'var(--line-strong)', strokeWidth: 1.5, opacity: 0.9 },
           data: { sourceName: expandedBackend, targetName: sub.name, callCount: 0 },
         });
       });
@@ -1292,7 +1292,7 @@ export default function UsageGraph({ isAdmin }: Props) {
               source: `sub-${expandedBackend}-${expandedSubBackend}`,
               target: `tool-${t.tool_name}`,
               animated: true,
-              style: { stroke: '#7c5cfc', strokeWidth: 1, opacity: 0.35 },
+              style: { stroke: 'var(--line-strong)', strokeWidth: 1, opacity: 0.7 },
               data: { sourceName: expandedSubBackend, targetName: t.tool_name, callCount: t.call_count },
             });
           });
@@ -1333,7 +1333,7 @@ export default function UsageGraph({ isAdmin }: Props) {
           source: `backend-${edge.source}`,
           target: `tool-${edge.target}`,
           animated: true,
-          style: { stroke: '#7c5cfc', strokeWidth: thickness, opacity: 0.45 },
+          style: { stroke: 'var(--line-strong)', strokeWidth: thickness, opacity: 0.9 },
           data: { sourceName: edge.source, targetName: edge.target, callCount: edge.call_count },
         });
       });
@@ -1439,19 +1439,16 @@ export default function UsageGraph({ isAdmin }: Props) {
   }, []);
 
   return (
-    <div className="h-screen flex flex-col -m-8">
+    <div className="h-full min-h-0 flex flex-col">
       {/* ── Top bar ─────────────────────────────────────────────── */}
       <div
-        className="flex items-center gap-3 px-6 py-3 shrink-0 border-b"
-        style={{
-          background: 'linear-gradient(180deg, #0f0f17 0%, #0a0a0f 100%)',
-          borderColor: 'rgba(30,30,46,0.5)',
-        }}
+        className="flex items-center gap-x-3 gap-y-2 flex-wrap px-4 sm:px-6 py-3 shrink-0 border-b border-line"
+        style={{ background: 'var(--panel)' }}
       >
         {/* Title + summary */}
-        <div className="flex items-center gap-4 mr-auto">
+        <div className="flex items-center gap-3 mr-auto min-w-0">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-white tracking-tight">Usage Graph</h2>
+            <h2 className="text-sm font-semibold text-ink tracking-tight whitespace-nowrap">Usage graph</h2>
             {/* Live status indicator */}
             <div className="flex items-center gap-1.5">
               <div className="relative flex items-center justify-center w-2 h-2">
@@ -1461,21 +1458,21 @@ export default function UsageGraph({ isAdmin }: Props) {
                       'absolute inset-0 rounded-full transition-opacity duration-300',
                       livePulse ? 'animate-ping opacity-70' : 'opacity-0',
                     )}
-                    style={{ background: liveMode === 'ws' ? '#22c55e' : '#3b82f6' }}
+                    style={{ background: liveMode === 'ws' ? 'var(--beam)' : 'var(--text-3)' }}
                   />
                 )}
                 <div
                   className="w-1.5 h-1.5 rounded-full transition-colors duration-500"
-                  style={{ background: wsConnected ? (liveMode === 'ws' ? '#22c55e' : '#3b82f6') : '#52525b' }}
+                  style={{ background: wsConnected ? (liveMode === 'ws' ? 'var(--beam)' : 'var(--text-3)') : 'var(--line-strong)' }}
                 />
               </div>
               <span
                 className={clsx(
-                  'text-[9px] uppercase tracking-widest font-semibold transition-colors duration-500',
-                  liveMode === 'ws' ? 'text-emerald-600' : liveMode === 'polling' ? 'text-blue-500' : 'text-zinc-600',
+                  'text-micro uppercase tracking-widest font-semibold transition-colors duration-500',
+                  liveMode === 'ws' ? 'text-beam' : liveMode === 'polling' ? 'text-ink-2' : 'text-ink-4',
                 )}
               >
-                {liveMode === 'ws' ? 'live' : liveMode === 'polling' ? 'auto-refresh' : 'connecting…'}
+                {liveMode === 'ws' ? 'live' : liveMode === 'polling' ? 'auto-refresh' : 'connecting...'}
               </span>
             </div>
           </div>
@@ -1484,11 +1481,11 @@ export default function UsageGraph({ isAdmin }: Props) {
         {/* User selector (admin) */}
         {isAdmin && users.length > 0 && (
           <div className="flex items-center gap-1.5">
-            <UsersIcon className="w-3.5 h-3.5 text-gray-600" />
+            <UsersIcon className="w-3.5 h-3.5 text-ink-4" />
             <select
               value={selectedUserId}
               onChange={(e) => setSelectedUserId(e.target.value)}
-              className="px-2 py-1 bg-transparent border border-border rounded-lg text-[11px] text-gray-300 focus:outline-none focus:border-accent/40 appearance-none pr-5 cursor-pointer"
+              className="px-2 py-1 bg-transparent border border-line rounded-row text-2xs text-ink-2 focus:outline-none focus:border-beam-edge appearance-none pr-5 cursor-pointer"
             >
               <option value="all">All users</option>
               <option value="">Current user</option>
@@ -1502,16 +1499,16 @@ export default function UsageGraph({ isAdmin }: Props) {
         )}
 
         {/* Range selector */}
-        <div className="flex items-center rounded-lg overflow-hidden border border-border">
+        <div className="flex items-center rounded-row overflow-hidden border border-line">
           {['24h', '7d', '30d'].map((r) => (
             <button
               key={r}
               onClick={() => setRange(r)}
               className={clsx(
-                'px-3 py-1.5 text-[11px] font-medium transition-all',
+                'px-3 py-1.5 text-2xs font-medium transition-all',
                 range === r
-                  ? 'bg-accent/15 text-accent'
-                  : 'text-gray-500 hover:text-gray-300 hover:bg-surface-hover',
+                  ? 'bg-beam-wash text-beam'
+                  : 'text-ink-3 hover:text-ink-2 hover:bg-raised',
               )}
             >
               {r}
@@ -1523,7 +1520,7 @@ export default function UsageGraph({ isAdmin }: Props) {
         <button
           onClick={loadGraph}
           disabled={loading}
-          className="p-1.5 text-gray-600 hover:text-gray-300 rounded-md transition-colors disabled:opacity-30"
+          className="p-1.5 text-ink-4 hover:text-ink-2 rounded-control transition-colors disabled:opacity-30"
         >
           <RefreshCw className={clsx('w-3.5 h-3.5', loading && 'animate-spin')} />
         </button>
@@ -1534,21 +1531,21 @@ export default function UsageGraph({ isAdmin }: Props) {
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <div className="flex flex-col items-center gap-3">
-              <div className="w-8 h-8 rounded-xl bg-accent/10 flex items-center justify-center animate-pulse">
-                <RefreshCw className="w-4 h-4 text-accent animate-spin" />
+              <div className="w-8 h-8 rounded-card bg-beam-wash flex items-center justify-center animate-pulse">
+                <RefreshCw className="w-4 h-4 text-beam animate-spin" />
               </div>
-              <p className="text-xs text-gray-600">Loading graph data...</p>
+              <p className="text-xs text-ink-4">Loading graph data...</p>
             </div>
           </div>
         ) : nodes.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
-              <div className="w-12 h-12 mx-auto rounded-2xl bg-surface border border-border flex items-center justify-center mb-3">
-                <Layers className="w-5 h-5 text-gray-600" />
+              <div className="w-12 h-12 mx-auto rounded-panel bg-panel border border-line flex items-center justify-center mb-3">
+                <Layers className="w-5 h-5 text-ink-4" />
               </div>
-              <p className="text-sm text-gray-400">No usage data</p>
-              <p className="text-xs text-gray-600 mt-1">
-                Make tool calls to see the graph populate
+              <p className="text-sm text-ink-2">No usage data yet</p>
+              <p className="text-xs text-ink-4 mt-1">
+                Once an AI client routes a tool call through the gateway, the graph appears.
               </p>
             </div>
           </div>
@@ -1567,12 +1564,12 @@ export default function UsageGraph({ isAdmin }: Props) {
               defaultEdgeOptions={{ type: 'default' }}
               minZoom={0.3}
               maxZoom={1.5}
-              style={{ background: '#0a0a0f' }}
+              style={{ background: 'var(--void)' }}
             >
-              <Background color="#14141f" gap={24} size={1} />
+              <Background color="var(--line-strong)" gap={24} size={1} />
               <Controls
                 showInteractive={false}
-                className="!bg-surface/80 !border-border !rounded-xl !shadow-2xl [&>button]:!bg-transparent [&>button]:!border-border/50 [&>button]:!text-gray-500 [&>button:hover]:!text-white [&>button:hover]:!bg-surface-hover [&>button]:!rounded-lg [&>button]:!w-8 [&>button]:!h-8"
+                className="!bg-panel/80 !border-line !rounded-card !shadow-2xl [&>button]:!bg-transparent [&>button]:!border-line/50 [&>button]:!text-ink-3 [&>button:hover]:!text-ink [&>button:hover]:!bg-raised [&>button]:!rounded-row [&>button]:!w-8 [&>button]:!h-8"
               />
             </ReactFlow>
 

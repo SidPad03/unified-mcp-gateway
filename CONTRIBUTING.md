@@ -15,10 +15,14 @@ Thank you for your interest in contributing! This document provides guidelines f
 
 ### Prerequisites
 
-- **Rust** (latest stable) for the server and agent
+- **Rust** (latest stable) for the server and the agent core
 - **Node.js** (18+) and npm for the dashboard
 - **PostgreSQL 16** (or use the included docker-compose)
 - **Docker** for containerized development
+- **macOS 26 + Command Line Tools** to build the agent app. Full Xcode is not
+  required — the CLT ship the macOS 26 SDK, SwiftUI, `iconutil`, `codesign`
+  and `hdiutil`, which is everything `macos/build.sh` uses. The agent's Rust
+  crates build and test on any platform.
 
 ### Running Locally
 
@@ -41,11 +45,17 @@ cd mcp-gateway-dashboard
 npm install
 npm run dev
 
-# Run the agent (in another terminal)
+# Agent core + C ABI: no macOS required
 cd mcp-gateway-agent
-cargo run -- setup
-cargo run -- run
+cargo test --workspace
+
+# The agent app (macOS only). Rebuild and relaunch after a change:
+./macos/build.sh && open "build/MCP Gateway Agent.app"
 ```
+
+`build.sh` takes `--universal` (both architectures — needs rustup targets),
+`--dmg`, and `--debug`. Without a signing identity it signs ad-hoc, which is
+what CI does too.
 
 ## Code Style
 
@@ -81,11 +91,43 @@ Reproduce exactly what CI runs before you push:
 cargo fmt --manifest-path mcp-gateway-server/Cargo.toml --check
 cargo clippy --manifest-path mcp-gateway-server/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path mcp-gateway-server/Cargo.toml
-# …and the same three for mcp-gateway-agent
+
+cargo fmt --manifest-path mcp-gateway-agent/Cargo.toml --all --check
+cargo clippy --manifest-path mcp-gateway-agent/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path mcp-gateway-agent/Cargo.toml --workspace
+
+# The agent app (macOS only; CI builds it on every pull request)
+cd mcp-gateway-agent && ./macos/build.sh
 
 # Dashboard
 cd mcp-gateway-dashboard && npm ci && npx tsc --noEmit && npm run build
 ```
+
+### Where CI runs
+
+Everything except the macOS agent app runs on the repository's self-hosted
+`homelab` runners (`runs-on: [self-hosted, homelab]`). They need Docker — for the
+Postgres service container in the `test` job and for buildx in `build` — and
+nothing else preinstalled: the workflow installs rustup if it is missing, and
+`actions/setup-node` brings its own Node.
+
+Two details worth knowing before editing `ci.yml`:
+
+- **The Postgres service publishes no fixed host port.** It declares the
+  container port only, and the test step reads the assigned host port back out of
+  `job.services.postgres.ports['5432']`. Pinning `5432:5432` would collide with a
+  Postgres already running on the runner host, and with the second runner if both
+  picked up this job at once.
+- **The runners are x86_64 but the images are multi-arch.** arm64 is
+  cross-compiled inside the Dockerfiles rather than emulated. If you add a
+  dependency that needs a C toolchain or a system library, the arm64 build is
+  where it will break — check `cargo tree --target x86_64-unknown-linux-gnu -i
+  <crate>` before assuming a crate is pure Rust, because platform-gated
+  dependencies do not show up in a `cargo tree` run on macOS.
+
+`agent-app.yml` is the exception: it needs the macOS 26 SDK, so it runs on
+GitHub's `macos-26` image. The agent's Rust crates and their tests still run on
+the self-hosted fleet with everything else — only the Swift build is up there.
 
 ### Database-backed tests
 
@@ -109,7 +151,9 @@ throwaway instance, never at anything you care about.
 
 ## Architecture
 
-See the [README](README.md) for an overview of the three-component architecture (server, dashboard, agent).
+See the [README](README.md) for an overview of the three-component architecture
+(server, dashboard, agent), and [docs/agent-desktop-app.md](docs/agent-desktop-app.md)
+for the agent app's design and the reasoning behind it.
 
 ## License
 

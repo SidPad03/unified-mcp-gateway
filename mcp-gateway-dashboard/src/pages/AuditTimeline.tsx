@@ -1,36 +1,57 @@
 import React, { useState, useEffect } from 'react';
 import { api, AuditEvent, User } from '@/lib/api';
-import { Search, Download, ChevronLeft, ChevronRight, Clock, CheckCircle, XCircle, ShieldOff, HelpCircle, X, Filter, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, ScrollText, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
 import { SUPPORTED_APPS } from '@/lib/connectors';
+import { fmt } from '@/lib/format';
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  ConfirmModal,
+  EmptyState,
+  Field,
+  IconButton,
+  Input,
+  Label,
+  Loading,
+  Mono,
+  PageHeader,
+  RISK_LEVELS,
+  RiskBadge,
+  Select,
+  StatusLabel,
+  Table,
+  TableMessage,
+  Td,
+  Th,
+  Tone,
+  railStyle,
+} from '@/components/ui';
 
-const STATUS_CONFIG: Record<string, { icon: typeof CheckCircle; color: string; bg: string }> = {
-  success: { icon: CheckCircle, color: 'text-success', bg: 'bg-success/10' },
-  error: { icon: XCircle, color: 'text-danger', bg: 'bg-danger/10' },
-  tool_error: { icon: XCircle, color: 'text-danger', bg: 'bg-danger/10' },
-  denied: { icon: ShieldOff, color: 'text-warning', bg: 'bg-warning/10' },
-  timeout: { icon: Clock, color: 'text-gray-400', bg: 'bg-gray-500/10' },
+/**
+ * How an outcome is toned.
+ *
+ * Red means *broken* and amber means *stopped*. A policy denial is the gateway
+ * working, not failing, so it must not read the same as an upstream 502 — but
+ * it is still the line you came here to find, so it does not fade into neutral
+ * either.
+ *
+ * An unrecognised status must never fall through to "success": painting an
+ * unknown outcome green is how `tool_error` once rendered as a green check and
+ * hid failed calls from the audit trail. Unknown reads as unknown.
+ */
+const STATUS_TONE: Record<string, { tone: Tone; label: string }> = {
+  success: { tone: 'ok', label: 'success' },
+  error: { tone: 'deny', label: 'error' },
+  tool_error: { tone: 'deny', label: 'tool error' },
+  denied: { tone: 'warn', label: 'denied' },
+  timeout: { tone: 'warn', label: 'timeout' },
 };
+const UNKNOWN_STATUS = { tone: 'neutral' as Tone, label: 'unknown' };
 
-// Fallback for a status this build doesn't know about (e.g. a newer server
-// introduced one). It must NOT be `success`: painting an unrecognized outcome
-// green is how `tool_error` silently rendered as a green check, hiding failed
-// tool calls from the audit trail. Unknown reads as unknown.
-const UNKNOWN_STATUS = { icon: HelpCircle, color: 'text-gray-400', bg: 'bg-gray-500/10' };
-
-const RISK_CATEGORIES = ['read', 'write', 'admin', 'destructive', 'execute', 'unclassified'];
 const POLICY_DECISIONS = ['allow', 'deny', 'conditional'];
-
-const APP_COLORS: Record<string, string> = {
-  claude: 'bg-orange-500/10 text-orange-400',
-  claudedesktop: 'bg-orange-500/10 text-orange-400',
-  cursor: 'bg-gray-500/10 text-gray-400',
-  vscode: 'bg-blue-500/10 text-blue-400',
-  openwebui: 'bg-gray-400/10 text-gray-300',
-  clawbot: 'bg-purple-500/10 text-purple-400',
-  codex: 'bg-emerald-500/10 text-emerald-400',
-  lmstudio: 'bg-violet-500/10 text-violet-400',
-};
 
 export default function AuditTimeline() {
   const [events, setEvents] = useState<AuditEvent[]>([]);
@@ -39,7 +60,6 @@ export default function AuditTimeline() {
   const [page, setPage] = useState(0);
   const [pageError, setPageError] = useState('');
 
-  // Filters
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [userFilter, setUserFilter] = useState('');
@@ -54,24 +74,31 @@ export default function AuditTimeline() {
 
   const [selectedEvent, setSelectedEvent] = useState<AuditEvent | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
   const limit = 20;
 
-  // Derived filter values from events for autocomplete
   const [knownUsers, setKnownUsers] = useState<string[]>([]);
   const [knownClients, setKnownClients] = useState<string[]>([]);
   const [knownBackends, setKnownBackends] = useState<string[]>([]);
 
   useEffect(() => {
     loadEvents();
-  }, [page, statusFilter, userFilter, clientFilter, backendFilter, riskFilter, policyFilter, applicationFilter, dateFrom, dateTo]);
+  }, [
+    page,
+    statusFilter,
+    userFilter,
+    clientFilter,
+    backendFilter,
+    riskFilter,
+    policyFilter,
+    applicationFilter,
+    dateFrom,
+    dateTo,
+  ]);
 
   useEffect(() => {
-    // Load initial set to extract filter values
     loadFilterOptions();
-  }, []);
-
-  useEffect(() => {
     api.getUsers().then(setUsers).catch(() => {});
   }, []);
 
@@ -80,13 +107,12 @@ export default function AuditTimeline() {
   const loadFilterOptions = async () => {
     try {
       const data = await api.getAuditEvents({ limit: '500', offset: '0' });
-      const users = [...new Set(data.events.map(e => e.user_id).filter(Boolean) as string[])];
-      const clients = [...new Set(data.events.map(e => e.client_id).filter(Boolean) as string[])];
-      const backends = [...new Set(data.events.map(e => e.backend_name).filter(Boolean))];
-      setKnownUsers(users);
-      setKnownClients(clients);
-      setKnownBackends(backends);
-    } catch {}
+      setKnownUsers([...new Set(data.events.map(e => e.user_id).filter(Boolean) as string[])]);
+      setKnownClients([...new Set(data.events.map(e => e.client_id).filter(Boolean) as string[])]);
+      setKnownBackends([...new Set(data.events.map(e => e.backend_name).filter(Boolean))]);
+    } catch {
+      /* filters degrade to free text; the timeline still loads */
+    }
   };
 
   const loadEvents = async () => {
@@ -131,11 +157,12 @@ export default function AuditTimeline() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) {
-      setPageError(e.message || 'Export failed');
+      setPageError(e.message || 'Failed to export events');
     }
   };
 
   const handleClearAudit = async () => {
+    setClearing(true);
     try {
       await api.clearAudit();
       setShowClearConfirm(false);
@@ -146,10 +173,22 @@ export default function AuditTimeline() {
     } catch (e: any) {
       setPageError(e.message || 'Failed to clear audit');
       setShowClearConfirm(false);
+    } finally {
+      setClearing(false);
     }
   };
 
-  const activeFilterCount = [statusFilter, userFilter, clientFilter, backendFilter, riskFilter, policyFilter, applicationFilter, dateFrom, dateTo].filter(Boolean).length;
+  const activeFilters = [
+    statusFilter,
+    userFilter,
+    clientFilter,
+    backendFilter,
+    riskFilter,
+    policyFilter,
+    applicationFilter,
+    dateFrom,
+    dateTo,
+  ].filter(Boolean).length;
 
   const clearAllFilters = () => {
     setSearch('');
@@ -167,323 +206,435 @@ export default function AuditTimeline() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-lg font-semibold text-white">Audit Timeline</h2>
-          <p className="text-sm text-gray-500 mt-1">{total} total events recorded</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleExport}
-            className="flex items-center gap-2 px-3.5 py-2 bg-surface border border-border rounded-lg text-sm text-gray-300 hover:border-border-hover hover:text-white transition-colors"
-          >
-            <Download className="w-4 h-4" />
-            Export
-          </button>
-          <button
-            onClick={() => setShowClearConfirm(true)}
-            className="flex items-center gap-2 px-3.5 py-2 bg-surface border border-danger/30 rounded-lg text-sm text-danger/70 hover:border-danger hover:text-danger transition-colors"
-          >
-            <Trash2 className="w-4 h-4" />
-            Clear All
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Audit"
+        description="Every call the gateway routed, in order, with the policy decision that let it through or stopped it. Append-only: the record is the point."
+        actions={
+          <>
+            <Button icon={Download} onClick={handleExport}>
+              Export
+            </Button>
+            <Button icon={Trash2} variant="danger" onClick={() => setShowClearConfirm(true)}>
+              Clear
+            </Button>
+          </>
+        }
+      />
 
       {pageError && (
-        <div className="mb-4 px-4 py-3 bg-danger/10 border border-danger/20 rounded-lg flex items-center justify-between">
-          <p className="text-sm text-danger">{pageError}</p>
-          <button onClick={() => setPageError('')} className="text-danger/60 hover:text-danger">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        <Banner tone="deny" onDismiss={() => setPageError('')} className="mb-4">
+          {pageError}
+        </Banner>
       )}
 
-      {/* Clear confirmation dialog */}
-      {showClearConfirm && (
-        <div className="mb-4 px-4 py-4 bg-danger/5 border border-danger/20 rounded-lg">
-          <p className="text-sm text-white mb-1 font-medium">Clear all audit events?</p>
-          <p className="text-xs text-gray-400 mb-3">This will permanently delete all audit events and reset metrics counters. This action cannot be undone.</p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleClearAudit}
-              className="px-3 py-1.5 bg-danger text-white text-xs font-medium rounded-lg hover:bg-danger/80 transition-colors"
-            >
-              Yes, clear everything
-            </button>
-            <button
-              onClick={() => setShowClearConfirm(false)}
-              className="px-3 py-1.5 bg-surface border border-border text-gray-300 text-xs rounded-lg hover:border-border-hover transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Primary filters */}
-      <div className="flex items-center gap-3 mb-3">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-          <input
-            type="text"
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="relative flex-1 min-w-[220px] max-w-sm">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-4 pointer-events-none" />
+          <Input
+            type="search"
             value={search}
             onChange={e => setSearch(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && loadEvents()}
             placeholder="Search by tool name..."
-            className="w-full pl-9 pr-3 py-2 bg-surface border border-border rounded-lg text-sm text-white placeholder-gray-600 focus:outline-none focus:border-accent/50 transition-colors"
+            className="pl-8"
           />
         </div>
-        <button
-          onClick={() => setShowFilters(!showFilters)}
-          className={clsx(
-            'flex items-center gap-2 px-3 py-2 border rounded-lg text-sm transition-colors',
-            showFilters || activeFilterCount > 0
-              ? 'bg-accent/10 border-accent/30 text-accent'
-              : 'bg-surface border-border text-gray-300 hover:border-border-hover'
-          )}
+        <Button
+          icon={SlidersHorizontal}
+          onClick={() => setShowFilters(f => !f)}
+          className={clsx(activeFilters > 0 && 'border-beam-edge text-beam')}
         >
-          <Filter className="w-4 h-4" />
           Filters
-          {activeFilterCount > 0 && (
-            <span className="flex items-center justify-center w-4.5 h-4.5 text-[10px] font-semibold bg-accent text-white rounded-full">{activeFilterCount}</span>
+          {activeFilters > 0 && (
+            <span className="ml-0.5 tabular-nums text-beam">{activeFilters}</span>
           )}
-        </button>
-        {activeFilterCount > 0 && (
-          <button onClick={clearAllFilters} className="flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors">
-            <X className="w-3 h-3" />
-            Clear all
-          </button>
+        </Button>
+        {activeFilters > 0 && (
+          <Button variant="ghost" icon={X} onClick={clearAllFilters}>
+            Clear filters
+          </Button>
         )}
+        <div className="ml-auto text-2xs text-ink-4 tabular-nums">
+          {fmt.count(total)} events recorded
+        </div>
       </div>
 
-      {/* Advanced filters panel */}
       {showFilters && (
-        <div className="mb-4 bg-surface border border-border rounded-xl p-4">
-          <div className="grid grid-cols-4 gap-3">
-            <div>
-              <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">Status</label>
-              <select
+        <Card className="mb-4 animate-rise">
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+            <Field label="Status">
+              <Select
                 value={statusFilter}
-                onChange={e => { setStatusFilter(e.target.value); setPage(0); }}
-                className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
+                onChange={e => {
+                  setStatusFilter(e.target.value);
+                  setPage(0);
+                }}
+                className="w-full"
               >
-                <option value="">All Statuses</option>
-                <option value="success">Success</option>
-                <option value="error">Error</option>
-                <option value="tool_error">Tool Error</option>
-                <option value="denied">Denied</option>
-                <option value="timeout">Timeout</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">User</label>
-              <select
+                <option value="">All statuses</option>
+                {['success', 'error', 'tool_error', 'denied', 'timeout'].map(s => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="User">
+              <Select
                 value={userFilter}
-                onChange={e => { setUserFilter(e.target.value); setPage(0); }}
-                className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
+                onChange={e => {
+                  setUserFilter(e.target.value);
+                  setPage(0);
+                }}
+                className="w-full"
               >
-                <option value="">All Users</option>
-                {knownUsers.map(u => <option key={u} value={u}>{userMap.get(u) || u.slice(0, 8)}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">AI Agent / Client</label>
-              <select
+                <option value="">All users</option>
+                {knownUsers.map(u => (
+                  <option key={u} value={u}>
+                    {userMap.get(u) || u.slice(0, 8)}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Client">
+              <Select
                 value={clientFilter}
-                onChange={e => { setClientFilter(e.target.value); setPage(0); }}
-                className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
+                onChange={e => {
+                  setClientFilter(e.target.value);
+                  setPage(0);
+                }}
+                className="w-full"
               >
-                <option value="">All Clients</option>
-                {knownClients.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">Backend</label>
-              <select
+                <option value="">All clients</option>
+                {knownClients.map(c => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Backend">
+              <Select
                 value={backendFilter}
-                onChange={e => { setBackendFilter(e.target.value); setPage(0); }}
-                className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
+                onChange={e => {
+                  setBackendFilter(e.target.value);
+                  setPage(0);
+                }}
+                className="w-full"
               >
-                <option value="">All Backends</option>
-                {knownBackends.map(b => <option key={b} value={b}>{b}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">Application</label>
-              <select
+                <option value="">All backends</option>
+                {knownBackends.map(b => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Application">
+              <Select
                 value={applicationFilter}
-                onChange={e => { setApplicationFilter(e.target.value); setPage(0); }}
-                className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
+                onChange={e => {
+                  setApplicationFilter(e.target.value);
+                  setPage(0);
+                }}
+                className="w-full"
               >
-                <option value="">All Apps</option>
-                {SUPPORTED_APPS.map(a => <option key={a} value={a}>{a}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">Risk Category</label>
-              <select
+                <option value="">All apps</option>
+                {SUPPORTED_APPS.map(a => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Risk">
+              <Select
                 value={riskFilter}
-                onChange={e => { setRiskFilter(e.target.value); setPage(0); }}
-                className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
+                onChange={e => {
+                  setRiskFilter(e.target.value);
+                  setPage(0);
+                }}
+                className="w-full"
               >
-                <option value="">All Risks</option>
-                {RISK_CATEGORIES.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">Policy Decision</label>
-              <select
+                <option value="">All risks</option>
+                {RISK_LEVELS.map(r => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Policy decision">
+              <Select
                 value={policyFilter}
-                onChange={e => { setPolicyFilter(e.target.value); setPage(0); }}
-                className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
+                onChange={e => {
+                  setPolicyFilter(e.target.value);
+                  setPage(0);
+                }}
+                className="w-full"
               >
-                <option value="">All Decisions</option>
-                {POLICY_DECISIONS.map(d => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">From Date</label>
-              <input
+                <option value="">All decisions</option>
+                {POLICY_DECISIONS.map(d => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="From">
+              <Input
                 type="date"
                 value={dateFrom}
-                onChange={e => { setDateFrom(e.target.value); setPage(0); }}
-                className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
+                onChange={e => {
+                  setDateFrom(e.target.value);
+                  setPage(0);
+                }}
               />
-            </div>
-            <div>
-              <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">To Date</label>
-              <input
+            </Field>
+            <Field label="To">
+              <Input
                 type="date"
                 value={dateTo}
-                onChange={e => { setDateTo(e.target.value); setPage(0); }}
-                className="w-full px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 focus:outline-none focus:border-accent/50"
+                onChange={e => {
+                  setDateTo(e.target.value);
+                  setPage(0);
+                }}
               />
-            </div>
+            </Field>
           </div>
-        </div>
+        </Card>
       )}
 
-      {/* Table */}
-      <div className="bg-surface border border-border rounded-xl overflow-hidden">
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-border">
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Timestamp</th>
-              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Tool</th>
-              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Backend</th>
-              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
-              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">App</th>
-              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
-              <th className="text-left px-3 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Risk</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-500 text-sm">Loading events...</td></tr>
-            ) : events.length === 0 ? (
-              <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-500 text-sm">No audit events found</td></tr>
-            ) : (
-              events.map(event => {
-                const config = STATUS_CONFIG[event.status] || UNKNOWN_STATUS;
-                const Icon = config.icon;
-                const isSelected = selectedEvent?.event_id === event.event_id;
-                const username = event.user_id ? (userMap.get(event.user_id) || event.user_id.slice(0, 8)) : 'anonymous';
-                return (
-                  <React.Fragment key={event.event_id}>
-                    <tr
-                      className={clsx(
-                        'border-b border-border/50 hover:bg-surface-hover transition-colors cursor-pointer',
-                        isSelected && 'bg-accent/5'
+      <Table>
+        <thead>
+          <tr>
+            <Th>Time</Th>
+            <Th>Outcome</Th>
+            <Th>Tool</Th>
+            <Th hide="xl">Backend</Th>
+            <Th hide="xl">User</Th>
+            <Th hide="xl">App</Th>
+            <Th align="right" hide="sm">Duration</Th>
+            <Th hide="md">Risk</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {loading ? (
+            <TableMessage colSpan={8}>
+              <Loading label="Loading events..." />
+            </TableMessage>
+          ) : events.length === 0 ? (
+            <TableMessage colSpan={8}>
+              <EmptyState
+                icon={ScrollText}
+                title={activeFilters > 0 || search ? 'Nothing matches those filters' : 'No calls recorded yet'}
+                message={
+                  activeFilters > 0 || search
+                    ? 'Widen the window or clear the filters.'
+                    : 'Once an AI client routes a tool call through the gateway, it lands here.'
+                }
+                action={
+                  activeFilters > 0 ? <Button onClick={clearAllFilters}>Clear filters</Button> : undefined
+                }
+              />
+            </TableMessage>
+          ) : (
+            events.map(event => {
+              const status = STATUS_TONE[event.status] || UNKNOWN_STATUS;
+              const expanded = selectedEvent?.event_id === event.event_id;
+              const username = event.user_id
+                ? userMap.get(event.user_id) || event.user_id.slice(0, 8)
+                : 'anonymous';
+              return (
+                <React.Fragment key={event.event_id}>
+                  <tr
+                    onClick={() => setSelectedEvent(expanded ? null : event)}
+                    className={clsx(
+                      'cursor-pointer transition-colors duration-150 hover:bg-raised',
+                      expanded && 'bg-raised'
+                    )}
+                  >
+                    {/* The rail carries the verdict. Down a page of events it
+                        reads as a column of green with amber and red notches —
+                        the health of the gateway, without reading a word. */}
+                    {/* The rail lives on the first cell, so this column is
+                        never the one that gets hidden — it just gets shorter. */}
+                    <Td style={railStyle(status.tone)} className="whitespace-nowrap">
+                      <Mono className="text-ink-3 sm:hidden">{fmt.time(event.timestamp)}</Mono>
+                      <Mono className="text-ink-3 hidden sm:inline">
+                        {fmt.dateTime(event.timestamp)}
+                      </Mono>
+                    </Td>
+                    <Td>
+                      <StatusLabel tone={status.tone}>{status.label}</StatusLabel>
+                    </Td>
+                    <Td>
+                      <Mono className="text-ink truncate block w-[min(150px,34vw)] sm:w-[190px] md:w-[230px] xl:w-[240px]">
+                        {event.tool_name}
+                      </Mono>
+                    </Td>
+                    <Td hide="xl">
+                      <Mono className="text-ink-3">{event.backend_name}</Mono>
+                    </Td>
+                    <Td hide="xl">{username}</Td>
+                    <Td hide="xl">
+                      {event.application ? (
+                        <Badge>{event.application}</Badge>
+                      ) : (
+                        <span className="text-ink-4">—</span>
                       )}
-                      onClick={() => setSelectedEvent(isSelected ? null : event)}
-                    >
-                      <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">{new Date(event.timestamp).toLocaleString()}</td>
-                      <td className="px-3 py-2.5">
-                        <span className={clsx('inline-flex items-center gap-1.5 text-xs font-medium', config.color)}>
-                          <Icon className="w-3.5 h-3.5" />
-                          {event.status}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5 text-sm font-medium text-white">{event.tool_name}</td>
-                      <td className="px-3 py-2.5 text-xs text-gray-400">{event.backend_name}</td>
-                      <td className="px-3 py-2.5 text-xs text-gray-300">{username}</td>
-                      <td className="px-3 py-2.5">
-                        {event.application ? (
-                          <span className={clsx('text-xs px-1.5 py-0.5 rounded', APP_COLORS[event.application] || 'bg-gray-500/10 text-gray-400')}>
-                            {event.application}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-gray-600">-</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-xs text-gray-400 tabular-nums">{event.duration_ms ? `${event.duration_ms.toFixed(1)}ms` : '-'}</td>
-                      <td className="px-3 py-2.5">
-                        {event.risk_category ? (
-                          <span className="text-xs text-gray-500 bg-surface-active px-2 py-0.5 rounded">{event.risk_category}</span>
-                        ) : (
-                          <span className="text-xs text-gray-600">-</span>
+                    </Td>
+                    <Td align="right" hide="sm">
+                      <Mono className={event.duration_ms == null ? 'text-ink-4' : 'text-ink-2'}>
+                        {fmt.duration(event.duration_ms)}
+                      </Mono>
+                    </Td>
+                    <Td hide="md">
+                      {event.risk_category ? (
+                        <RiskBadge risk={event.risk_category} />
+                      ) : (
+                        <span className="text-ink-4">—</span>
+                      )}
+                    </Td>
+                  </tr>
+
+                  {expanded && (
+                    <tr>
+                      <td colSpan={8} className="bg-raised border-b border-line px-3.5 py-4">
+                        <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-3">
+                          <Detail label="Time" mono>
+                            {fmt.dateTime(event.timestamp)}
+                          </Detail>
+                          <Detail label="Duration" mono>
+                            {fmt.duration(event.duration_ms)}
+                          </Detail>
+                          <Detail label="Risk">{event.risk_category || 'unclassified'}</Detail>
+                          <Detail label="Event ID" mono>
+                            {event.event_id}
+                          </Detail>
+                          <Detail label="Trace ID" mono>
+                            {event.trace_id}
+                          </Detail>
+                          <Detail label="Session" mono>
+                            {event.session_id || '—'}
+                          </Detail>
+                          <Detail label="User ID" mono>
+                            {event.user_id || 'anonymous'}
+                          </Detail>
+                          <Detail label="Application">{event.application || 'unknown'}</Detail>
+                          <Detail label="Client" mono>
+                            {event.client_id || '—'}
+                          </Detail>
+                          <Detail label="Policy">
+                            {event.policy_decision || 'default'}
+                            {event.policy_id && (
+                              <Mono className="text-ink-4 ml-1.5">
+                                ({event.policy_id.slice(0, 8)})
+                              </Mono>
+                            )}
+                          </Detail>
+                          <Detail label="Backend" mono>
+                            {event.backend_name}
+                          </Detail>
+                          {event.risk_flags?.length > 0 && (
+                            <div className="col-span-2 lg:col-span-4">
+                              <Label className="block mb-1.5">Risk flags</Label>
+                              <div className="flex flex-wrap gap-1.5">
+                                {event.risk_flags.map(f => (
+                                  <Badge key={f} tone="warn">
+                                    {f}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {event.request_hash && (
+                            <Detail label="Request hash" mono className="col-span-2">
+                              {event.request_hash}
+                            </Detail>
+                          )}
+                          {event.response_hash && (
+                            <Detail label="Response hash" mono className="col-span-2">
+                              {event.response_hash}
+                            </Detail>
+                          )}
+                        </dl>
+                        {event.error_message && (
+                          <Banner tone="deny" className="mt-4">
+                            {event.error_message}
+                          </Banner>
                         )}
                       </td>
                     </tr>
-                    {isSelected && (
-                      <tr>
-                        <td colSpan={8} className="px-4 py-4 bg-surface-hover border-b border-border/50">
-                          <div className="grid grid-cols-4 gap-4 text-sm">
-                            <div><span className="text-gray-500">Event ID:</span><br /><span className="text-gray-300 text-xs font-mono">{event.event_id}</span></div>
-                            <div><span className="text-gray-500">Trace ID:</span><br /><span className="text-gray-300 text-xs font-mono">{event.trace_id}</span></div>
-                            <div><span className="text-gray-500">Session:</span><br /><span className="text-gray-300 text-xs font-mono">{event.session_id || 'N/A'}</span></div>
-                            <div><span className="text-gray-500">User ID:</span><br /><span className="text-gray-300 text-xs">{event.user_id || 'anonymous'}</span></div>
-                            <div><span className="text-gray-500">Application:</span><br /><span className={clsx('text-xs', event.application ? (APP_COLORS[event.application] || 'text-gray-300') : 'text-gray-500')}>{event.application || 'unknown'}</span></div>
-                            <div><span className="text-gray-500">Client / AI Agent:</span><br /><span className="text-gray-300 text-xs">{event.client_id || 'N/A'}</span></div>
-                            <div><span className="text-gray-500">Policy:</span><br /><span className="text-gray-300 text-xs">{event.policy_decision || 'default'} {event.policy_id ? `(${event.policy_id.slice(0, 8)})` : ''}</span></div>
-                            <div><span className="text-gray-500">Backend:</span><br /><span className="text-gray-300 text-xs">{event.backend_name}</span></div>
-                            {event.request_hash && (
-                              <div className="col-span-4"><span className="text-gray-500">Request Hash:</span><br /><span className="text-gray-300 text-xs font-mono">{event.request_hash}</span></div>
-                            )}
-                            {event.error_message && (
-                              <div className="col-span-4"><span className="text-danger">Error:</span><br /><span className="text-gray-300 text-xs">{event.error_message}</span></div>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                  )}
+                </React.Fragment>
+              );
+            })
+          )}
+        </tbody>
+      </Table>
 
-      {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between mt-4 px-2">
-          <span className="text-sm text-gray-500">
-            Showing {page * limit + 1}-{Math.min((page + 1) * limit, total)} of {total}
+        <div className="flex items-center justify-between mt-3.5">
+          <span className="text-2xs text-ink-4 tabular-nums">
+            {fmt.count(page * limit + 1)}-{fmt.count(Math.min((page + 1) * limit, total))} of{' '}
+            {fmt.count(total)}
           </span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage(Math.max(0, page - 1))}
+          <div className="flex items-center gap-1.5">
+            <IconButton
+              icon={ChevronLeft}
+              label="Previous page"
+              onClick={() => setPage(p => Math.max(0, p - 1))}
               disabled={page === 0}
-              className="p-1.5 bg-surface border border-border rounded-md text-gray-400 hover:text-white disabled:opacity-30 transition-colors"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <span className="text-sm text-gray-400 px-2">
+            />
+            <span className="text-2xs text-ink-3 tabular-nums px-1">
               {page + 1} / {totalPages}
             </span>
-            <button
-              onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
+            <IconButton
+              icon={ChevronRight}
+              label="Next page"
+              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
               disabled={page >= totalPages - 1}
-              className="p-1.5 bg-surface border border-border rounded-md text-gray-400 hover:text-white disabled:opacity-30 transition-colors"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
+            />
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        open={showClearConfirm}
+        onClose={() => setShowClearConfirm(false)}
+        onConfirm={handleClearAudit}
+        loading={clearing}
+        title="Clear the entire audit trail?"
+        description="This permanently deletes every recorded event and resets the metrics counters. It cannot be undone."
+        confirmLabel="Clear everything"
+      >
+        <p className="text-xs text-ink-2">
+          <Mono className="text-ink">{fmt.count(total)}</Mono> events will be deleted. Export
+          first if you need to keep them.
+        </p>
+      </ConfirmModal>
+    </div>
+  );
+}
+
+function Detail({
+  label,
+  children,
+  mono,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  mono?: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={clsx('min-w-0', className)}>
+      <dt>
+        <Label>{label}</Label>
+      </dt>
+      <dd className={clsx('text-2xs text-ink-2 mt-1 break-all', mono && 'font-mono')}>{children}</dd>
     </div>
   );
 }

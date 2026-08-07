@@ -1,12 +1,32 @@
-<!DOCTYPE html>
-<html lang="en" class="dark">
+<!doctype html>
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/mark.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#F1F4F9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#06080B" media="(prefers-color-scheme: dark)" />
+    <meta name="description" content="One MCP endpoint for every backend, with policy enforcement and a full audit trail." />
     <title>MCP Gateway</title>
+    <script>
+      // Resolve the theme before first paint. index.css keys entirely off an
+      // explicit data-theme, so this has to run here and not in React — a
+      // useEffect would flash the wrong theme for a frame on every load.
+      (function () {
+        try {
+          var mode = localStorage.getItem('mcpgw_theme') || 'system';
+          var dark =
+            mode === 'dark' ||
+            (mode !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        } catch (e) {
+          /* private mode, or storage disabled — the attribute already says dark */
+        }
+      })();
+    </script>
   </head>
-  <body class="bg-[#0a0a0f] text-gray-100 antialiased">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

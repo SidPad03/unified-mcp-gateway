@@ -36,9 +36,9 @@ pub struct AppState {
     pub audit: Option<Arc<audit::AuditRecorder>>,
     pub backend_manager: Arc<backends::BackendManager>,
     pub agent_registry: Arc<agent::AgentRegistry>,
-    pub agent_release_cache: Arc<
-        tokio::sync::Mutex<Option<(std::time::Instant, Vec<api::agent_releases::AgentRelease>)>>,
-    >,
+    /// In-flight browser sign-ins for the macOS agent. Five-minute lifetime, so
+    /// they live in memory rather than in Postgres.
+    pub agent_auth: Arc<api::agent_auth::AgentAuthStore>,
     /// Cached GitHub release list for the dashboard update check (30-min TTL).
     pub update_check_cache:
         Arc<tokio::sync::Mutex<Option<(std::time::Instant, Vec<api::updates::GithubRelease>)>>>,
@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
         audit: Some(audit_recorder),
         backend_manager,
         agent_registry,
-        agent_release_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        agent_auth: Arc::new(api::agent_auth::AgentAuthStore::new()),
         update_check_cache: Arc::new(tokio::sync::Mutex::new(None)),
         event_tx,
     };

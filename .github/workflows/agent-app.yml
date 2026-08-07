@@ -1,0 +1,251 @@
+name: Agent app
+
+# The one workflow that does not run on the self-hosted `homelab` runners.
+#
+# It needs the macOS 26 SDK to compile SwiftUI, and to run `codesign`,
+# `iconutil` and `hdiutil` — none of which exist on Linux. Everything else in
+# this repository, including the agent's own Rust crates and their 72 tests,
+# runs on the self-hosted fleet via ci.yml; what is left here is the Swift
+# compile, the bundle, and the release artifacts.
+#
+# The repository is public, so GitHub-hosted runners are unmetered.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mcp-gateway-agent/**'
+      - '.github/workflows/agent-app.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'mcp-gateway-agent/**'
+      - '.github/workflows/agent-app.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-app-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: build
+    # Liquid Glass needs the macOS 26 SDK, which means Xcode 26, which means a
+    # macos-26 image. macos-14 cannot build this app.
+    runs-on: macos-26
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    # Hoisted to the job so the `if:` conditions below can see them. A step-level
+    # `env:` is not in scope for that step's own `if:`, which is a quiet way to
+    # write a gate that never fires.
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      SIGNING_KEY: ${{ secrets.MCPGA_UPDATE_PRIVATE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mcp-gateway-agent -> target
+
+      # ── Version ────────────────────────────────────────────────────────
+      # Counted from the existing agent-v* releases, the same scheme the
+      # gateway uses. With every old release deleted, the first build of the app
+      # is agent-v1.0.0.
+      - name: Compute version
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BASE=$(grep '^version' mcp-gateway-agent/ffi/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          MAJOR_MINOR=$(echo "$BASE" | cut -d. -f1-2)
+
+          EXISTING=$(gh release list --limit 100 --json tagName -q '.[].tagName' \
+            | grep "^agent-v${MAJOR_MINOR}\." \
+            | sed "s/agent-v${MAJOR_MINOR}\.//" \
+            | sort -n | tail -1 || true)
+
+          if [ -z "$EXISTING" ]; then PATCH=0; else PATCH=$((EXISTING + 1)); fi
+
+          VERSION="${MAJOR_MINOR}.${PATCH}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Agent version: ${VERSION}"
+
+      # ── Apple signing (optional) ───────────────────────────────────────
+      # Decision D1: the app ships ad-hoc signed. These steps are present but
+      # gated, so adding the secrets later switches on real signing and
+      # notarization with no rewrite of this file.
+      - name: Import the Developer ID certificate
+        if: env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      # ── Build ──────────────────────────────────────────────────────────
+      - name: Build the app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Embedding the public key is what lets a build install its own
+          # updates. Without the secret the app reports updates and declines to
+          # install them, which is the right way round.
+          MCPGA_UPDATE_PUBLIC_KEY: ${{ secrets.MCPGA_UPDATE_PUBLIC_KEY }}
+        run: |
+          mcp-gateway-agent/macos/build.sh \
+            --version "${{ steps.version.outputs.version }}" \
+            --universal --dmg
+
+      # `lipo` lists slices in the order they were combined, not a fixed one.
+      # The old check grepped `-info` output for the literal string
+      # "arm64 x86_64", so a genuinely universal bundle that lipo described as
+      # "x86_64 arm64" failed the build. Ask for each architecture separately.
+      - name: Verify the bundle is universal
+        run: |
+          BINARY="mcp-gateway-agent/build/MCP Gateway Agent.app/Contents/MacOS/MCPGatewayAgent"
+          ARCHS=$(lipo -archs "$BINARY")
+          echo "Architectures: $ARCHS"
+          for want in arm64 x86_64; do
+            grep -qw "$want" <<<"$ARCHS" \
+              || { echo "::error::the binary has no $want slice (found: $ARCHS)"; exit 1; }
+          done
+
+      - name: Notarize
+        if: env.APPLE_ID != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          DMG="mcp-gateway-agent/build/MCP-Gateway-Agent-${VERSION}.dmg"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$DMG"
+
+      # ── Update archive ─────────────────────────────────────────────────
+      # The updater replaces the bundle in place from a .app.tar.gz; the .dmg is
+      # only for a first install.
+      - name: Install the signing dependency
+        if: env.SIGNING_KEY != ''
+        run: python3 -m pip install --quiet --break-system-packages cryptography
+
+      - name: Package the update archive
+        id: archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd mcp-gateway-agent/build
+          ARCHIVE="MCP-Gateway-Agent-${VERSION}.app.tar.gz"
+          tar -czf "$ARCHIVE" "MCP Gateway Agent.app"
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$SIGNING_KEY" ]; then
+            # Ed25519 over the archive bytes, verified in the app with CryptoKit.
+            # A hash published beside the file only proves it downloaded intact;
+            # a signature proves who built it.
+            python3 - "$ARCHIVE" <<'PY' > signature.txt
+          import base64, os, sys
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(os.environ["SIGNING_KEY"]))
+          print(base64.b64encode(key.sign(open(sys.argv[1], "rb").read())).decode())
+          PY
+            echo "signature=$(cat signature.txt)" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::MCPGA_UPDATE_PRIVATE_KEY is not set — this release cannot be auto-installed"
+            echo "signature=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Release ────────────────────────────────────────────────────────
+      - name: Create the release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd mcp-gateway-agent/build
+          TAG="agent-v${VERSION}"
+
+          cat > notes.md <<EOF
+          MCP Gateway Agent v${VERSION} — universal (Apple Silicon and Intel), macOS 26 or later.
+
+          ## Installing
+
+          The app is ad-hoc signed rather than notarized, so the first launch needs one extra step:
+          **right-click the app and choose Open**, then confirm. macOS remembers the choice.
+          (Or run \`xattr -dr com.apple.quarantine "/Applications/MCP Gateway Agent.app"\`.)
+
+          Updates after that install themselves — the quarantine flag is not applied to them.
+
+          ## Setting it up
+
+          Open the app, enter your gateway address, and sign in through the browser.
+          There is no API key to create or paste.
+          EOF
+
+          gh release create "$TAG" \
+            --title "Agent v${VERSION}" \
+            --notes-file notes.md \
+            --target main \
+            "MCP-Gateway-Agent-${VERSION}.dmg" \
+            "${{ steps.archive.outputs.archive }}"
+
+      # ── Update manifest ────────────────────────────────────────────────
+      # Deliberately NOT releases/latest/download/…: this repository interleaves
+      # gateway-v* and agent-v* tags, so "latest release" is regularly a gateway
+      # release with no app in it, and the updater would 404. `agent-latest` is a
+      # permanent, non-"latest" release whose only asset is this manifest.
+      - name: Publish the update manifest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd mcp-gateway-agent/build
+          ARCHIVE="${{ steps.archive.outputs.archive }}"
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg url "https://github.com/${REPO}/releases/download/agent-v${VERSION}/${ARCHIVE}" \
+            --arg signature "${{ steps.archive.outputs.signature }}" \
+            --arg pubDate "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg notes "MCP Gateway Agent v${VERSION}" \
+            '{version: $version, url: $url, signature: $signature, pub_date: $pubDate, notes: $notes}' \
+            > appcast.json
+
+          gh release view agent-latest >/dev/null 2>&1 || \
+            gh release create agent-latest \
+              --title "Agent update manifest" \
+              --notes "Machine-readable pointer to the newest agent release. Not a release itself." \
+              --target main
+
+          gh release upload agent-latest appcast.json --clobber
+
+      - name: Upload the build
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MCP-Gateway-Agent-${{ steps.version.outputs.version }}
+          path: mcp-gateway-agent/build/*.dmg
+          retention-days: 7

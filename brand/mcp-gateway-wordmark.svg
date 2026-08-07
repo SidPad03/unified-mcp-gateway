@@ -1,26 +1,40 @@
 <!--
   MCP Gateway — horizontal lockup (mark + wordmark) for READMEs and headers.
 
-  The text is live, set in the system UI stack so it renders sensibly wherever
-  the SVG is embedded. If this is ever used in print or on a surface where exact
-  letterforms matter, outline the text first — live text will fall back to a
-  different face on machines without the preferred font.
+  The text is live, set in IBM Plex Sans — the product's typeface — with a system
+  fallback so it renders sensibly wherever the SVG is embedded. If this is ever
+  used in print or on a surface where exact letterforms matter, outline the text
+  first.
+
+  The colours flip with the viewer's appearance. An SVG referenced from an <img>
+  still applies its own <style> block, including prefers-color-scheme, which is
+  what keeps this legible on both a light and a dark README. The phosphor accent
+  darkens on light surfaces — #3FD69B on white is only 1.9:1.
 
   Clear space: keep at least the mark's own height (24 units) free on all sides.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" width="248" height="40" viewBox="0 0 248 40"
+<svg xmlns="http://www.w3.org/2000/svg" width="252" height="40" viewBox="0 0 252 40"
      role="img" aria-label="MCP Gateway">
-  <g transform="translate(0 8)"
-     fill="none" stroke="#7C5CFC" stroke-width="2"
+  <style>
+    .mark { stroke: #0B8F63; }
+    .word { fill: #10151E; }
+    @media (prefers-color-scheme: dark) {
+      .mark { stroke: #3FD69B; }
+      .word { fill: #E4E9F2; }
+    }
+  </style>
+
+  <g class="mark" transform="translate(0 8)"
+     fill="none" stroke-width="2.2"
      stroke-linecap="round" stroke-linejoin="round">
-    <path d="M2.5 6.5h3L10 12"/>
-    <path d="M2.5 12h7.5"/>
-    <path d="M2.5 17.5h3L10 12"/>
-    <path d="M14 8 18 12l-4 4-4-4Z"/>
-    <path d="M18 12h3.5"/>
+    <path d="M2 6.5H5L9 12"/>
+    <path d="M2 12H9"/>
+    <path d="M2 17.5H5L9 12"/>
+    <path d="M9 12L13 8L17 12L13 16Z"/>
+    <path d="M17 12H22"/>
   </g>
-  <text x="36" y="26"
-        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-        font-size="20" font-weight="600" letter-spacing="-0.4"
-        fill="#E8E8F0">MCP Gateway</text>
+
+  <text class="word" x="38" y="26"
+        font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="20" font-weight="600" letter-spacing="-0.5">MCP Gateway</text>
 </svg>

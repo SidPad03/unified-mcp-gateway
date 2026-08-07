@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { api, SecurityPosture } from '@/lib/api';
-import { ShieldCheck, ShieldAlert } from 'lucide-react';
+import { RailList, RailRow, SectionHeader, Tone } from '@/components/ui';
 
-type CheckStatus = 'pass' | 'warn' | 'fail';
 interface Check {
   label: string;
-  status: CheckStatus;
+  tone: Tone;
   detail: string;
 }
 
@@ -16,31 +15,33 @@ function buildChecks(p: SecurityPosture): Check[] {
   return [
     {
       label: 'Listener binding',
-      status: p.listen_addr_public ? 'warn' : 'pass',
+      tone: p.listen_addr_public ? 'warn' : 'ok',
       detail: p.listen_addr_public
-        ? `Public interface (${p.listen_addr}). Front it with a proxy/VPN or bind loopback if it shouldn't be internet-facing.`
+        ? `Public interface (${p.listen_addr}). Front it with a proxy or VPN, or bind loopback if it shouldn't be internet-facing.`
         : `Bound to ${p.listen_addr}.`,
     },
     {
       label: 'Admin password rotated',
-      status: p.admin_password_change_pending ? 'fail' : 'pass',
+      tone: p.admin_password_change_pending ? 'deny' : 'ok',
       detail: p.admin_password_change_pending
         ? 'A seeded admin still owes a first-login password change.'
         : 'No seeded default awaiting rotation.',
     },
     {
       label: 'Agent backends owned',
-      status: p.unowned_agent_backends.length > 0 ? 'warn' : 'pass',
-      detail: p.unowned_agent_backends.length > 0
-        ? `Unowned: ${p.unowned_agent_backends.join(', ')}. Assign an owner.`
-        : 'Every agent backend has an owner.',
+      tone: p.unowned_agent_backends.length > 0 ? 'warn' : 'ok',
+      detail:
+        p.unowned_agent_backends.length > 0
+          ? `Unowned: ${p.unowned_agent_backends.join(', ')}. Assign an owner.`
+          : 'Every agent backend has an owner.',
     },
     {
       label: 'Active owners',
-      status: p.active_owner_count === 0 ? 'fail' : 'pass',
-      detail: p.active_owner_count === 0
-        ? 'No active owner — the system has no administrator.'
-        : `${p.active_owner_count} active: ${p.owners.map(o => o.username).join(', ')}.`,
+      tone: p.active_owner_count === 0 ? 'deny' : 'ok',
+      detail:
+        p.active_owner_count === 0
+          ? 'No active owner. Assign the owner role to a user.'
+          : `${p.active_owner_count} active: ${p.owners.map(o => o.username).join(', ')}.`,
     },
   ];
 }
@@ -58,42 +59,34 @@ export default function SecurityPostureCard() {
   if (failed || !posture) return null;
 
   const checks = buildChecks(posture);
-  const failing = checks.filter(c => c.status !== 'pass').length;
+  const failing = checks.filter(c => c.tone !== 'ok').length;
 
   return (
-    <div className="mb-6 rounded-xl border border-border bg-surface p-4">
-      <div className="flex items-center gap-2 mb-3">
-        {failing > 0 ? (
-          <ShieldAlert className="w-4 h-4 text-amber-400" />
-        ) : (
-          <ShieldCheck className="w-4 h-4 text-emerald-400" />
-        )}
-        <h3 className="text-sm font-semibold text-white">Security posture</h3>
-        <span className="text-xs text-gray-500">
-          {failing > 0
-            ? `${checks.length - failing}/${checks.length} checks passing`
-            : 'all configured checks passing'}
-        </span>
-      </div>
-      <ul className="space-y-1.5">
-        {checks.map((c, i) => (
-          <li key={i} className="flex items-start gap-2 text-xs">
-            <span
-              className={
-                c.status === 'fail'
-                  ? 'text-red-400'
-                  : c.status === 'warn'
-                  ? 'text-amber-400'
-                  : 'text-emerald-400'
-              }
-            >
-              {c.status === 'fail' ? '✕' : c.status === 'warn' ? '!' : '✓'}
-            </span>
-            <span className="text-gray-300 w-40 shrink-0">{c.label}</span>
-            <span className="text-gray-500">{c.detail}</span>
-          </li>
+    <section className="mb-3.5">
+      <SectionHeader
+        className="mb-2"
+        trailing={
+          <span className="text-2xs text-ink-4 tabular-nums">
+            {failing > 0
+              ? `${checks.length - failing}/${checks.length} passing`
+              : 'all configured checks passing'}
+          </span>
+        }
+      >
+        Security posture
+      </SectionHeader>
+      {/* Each check carries its own rail, so a page of green with one amber
+          notch is readable before any of the words are. */}
+      <RailList>
+        {checks.map(c => (
+          <RailRow key={c.label} tone={c.tone}>
+            <div className="flex items-baseline gap-3 min-w-0 flex-wrap">
+              <span className="text-xs font-medium text-ink w-44 shrink-0">{c.label}</span>
+              <span className="text-2xs text-ink-3 min-w-0">{c.detail}</span>
+            </div>
+          </RailRow>
         ))}
-      </ul>
-    </div>
+      </RailList>
+    </section>
   );
 }

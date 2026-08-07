@@ -1,62 +1,42 @@
-[package]
-name = "mcp-gateway-agent"
-version = "1.0.0"
+# MCP Gateway Agent — the engine behind a SwiftUI macOS app
+# (docs/agent-desktop-app.md).
+#
+# `core` is everything the agent does, with no platform or UI dependency, so CI
+# keeps running fmt / clippy / test against it on the ubuntu runner. `ffi`
+# wraps it in a C ABI and builds as a staticlib that the Swift app in
+# ../macos links against; it has no logic of its own beyond marshalling.
+[workspace]
+resolver = "2"
+members = ["core", "ffi"]
+
+[workspace.package]
 edition = "2021"
-description = "MCP Gateway Agent - connects local MCP backends to a remote MCP Gateway"
 license = "Apache-2.0"
+repository = "https://github.com/SidPad03/unified-mcp-gateway"
 
-[dependencies]
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-
-# WebSocket client
-tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+[workspace.dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+dirs = "5"
+futures-util = { version = "0.3", features = ["sink"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false }
 rustls-pki-types = "1"
-
-# Futures utilities (for split, SinkExt, StreamExt)
-futures-util = { version = "0.3", features = ["sink"] }
-
-# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "sync", "time"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 toml = "0.8"
-
-# HTTP client (for local HTTP MCP backends like Obsidian)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream"] }
-
-# IDs
-uuid = { version = "1", features = ["v4"] }
-
-# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Error handling
-anyhow = "1"
-
-# TUI
-ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
-
-# CLI
-clap = { version = "4", features = ["derive"] }
-
-# Update mechanism
-semver = "1"
-sha2 = "0.10"
-hex = "0.4"
-self-replace = "1"
-
-# Utilities
-dirs = "5"
-hostname = "0.4"
-cfg-if = "1"
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+uuid = { version = "1", features = ["v4"] }
 
 [profile.release]
-strip = true
-lto = true
-opt-level = "z"
+# "s" rather than "z", with fat LTO. A few hundred KB of DMG buys lower tool-call
+# latency, which is the number a user actually feels. (§7 of the design doc.)
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+# No `strip` here: the staticlib is linked into the Swift binary, and stripping
+# happens once on the finished .app instead.

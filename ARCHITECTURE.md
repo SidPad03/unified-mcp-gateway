@@ -7,7 +7,7 @@ clients and MCP tool servers. Three components + Postgres.
  AI clients ──MCP(HTTP/SSE)+Bearer──▶ mcp-gateway-server (Rust/Axum) ──▶ backends
  (Claude/Cursor)                        │  auth → policy → audit → route     stdio / http / sse / agent(ws)
  dashboard (React) ──/api/v1 + JWT────▶ │                                    │
- agent (Rust TUI) ──/agent/ws + key───▶ │                              Postgres (users, backends,
+ agent (macOS app) ──/agent/ws + key──▶ │                              Postgres (users, backends,
                                         │                               tools, audit, policies)
 ```
 
@@ -15,7 +15,7 @@ clients and MCP tool servers. Three components + Postgres.
 
 - **mcp-gateway-server** (`mcp-gateway-server/`) — the only component with DB access and the auth/policy/audit authority. Everything trust-sensitive lives here.
 - **mcp-gateway-dashboard** (`mcp-gateway-dashboard/`) — a pure client of `/api/v1`. Holds no authority; the server re-validates every request.
-- **mcp-gateway-agent** (`mcp-gateway-agent/`) — runs on a user's machine, dials **out** to `/agent/ws`, and bridges that machine's local MCP servers to the gateway. The wire protocol it speaks is currently defined in both crates; extracting it into a shared crate is a known follow-up.
+- **mcp-gateway-agent** (`mcp-gateway-agent/`) — a macOS app that runs on a user's machine, dials **out** to `/agent/ws`, and bridges that machine's local MCP servers to the gateway. It is a Rust core (`core/`) with no UI or platform dependency, a C ABI over it (`ffi/`), and a SwiftUI app that links them (`macos/`); the split keeps the logic testable on the Linux CI runner. The wire protocol is defined in both this and the server crate; the guard against drift is the golden-JSON tests in `core/src/protocol.rs`, and extracting it into a shared crate remains a known follow-up.
 
 ## Auth & trust model (multi-user)
 
@@ -48,11 +48,15 @@ clients and MCP tool servers. Three components + Postgres.
 - **Build & publish:** every change reaches `main` through a pull request, and the
   test job (fmt, `clippy -D warnings`, Rust tests against a real Postgres,
   dashboard typecheck and build) gates everything downstream. On merge, each image
-  is built for `linux/amd64` and `linux/arm64` on its native runner, pushed by
-  digest, and stitched into one multi-arch manifest published to Docker Hub as
-  `sidpad03/mcp-gateway-*`. A prune step then trims Docker Hub to `latest` plus the
-  five newest version tags per image. Agent binaries are cross-compiled with
-  `cargo-zigbuild` and attached to GitHub Releases.
+  is built for `linux/amd64` and `linux/arm64` in one buildx invocation and
+  published to Docker Hub as `sidpad03/mcp-gateway-*`. CI runs on self-hosted
+  x86_64 runners, so arm64 is **cross-compiled inside the Dockerfile** rather
+  than emulated — the builder stage is pinned to `$BUILDPLATFORM` and targets
+  `$TARGETARCH`, which turns an hour of QEMU'd `cargo build` into minutes. A
+  prune step then trims Docker Hub to `latest` plus the five newest version tags
+  per image. The agent is not published as an image: `agent-app.yml` is the one
+  workflow that cannot run on the self-hosted fleet — it needs the macOS SDK —
+  and it attaches a universal `.dmg` to an `agent-v*` GitHub Release.
 - **Deploy:** pull the published images with the provided `docker-compose.yml`. Pin
   the `image:` tags to a release tag rather than `:latest` if you want reproducible
   rollouts; rolling back is then a tag change plus `docker compose up -d`.

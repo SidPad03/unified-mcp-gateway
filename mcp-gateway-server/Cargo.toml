@@ -59,7 +59,15 @@ regex = "1"
 semver = "1"
 
 # HTTP client (for remote backends)
-reqwest = { version = "0.12", features = ["json", "native-tls"] }
+# rustls rather than native-tls, matching sqlx and jsonwebtoken — this was the
+# only thing pulling OpenSSL (and a C toolchain) into an otherwise pure-Rust
+# build, which is what made the arm64 image impossible to cross-compile.
+#
+# `native-roots` and not `webpki-roots`: the runtime image runs
+# `update-ca-certificates` on start, so deployments that put a private CA in
+# /usr/local/share/ca-certificates keep working. rustls reads the same system
+# store OpenSSL did.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 
 [profile.release]
 strip = true

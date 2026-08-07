@@ -16,7 +16,7 @@ Docker Hub:
 | Dashboard | [`sidpad03/mcp-gateway-dashboard`](https://hub.docker.com/r/sidpad03/mcp-gateway-dashboard) |
 | Agent | [`sidpad03/mcp-gateway-agent`](https://hub.docker.com/r/sidpad03/mcp-gateway-agent) |
 
-Tags are `:latest` and `:v<version>` (e.g. `:v1.1.6`). Pin to a version tag for
+Tags are `:latest` and `:v<version>` (e.g. `:v1.0.0`). Pin to a version tag for
 reproducible deploys.
 
 > **Retention.** CI prunes Docker Hub after each publish, keeping `latest` and
@@ -71,7 +71,7 @@ Keep `.env` out of version control — it is git-ignored by default.
 Change the `image:` tags in `docker-compose.yml`:
 
 ```yaml
-image: sidpad03/mcp-gateway-server:v1.1.3
+image: sidpad03/mcp-gateway-server:v1.0.0
 ```
 
 Upgrading is then `docker compose pull && docker compose up -d`. Migrations run
@@ -175,67 +175,42 @@ token; losing the database loses users, backends, policies, and the audit trail.
 
 ---
 
-## Moving a deployment (configuration transfer)
+## Moving a deployment
 
-A `pg_dump` moves the rows, but it does **not** move working API keys: each
-stored key is encrypted under `SHA-256(JWT_SECRET)`, so on a host with a
-different secret the dashboard can no longer reveal them. Use the built-in
-transfer instead — it handles that re-encryption.
+`pg_dump` moves the rows, and moving `.env` with them moves `JWT_SECRET` — which
+matters, because each stored API key is encrypted under `SHA-256(JWT_SECRET)`.
+Restore the dump on the target with the *same* secret and the keys keep working
+and stay revealable; restore it under a different secret and they still
+authenticate (the hash is host-independent) but can no longer be revealed in the
+dashboard.
 
-**Settings → Configuration transfer** (owner-only).
+```bash
+# on the source
+docker compose exec -T postgres pg_dump -U mcpgw mcpgw > mcpgw.sql
+cp .env mcpgw.env          # keep JWT_SECRET with the dump
 
-### Export
+# on the target
+docker compose up -d postgres
+docker compose exec -T postgres psql -U mcpgw mcpgw < mcpgw.sql
+docker compose up -d
+```
 
-1. Choose an encryption passphrase (12 characters minimum).
-2. Decide whether to include audit history — it is usually most of the bundle.
-3. Download the `.mcpgw.json` file.
-
-The bundle is gzipped JSON sealed with ChaCha20-Poly1305 under an Argon2id key
-derived from your passphrase. It contains everything: users and password hashes,
-roles, policies, backends and their configs (including any bearer tokens), tools,
-API keys, and optionally the audit log.
-
-> **There is no recovery for a lost passphrase.** The server never stores it.
-> Keep it with the file — and treat the file itself as a credential, because it
-> is one.
-
-### Import
-
-1. On the **target** deployment, open **Settings → Configuration transfer**.
-2. Select the bundle, enter its passphrase, and type `REPLACE` to confirm.
-
-Import **replaces everything**. Every user, key, backend, policy, tool, and audit
-event already on the target is deleted first, so the result matches the bundle
-exactly rather than merging into whatever was there. It runs in a single
-transaction — if any row fails, nothing changes.
-
-Afterwards, sign out and back in: your session belonged to the data that was
-just replaced.
-
-### What survives
-
-| | Result |
-|---|---|
-| Users, roles, policies, backends, tools | Restored exactly, same UUIDs |
-| Audit history | Restored if the bundle included it |
-| API keys | Keep working **and** stay revealable — re-encrypted under the target's `JWT_SECRET` on import |
-| Keys created before at-rest encryption existed | Still authenticate, but cannot be revealed again |
-
-The source and target do **not** need the same `JWT_SECRET`. Existing dashboard
-sessions on the target are invalidated, since the user rows behind them changed.
-
----
+Treat both files as credentials: the dump contains password hashes, backend
+configs (including any bearer tokens), and API keys.
 
 ## Upgrading
 
-The dashboard tells you when a release is available: **Settings → About →
-Check for updates**. It compares the running build against the newest
-`gateway-v*` GitHub release.
+The dashboard tells you when a release is available. An **Update available**
+notice appears in the sidebar footer, and **Settings → About** has the running
+version, the release notes and a **Check for updates** button. It compares the
+running build against the newest `gateway-v*` GitHub release.
 
-The check runs only when you click it, and goes through the server rather than
-the browser — the dashboard's CSP blocks direct calls to `api.github.com`, and
-proxying means one cached lookup serves every operator instead of each browser
-spending from GitHub's unauthenticated rate limit.
+The check goes through the server rather than the browser — the dashboard's CSP
+blocks direct calls to `api.github.com`, and proxying means one cached lookup
+serves every operator instead of each browser spending from GitHub's
+unauthenticated rate limit. The server caches that lookup for 30 minutes, and
+the dashboard asks again at most every six hours; the button forces past both.
+The notice is shown to owners only, since `/settings` is an owner route.
 
 | Variable | Effect |
 |----------|--------|

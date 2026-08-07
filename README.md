@@ -50,7 +50,7 @@ MCP Gateway is a three-component system:
 |-----------|------|-------------|
 | **mcp-gateway-server** | Rust, Axum, PostgreSQL | Core gateway — MCP protocol routing, auth, policy enforcement, audit, metrics |
 | **mcp-gateway-dashboard** | React, TypeScript, Vite | Admin UI — tool inventory, audit timeline, metrics charts, user/policy management |
-| **mcp-gateway-agent** | Rust, ratatui TUI | Remote agent — connects local MCP servers to the gateway over WebSocket |
+| **mcp-gateway-agent** | Rust core + SwiftUI | macOS app — connects your Mac's MCP servers to the gateway over WebSocket |
 | **PostgreSQL** | PostgreSQL 16 | Persistent storage for users, backends, tools, audit events, policies |
 
 ## Quick Start
@@ -83,12 +83,15 @@ The images are:
 |-----------|-------|
 | Server | [`sidpad03/mcp-gateway-server`](https://hub.docker.com/r/sidpad03/mcp-gateway-server) |
 | Dashboard | [`sidpad03/mcp-gateway-dashboard`](https://hub.docker.com/r/sidpad03/mcp-gateway-dashboard) |
-| Agent | [`sidpad03/mcp-gateway-agent`](https://hub.docker.com/r/sidpad03/mcp-gateway-agent) |
+
+> The agent is no longer published as a container image. It is a macOS app,
+> released as a `.dmg` — see [Remote Agent](#remote-agent). Historical
+> `sidpad03/mcp-gateway-agent` tags are left on Docker Hub but are not updated.
 
 > Each image is a multi-arch manifest (`linux/amd64` + `linux/arm64`), so it
 > runs natively on Intel and Apple Silicon / arm64 hosts with no emulation. The
 > compose file tracks `:latest` — to pin a release, change the `image:` tags to
-> a version like `:v1.1.6`. CI keeps the five most recent version tags plus
+> a version like `:v1.0.0`. CI keeps the five most recent version tags plus
 > `latest`, so pin to a version you have actually deployed. Prefer to build from
 > source? See [Development](#development).
 
@@ -102,7 +105,7 @@ set your own initial password, put `MCPGW_ADMIN_PASSWORD=...` in your `.env`.)
 
 ### 3. Add an MCP backend
 
-In the dashboard's **Backend Config** page, add a backend. For example, to add the GitHub MCP server:
+In the dashboard's **Backends** page, add a backend. For example, to add the GitHub MCP server:
 
 | Field | Value |
 |-------|-------|
@@ -132,7 +135,9 @@ Point your MCP client (Claude Desktop, Cursor, etc.) at the gateway's MCP endpoi
 }
 ```
 
-Generate an API key from the dashboard's **Settings** page. All backends' tools are now available through this single endpoint.
+The dashboard's **Backends → Connect a client** builds this block for you, with a
+key for the client you pick. All backends' tools are then available through this
+single endpoint.
 
 ### Production deployment
 
@@ -158,110 +163,66 @@ Always deploy behind a TLS-terminating reverse proxy (nginx, Caddy, etc.) in pro
 
 ## Remote Agent
 
-The **MCP Gateway Agent** lets you connect MCP servers running on remote machines (laptops, dev boxes, home servers) to the gateway over a single authenticated WebSocket. The gateway sees the agent's local MCP servers as if they were running on the server itself.
+**MCP Gateway Agent** is a macOS app that connects the MCP servers running on
+your Mac to the gateway over a single authenticated WebSocket. The gateway sees
+them as if they were running on the server itself. Because the app dials **out**,
+your Mac needs no inbound ports and no firewall changes.
 
-### Install the agent
+Requires macOS 26 or later, Apple Silicon or Intel.
 
-**macOS / Linux:**
+### Install
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/SidPad03/unified-mcp-gateway/main/install.sh | bash
-```
+Download `MCP-Gateway-Agent-<version>.dmg` from the
+[latest agent release](https://github.com/SidPad03/unified-mcp-gateway/releases)
+and drag it to Applications.
 
-**Windows (PowerShell):**
+> **First launch needs one extra step.** The app is ad-hoc signed rather than
+> notarized, so macOS will say it "cannot be opened". **Right-click the app and
+> choose Open**, then confirm — macOS remembers the choice. From a terminal:
+> `xattr -dr com.apple.quarantine "/Applications/MCP Gateway Agent.app"`.
+> Updates installed from inside the app are unaffected.
 
-```powershell
-irm https://raw.githubusercontent.com/SidPad03/unified-mcp-gateway/main/install.ps1 | iex
-```
+### Set up
 
-The installer downloads the correct binary for your platform, puts it in `~/.mcp-gateway-agent/bin/`, and adds it to your `PATH`.
+Open the app, type your gateway address, and click **Sign in with your gateway**.
+A browser window opens on the gateway's authorization page; sign in with your
+normal account and click Authorize.
 
-### Configure the agent
+That is the whole setup. There is no API key to create, copy, or paste, and
+nothing to configure in the dashboard first — the Mac registers itself.
 
-Run the interactive setup wizard:
+Add your MCP servers from **Backends → Add backend**. **Test connection** starts
+the backend, completes the MCP handshake and lists the tools it found before
+anything is saved, so a mistyped command is caught immediately. Backends can be
+added, edited, disabled and deleted while the agent is connected.
 
-```bash
-mcp-gateway-agent setup
-```
+### What it shows
 
-This walks you through entering your gateway URL, API key, and adding local MCP backends. The config is saved to `~/.mcp-gateway-agent/config.toml`.
+Connection state and tool counts; every local backend with its status, PID,
+uptime, restarts and last error; tool calls as they happen; the agent's log and
+every backend's stderr, merged and exportable; and the gateway's audit trail and
+usage graph, scoped to this machine.
 
-You can also edit the config file directly. Here's an example with three backends:
-
-```toml
-[agent]
-agent_id = "my-macbook"
-gateway_url = "wss://mcp-gateway.example.com/agent/ws"
-api_key = "mcpgw_YOUR_API_KEY_HERE"
-dashboard_url = "https://mcp-gateway.example.com"
-tls_skip_verify = false   # only set true for self-signed certs in dev
-
-# A stdio backend — the agent spawns this process and talks JSON-RPC over stdin/stdout
-[[backends]]
-name = "playwright"
-transport = "stdio"
-command = "npx"
-args = ["@playwright/mcp@latest"]
-
-# Another stdio backend with environment variables
-[[backends]]
-name = "github"
-transport = "stdio"
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-github"]
-
-[backends.env]
-GITHUB_TOKEN = "ghp_your_token_here"
-
-# An HTTP backend — the agent connects to an already-running MCP server
-[[backends]]
-name = "obsidian"
-transport = "stdio"
-command = "npx"
-args = ["obsidian-mcp-server"]
-
-[backends.env]
-OBSIDIAN_API_KEY = "your_obsidian_api_key"
-OBSIDIAN_BASE_URL = "http://localhost:27123/"
-```
-
-### Run the agent
-
-```bash
-# Start with the live TUI dashboard
-mcp-gateway-agent run
-
-# Or run in the background as a system service
-mcp-gateway-agent service install
-mcp-gateway-agent service start
-```
-
-The TUI dashboard shows connection status, registered tools, recent tool calls, and logs in real time. Press `q` to quit, `s` to re-run setup, `u` to check for updates.
-
-### Agent commands
-
-| Command | Description |
-|---------|-------------|
-| `mcp-gateway-agent setup` | Interactive setup wizard |
-| `mcp-gateway-agent run` | Connect to gateway with live TUI |
-| `mcp-gateway-agent dashboard` | Open the TUI dashboard only |
-| `mcp-gateway-agent update` | Check for and install updates |
-| `mcp-gateway-agent service install` | Install as a background service (launchd/systemd/Task Scheduler) |
-| `mcp-gateway-agent service start` | Start the background service |
-| `mcp-gateway-agent service stop` | Stop the background service |
-| `mcp-gateway-agent service status` | Check service status |
-| `mcp-gateway-agent logs` | Tail the agent log file |
-| `mcp-gateway-agent version` | Print version |
+Closing the window keeps the app running in the menu bar. **Settings** is the
+standard ⌘, window.
 
 ### How it works
 
-1. The agent connects to the gateway via WebSocket (`/agent/ws`)
-2. It discovers tools from all its local backends (stdio and HTTP)
-3. It registers those tools with the gateway under the agent's name
-4. When an AI client calls a tool, the gateway routes the request over WebSocket to the agent
-5. The agent forwards the call to the correct local backend and returns the result
+1. The app connects to the gateway via WebSocket (`/agent/ws`)
+2. It starts every local backend concurrently and discovers their tools
+3. It registers the tools of the backends that came up, under this machine's name
+4. When an AI client calls one, the gateway routes the request over the WebSocket
+5. The app forwards it to the right local backend and returns the result
 
-All tool calls go through the gateway's policy engine, RBAC, and audit logging — even for remote agent tools.
+Each backend has a supervisor watching it: if a process exits, its tools are
+withdrawn from the gateway immediately — so a client is never offered a tool that
+cannot answer — and it is restarted with a capped backoff.
+
+All tool calls go through the gateway's policy engine, RBAC, and audit logging —
+even for remote agent tools.
+
+Full documentation: [docs/agent.md](docs/agent.md). Design and rationale:
+[docs/agent-desktop-app.md](docs/agent-desktop-app.md).
 
 ## Features
 
@@ -284,25 +245,26 @@ All tool calls go through the gateway's policy engine, RBAC, and audit logging �
 - **Usage graphs** with time-series analysis
 
 ### Remote Agent System
-- **mcp-gateway-agent** binary runs on remote machines
+- **MCP Gateway Agent**, a macOS app, runs on your Mac
 - Connects local MCP servers (stdio/http) to the gateway via authenticated WebSocket
-- TUI dashboard with live connection status, tool call tracking, and logs
+- Browser sign-in (OAuth 2.0 + PKCE) — no API key to copy; the credential lives in the Keychain
+- Backends added, edited and deleted live, with a supervisor that restarts crashed ones
+- Live view of connection state, tool calls, merged logs, audit and usage
 - Auto-reconnect with exponential backoff
-- Self-update mechanism via the gateway's release proxy
-- macOS launchd service management for background operation
+- Start at login, and signed self-updates from GitHub Releases
 
 ### Dashboard Pages
 
 | Page | Description |
 |------|-------------|
-| Tool Inventory | All aggregated tools with search, risk badges, enable/disable |
-| Audit Timeline | Chronological event feed with drill-down details |
-| Metrics Overview | Charts for call volume, latency, error rates, backend health |
-| Usage Graph | Time-series usage analysis |
-| Backend Config | MCP server management with health indicators |
-| Policy Editor | Security rule management with condition builder |
-| User Management | User CRUD with role assignment |
-| Settings | API keys, system configuration |
+| Backends | MCP server management with health indicators, and the ready-to-paste client config |
+| Tools | All aggregated tools with search, risk badges, enable/disable |
+| Policies | Priority-ordered allow/deny rules, reordered by drag |
+| Usage | Which users and applications call which tools, as a graph |
+| Audit | Chronological event feed with drill-down details |
+| Metrics | Charts for call volume, latency, error rates, backend health |
+| Users | Users and roles, with per-user API keys |
+| Settings | Gateway URL, AI risk classification, version and update check |
 
 ## API Reference
 
@@ -325,7 +287,9 @@ All endpoints under `/api/v1`. Auth via `Authorization: Bearer <jwt_or_api_key>`
 | GET/POST | `/roles` | Role management |
 | GET/POST/PUT/DELETE | `/policies` | Policy CRUD |
 | GET/POST/DELETE | `/api-keys` | API key management |
-| GET | `/agent/releases/*` | Agent release proxy |
+| GET | `/agent/authorize` | Agent sign-in approval page (OAuth 2.0 + PKCE) |
+| POST | `/agent/authorize/approve` | Approve an agent sign-in, minting its key |
+| POST | `/agent/token` | Exchange an authorization code for the agent's API key |
 
 ### MCP Endpoints
 
@@ -346,9 +310,6 @@ All endpoints under `/api/v1`. Auth via `Authorization: Bearer <jwt_or_api_key>`
 | `MCPGW_ADMIN_PASSWORD` | `admin` | Initial `admin` password. If unset, defaults to `admin` and a password change is forced on first login. Set it to choose your own initial password (no forced change). |
 | `LISTEN_ADDR` | `0.0.0.0:3200` | Server listen address |
 | `RUST_LOG` | `mcp_gateway_server=info,tower_http=debug` | Log level filter |
-| `RELEASE_PROXY_URL` | — | Git forge URL for agent release proxy (e.g., Gitea, GitHub) |
-| `RELEASE_PROXY_REPO` | — | Repository for agent releases (e.g., `owner/unified-mcp-gateway`) |
-| `GITEA_TOKEN` | — | API token for release proxy authentication |
 
 ## Development
 
@@ -362,18 +323,21 @@ cd mcp-gateway-dashboard
 npm install
 npm run dev
 
-# Agent
+# Agent core and its C ABI (no macOS needed)
 cd mcp-gateway-agent
-cargo run -- setup    # interactive setup wizard
-cargo run -- run      # connect to gateway
+cargo test --workspace
+
+# The macOS app (needs macOS 26 and the Command Line Tools — no Xcode required)
+./macos/build.sh            # builds build/MCP Gateway Agent.app
+open "build/MCP Gateway Agent.app"
 ```
 
 ## Deployment
 
 The project includes CI/CD via GitHub Actions:
 
-- **Server, Dashboard & Agent**: multi-arch Docker images (`linux/amd64` + `linux/arm64`), built natively per-architecture and published to **Docker Hub** (`sidpad03/mcp-gateway-*`) on every `main` push. Old tags are pruned automatically — the five newest versions plus `latest` are retained
-- **Agent binaries**: cross-compiled for macOS, Linux, and Windows via `cargo-zigbuild`, published as GitHub Releases
+- **Server & Dashboard**: multi-arch Docker images (`linux/amd64` + `linux/arm64`), built natively per-architecture and published to **Docker Hub** (`sidpad03/mcp-gateway-*`) on every `main` push. Old tags are pruned automatically — the five newest versions plus `latest` are retained
+- **Agent app**: built universal on a `macos-26` runner and published as a `.dmg` on an `agent-v*` GitHub Release, alongside a signed `appcast.json` the app self-updates from
 
 Publishing requires two repository secrets — `DOCKERHUB_USERNAME` and
 `DOCKERHUB_TOKEN`, an access token with **Read/Write/Delete** scope. Delete is

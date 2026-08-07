@@ -2,9 +2,36 @@ import { useState, useEffect } from 'react';
 import { api, Backend, ApiKey } from '@/lib/api';
 import { Plus, Trash2, Server, Wifi, Terminal, Globe, X, RefreshCw, Link, Copy, Check, RotateCcw, Pencil, Laptop, Boxes, Eye, EyeOff } from 'lucide-react';
 import clsx from 'clsx';
+import { fmt } from '@/lib/format';
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  IconButton,
+  Label,
+  Loading,
+  MiniStat,
+  Mono,
+  PageHeader,
+  RailList,
+  RailRow,
+  StatusLabel,
+  Tone,
+} from '@/components/ui';
 
 interface Props {
   isAdmin: boolean;
+}
+
+/** A backend's health, as a tone the rail can carry. */
+function healthTone(status: string, enabled: boolean): Tone {
+  if (!enabled) return 'neutral';
+  if (status === 'healthy') return 'ok';
+  if (status === 'unhealthy') return 'deny';
+  if (status === 'idle' || status === 'unknown') return 'neutral';
+  return 'warn';
 }
 
 const TRANSPORT_ICONS: Record<string, typeof Terminal> = {
@@ -73,14 +100,6 @@ export default function BackendConfig({ isAdmin }: Props) {
   const [gatewayUrl, setGatewayUrl] = useState(() => localStorage.getItem('mcpgw_gateway_url') || '');
   const [regeneratingKey, setRegeneratingKey] = useState(false);
   const [regenError, setRegenError] = useState('');
-
-  // Add Agent modal state
-  const [showAgentModal, setShowAgentModal] = useState(false);
-  const [agentName, setAgentName] = useState('');
-  const [agentKey, setAgentKey] = useState('');
-  const [agentCopied, setAgentCopied] = useState(false);
-  const [agentSubmitting, setAgentSubmitting] = useState(false);
-  const [agentError, setAgentError] = useState('');
 
   // Sync state
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -193,21 +212,6 @@ export default function BackendConfig({ isAdmin }: Props) {
 
   const getGatewayUrl = () => gatewayUrl || getDefaultGatewayUrl();
 
-  // The agent connects over a WebSocket at /agent/ws on the same host as the
-  // MCP endpoint. Derive it from the configured gateway URL.
-  const getAgentWsUrl = () => {
-    try {
-      const u = new URL(getGatewayUrl());
-      u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
-      u.pathname = '/agent/ws';
-      u.search = '';
-      u.hash = '';
-      return u.toString();
-    } catch {
-      return 'wss://<your-gateway-host>/agent/ws';
-    }
-  };
-
   // Revoke this client's current key and issue a fresh one (creates if none).
   const regenerateAppKey = async () => {
     if (regeneratingKey) return;
@@ -225,32 +229,6 @@ export default function BackendConfig({ isAdmin }: Props) {
       setRegenError(e.message || 'Failed to generate key');
     } finally {
       setRegeneratingKey(false);
-    }
-  };
-
-  const openAgentModal = () => {
-    setAgentName('');
-    setAgentKey('');
-    setAgentError('');
-    setAgentCopied(false);
-    setShowAgentModal(true);
-  };
-
-  // Provision a dedicated key for a remote agent and reveal it once. The agent
-  // authenticates its WebSocket with this key and registers as a backend.
-  const createAgent = async () => {
-    const name = agentName.trim();
-    if (!name) { setAgentError('Enter a name for this agent'); return; }
-    if (agentSubmitting) return;
-    setAgentError('');
-    setAgentSubmitting(true);
-    try {
-      const result = await api.createApiKey({ name: `agent: ${name}` });
-      setAgentKey(result.raw_key);
-    } catch (e: any) {
-      setAgentError(e.message || 'Failed to create agent key');
-    } finally {
-      setAgentSubmitting(false);
     }
   };
 
@@ -546,16 +524,10 @@ export default function BackendConfig({ isAdmin }: Props) {
     }
   };
 
-  const HEALTH_COLORS: Record<string, string> = {
-    healthy: 'text-success',
-    unhealthy: 'text-danger',
-    idle: 'text-blue-400',
-    unknown: 'text-gray-500',
-  };
-
   const HEALTH_LABELS: Record<string, string> = {
     healthy: 'Healthy',
     unhealthy: 'Unhealthy',
+    degraded: 'Degraded',
     idle: 'Idle',
     unknown: 'Unknown',
   };
@@ -563,18 +535,18 @@ export default function BackendConfig({ isAdmin }: Props) {
   const renderEnvFields = (form: 'stdio' | 'http') => {
     const isHttp = form === 'http';
     const entries = isHttp ? httpForm.env : stdioForm.env;
-    const label = isHttp ? 'HTTP Headers' : 'Environment Variables';
-    const addLabel = isHttp ? '+ Add Header' : '+ Add Variable';
+    const label = isHttp ? 'HTTP headers' : 'Environment variables';
+    const addLabel = isHttp ? '+ Add header' : '+ Add variable';
     const keyPlaceholder = isHttp ? 'Authorization' : 'KEY';
     const valuePlaceholder = isHttp ? 'Bearer <token>' : 'value';
     return (
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider">{label}</label>
-          <button type="button" onClick={() => addEnv(form)} className="text-xs text-accent hover:text-accent-hover transition-colors">{addLabel}</button>
+          <label className="block text-xs font-medium text-ink-2 uppercase tracking-wider">{label}</label>
+          <button type="button" onClick={() => addEnv(form)} className="text-xs text-beam hover:text-beam transition-colors">{addLabel}</button>
         </div>
         {isHttp && (
-          <p className="text-[11px] text-gray-500 mb-2">Sent as request headers on every call to this backend (e.g. <span className="font-mono">Authorization = Bearer &lt;token&gt;</span>).</p>
+          <p className="text-2xs text-ink-3 mb-2">Sent as request headers on every call to this backend (e.g. <span className="font-mono">Authorization = Bearer &lt;token&gt;</span>).</p>
         )}
         <div className="space-y-2">
           {entries.map((entry, i) => (
@@ -584,9 +556,9 @@ export default function BackendConfig({ isAdmin }: Props) {
                 value={entry.key}
                 onChange={e => updateEnv(form, i, 'key', e.target.value)}
                 placeholder={keyPlaceholder}
-                className="w-[40%] px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none focus:border-accent/50"
+                className="w-[40%] px-2.5 py-1.5 bg-inset border border-line rounded-row text-xs text-ink font-mono focus:outline-none focus:border-beam-edge"
               />
-              <span className="text-gray-600 text-xs">=</span>
+              <span className="text-ink-4 text-xs">=</span>
               <div className="flex-1 relative">
                 <input
                   type={revealedValues.has(`${form}-${i}`) ? 'text' : 'password'}
@@ -594,19 +566,19 @@ export default function BackendConfig({ isAdmin }: Props) {
                   onChange={e => updateEnv(form, i, 'value', e.target.value)}
                   placeholder={valuePlaceholder}
                   autoComplete="off"
-                  className="w-full px-2.5 py-1.5 pr-8 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none focus:border-accent/50"
+                  className="w-full px-2.5 py-1.5 pr-8 bg-inset border border-line rounded-row text-xs text-ink font-mono focus:outline-none focus:border-beam-edge"
                 />
                 <button
                   type="button"
                   onClick={() => toggleReveal(form, i)}
                   tabIndex={-1}
                   aria-label={revealedValues.has(`${form}-${i}`) ? 'Hide value' : 'Show value'}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-300 transition-colors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-4 hover:text-ink-2 transition-colors"
                 >
                   {revealedValues.has(`${form}-${i}`) ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                 </button>
               </div>
-              <button type="button" onClick={() => removeEnv(form, i)} className="p-1 text-gray-600 hover:text-danger transition-colors">
+              <button type="button" onClick={() => removeEnv(form, i)} className="p-1 text-ink-4 hover:text-deny transition-colors">
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -629,197 +601,214 @@ export default function BackendConfig({ isAdmin }: Props) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-lg font-semibold text-white">Backend MCP Servers</h2>
-          <p className="text-sm text-gray-500 mt-1">Connected MCP server backends</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={openConnectModal}
-            className="flex items-center gap-2 px-3 py-2 bg-surface border border-accent/30 rounded-lg text-sm text-accent hover:bg-accent/10 transition-colors"
-          >
-            <Link className="w-4 h-4" />
-            Connect
-          </button>
-          <button
-            onClick={syncAllBackends}
-            disabled={syncingAll}
-            className="flex items-center gap-2 px-3 py-2 bg-surface border border-border rounded-lg text-sm text-gray-300 hover:border-border-hover transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={clsx('w-4 h-4', syncingAll && 'animate-spin')} />
-            {syncingAll ? 'Syncing...' : 'Refresh & Sync'}
-          </button>
-          {isAdmin && (
-            <div className="relative">
-              <button
-                onClick={() => setShowAddMenu(!showAddMenu)}
-                className="flex items-center gap-2 px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Add Backend
-              </button>
-              {showAddMenu && (
-                <div className="absolute right-0 mt-1 w-48 bg-surface border border-border rounded-lg shadow-xl z-10 overflow-hidden">
-                  <button
-                    onClick={() => { setShowAddMenu(false); openModal(); }}
-                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-300 hover:bg-surface-hover hover:text-white transition-colors"
-                  >
-                    <Plus className="w-4 h-4" />
-                    New Backend
-                  </button>
-                  <button
-                    onClick={() => { setShowAddMenu(false); openAgentModal(); }}
-                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-300 hover:bg-surface-hover hover:text-white transition-colors border-t border-border"
-                  >
-                    <Laptop className="w-4 h-4" />
-                    New Agent
-                  </button>
-                  <button
-                    onClick={() => { setShowAddMenu(false); openJsonEditor(); }}
-                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-300 hover:bg-surface-hover hover:text-white transition-colors border-t border-border"
-                  >
-                    <Pencil className="w-4 h-4" />
-                    Edit JSON
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Backends"
+        description="The MCP servers this gateway aggregates. A backend can be a local process, a remote HTTP endpoint, or a Mac running the agent."
+        actions={
+          <>
+            <Button icon={Link} onClick={openConnectModal} className="text-beam border-beam-edge">
+              Connect a client
+            </Button>
+            <Button
+              icon={RefreshCw}
+              onClick={syncAllBackends}
+              loading={syncingAll}
+            >
+              {syncingAll ? 'Syncing...' : 'Refresh and sync'}
+            </Button>
+            {isAdmin && (
+              <div className="relative">
+                <Button variant="primary" icon={Plus} onClick={() => setShowAddMenu(!showAddMenu)}>
+                  Add backend
+                </Button>
+                {showAddMenu && (
+                  <>
+                    {/* Click-away, so the menu cannot be left open behind a
+                        dialog the way the old one could. */}
+                    <div className="fixed inset-0 z-10" onClick={() => setShowAddMenu(false)} />
+                    <div className="absolute right-0 mt-1.5 w-44 bg-high border border-line rounded-row shadow-[var(--shadow-pop)] z-20 overflow-hidden p-1 animate-pop origin-top-right">
+                      <button
+                        onClick={() => { setShowAddMenu(false); openModal(); }}
+                        className="w-full flex items-center gap-2 px-2.5 h-8 rounded-control text-xs text-ink-2 hover:bg-raised hover:text-ink transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        New backend
+                      </button>
+                      <button
+                        onClick={() => { setShowAddMenu(false); openJsonEditor(); }}
+                        className="w-full flex items-center gap-2 px-2.5 h-8 rounded-control text-xs text-ink-2 hover:bg-raised hover:text-ink transition-colors"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        Edit as JSON
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </>
+        }
+      />
 
       {pageError && (
-        <div className="mb-4 px-4 py-3 bg-danger/10 border border-danger/20 rounded-lg flex items-center justify-between">
-          <p className="text-sm text-danger">{pageError}</p>
-          <button onClick={() => setPageError('')} className="text-danger/60 hover:text-danger">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        <Banner tone="deny" onDismiss={() => setPageError('')} className="mb-4">
+          {pageError}
+        </Banner>
       )}
 
-      {/* Backend cards */}
-      <div className="grid grid-cols-1 gap-3">
-        {loading ? (
-          <div className="bg-surface border border-border rounded-xl p-12 text-center text-gray-500 text-sm">Loading backends...</div>
-        ) : backends.length === 0 ? (
-          <div className="bg-surface border border-border rounded-xl p-12 text-center text-gray-500 text-sm">No backends configured</div>
-        ) : (
-          backends.map(backend => {
+      {backends.length > 0 && (
+        <Card className="mb-4">
+          <div className="flex items-end justify-between gap-8 flex-wrap">
+            <div>
+              <Label>Tools behind the gate</Label>
+              <div className="text-2xl font-semibold tracking-[-0.02em] tabular-nums text-ink mt-1.5">
+                {fmt.count(backends.reduce((s, b) => s + b.tool_count, 0))}
+              </div>
+            </div>
+            <div className="flex items-end gap-7 flex-wrap">
+              <MiniStat label="Backends" value={fmt.count(backends.length)} />
+              <MiniStat
+                label="Healthy"
+                value={fmt.count(backends.filter(b => b.health_status === 'healthy').length)}
+                tone="ok"
+              />
+              {backends.filter(b => b.is_enabled && b.health_status !== 'healthy' && b.health_status !== 'idle').length > 0 && (
+                <MiniStat
+                  label="Needs attention"
+                  value={fmt.count(
+                    backends.filter(
+                      b => b.is_enabled && b.health_status !== 'healthy' && b.health_status !== 'idle'
+                    ).length
+                  )}
+                  tone="warn"
+                />
+              )}
+              <MiniStat
+                label="Disabled"
+                value={fmt.count(backends.filter(b => !b.is_enabled).length)}
+              />
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {loading ? (
+        <Card>
+          <Loading label="Loading backends..." />
+        </Card>
+      ) : backends.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={Server}
+            title="No backends configured"
+            message="Add an MCP server and the gateway will start it, register its tools, and put them behind the same endpoint as everything else."
+            action={
+              isAdmin ? (
+                <Button variant="primary" icon={Plus} onClick={openModal}>
+                  Add your first backend
+                </Button>
+              ) : undefined
+            }
+          />
+        </Card>
+      ) : (
+        <RailList>
+          {backends.map(backend => {
             const isSelected = selectedBackend?.backend_id === backend.backend_id;
+            const tone = healthTone(backend.health_status, backend.is_enabled);
             return (
               <div key={backend.backend_id}>
-                <div
-                  className={clsx(
-                    'bg-surface border rounded-xl p-5 transition-all cursor-pointer',
-                    isSelected ? 'border-accent/30' : 'border-border hover:border-border-hover',
-                    !backend.is_enabled && 'opacity-60'
-                  )}
+                <RailRow
+                  tone={tone}
+                  active={isSelected}
                   onClick={() => setSelectedBackend(isSelected ? null : backend)}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center',
-                        backend.health_status === 'healthy' ? 'bg-success/10' : backend.health_status === 'unhealthy' ? 'bg-danger/10' : backend.health_status === 'idle' ? 'bg-blue-500/10' : 'bg-surface-active'
-                      )}>
-                        {backend.transport === 'agent' ? (
-                          <Laptop className={clsx('w-5 h-5',
-                            backend.health_status === 'healthy' ? 'text-success' : backend.health_status === 'unhealthy' ? 'text-danger' : backend.health_status === 'idle' ? 'text-blue-400' : 'text-gray-500'
-                          )} />
-                        ) : (
-                          <Server className={clsx('w-5 h-5',
-                            backend.health_status === 'healthy' ? 'text-success' : backend.health_status === 'unhealthy' ? 'text-danger' : backend.health_status === 'idle' ? 'text-blue-400' : 'text-gray-500'
-                          )} />
-                        )}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2.5">
-                          <h3 className="text-sm font-semibold text-white">{backend.name}</h3>
-                          <span className={clsx('inline-flex items-center gap-1 text-xs font-medium', HEALTH_COLORS[backend.health_status] || HEALTH_COLORS.unknown)}>
-                            <span className={clsx('w-1.5 h-1.5 rounded-full',
-                              backend.health_status === 'healthy' ? 'bg-success' : backend.health_status === 'unhealthy' ? 'bg-danger' : backend.health_status === 'idle' ? 'bg-blue-400' : 'bg-gray-600'
-                            )} />
-                            {HEALTH_LABELS[backend.health_status] || backend.health_status}
-                          </span>
-                          {!backend.is_enabled && (
-                            <span className="text-xs text-gray-500 bg-surface-active px-1.5 py-0.5 rounded">disabled</span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3 mt-1">
-                          <span className="text-xs text-gray-500">{backend.tool_count} tools</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {isAdmin && (
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={e => { e.stopPropagation(); openEditModal(backend); }}
-                          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md text-gray-400 hover:bg-surface-hover hover:text-white transition-colors"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
+                  className={clsx(!backend.is_enabled && 'opacity-60')}
+                  trailing={
+                    isAdmin ? (
+                      <div
+                        className="flex items-center gap-1"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <Button size="sm" variant="ghost" icon={Pencil} onClick={() => openEditModal(backend)}>
                           Edit
-                        </button>
+                        </Button>
                         {backend.is_enabled && (
-                          <button
-                            onClick={e => { e.stopPropagation(); syncBackend(backend.backend_id); }}
-                            disabled={syncingId === backend.backend_id}
-                            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md text-blue-400 hover:bg-blue-500/10 transition-colors disabled:opacity-50"
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            icon={RotateCcw}
+                            loading={syncingId === backend.backend_id}
+                            onClick={() => syncBackend(backend.backend_id)}
                           >
-                            <RotateCcw className={clsx('w-3.5 h-3.5', syncingId === backend.backend_id && 'animate-spin')} />
                             Sync
-                          </button>
+                          </Button>
                         )}
-                        <button
-                          onClick={e => { e.stopPropagation(); toggleBackend(backend); }}
-                          className={clsx('text-xs px-3 py-1.5 rounded-md transition-colors',
-                            backend.is_enabled
-                              ? 'text-gray-400 hover:bg-surface-hover'
-                              : 'text-success hover:bg-success/10'
-                          )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => toggleBackend(backend)}
+                          className={backend.is_enabled ? undefined : 'text-beam'}
                         >
                           {backend.is_enabled ? 'Disable' : 'Enable'}
-                        </button>
-                        <button
-                          onClick={e => { e.stopPropagation(); setShowDeleteConfirm(backend.backend_id); }}
-                          className="p-1.5 text-gray-500 hover:text-danger hover:bg-danger/10 rounded-md transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        </Button>
+                        <IconButton
+                          icon={Trash2}
+                          label={`Delete ${backend.name}`}
+                          onClick={() => setShowDeleteConfirm(backend.backend_id)}
+                          className="hover:text-deny"
+                        />
                       </div>
+                    ) : (
+                      <StatusLabel tone={tone} pulsing={tone === 'ok'}>
+                        {HEALTH_LABELS[backend.health_status] || backend.health_status}
+                      </StatusLabel>
+                    )
+                  }
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-wrap">
+                    <Mono className="text-xs font-medium text-ink">{backend.name}</Mono>
+                    {isAdmin && (
+                      <StatusLabel tone={tone} pulsing={tone === 'ok'}>
+                        {HEALTH_LABELS[backend.health_status] || backend.health_status}
+                      </StatusLabel>
                     )}
+                    <Badge>{backend.transport}</Badge>
+                    <span className="text-2xs text-ink-4 tabular-nums">
+                      {backend.tool_count} tools
+                    </span>
+                    {!backend.is_enabled && <Badge>disabled</Badge>}
                   </div>
-                </div>
+                </RailRow>
 
                 {/* Expanded config */}
                 {isSelected && (
-                  <div className="mx-2 bg-surface-hover border border-border/50 rounded-b-xl p-4 -mt-2">
-                    <h4 className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Configuration</h4>
+                  <div className="bg-inset border-y border-line-soft px-4 py-3.5">
+                    <h4 className="text-xs font-medium text-ink-2 uppercase tracking-wider mb-2">Configuration</h4>
                     {backend.transport === 'stdio' && (
                       <div className="space-y-2 mb-3">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-500 w-16 shrink-0">Command:</span>
-                          <code className="text-xs text-emerald-400 font-mono">{(backend.config as any).command}</code>
+                          <span className="text-xs text-ink-3 w-16 shrink-0">Command:</span>
+                          <code className="text-xs text-beam font-mono">{(backend.config as any).command}</code>
                         </div>
                         {(backend.config as any).args?.length > 0 && (
                           <div className="flex items-start gap-2">
-                            <span className="text-xs text-gray-500 w-16 shrink-0 mt-0.5">Args:</span>
+                            <span className="text-xs text-ink-3 w-16 shrink-0 mt-0.5">Args:</span>
                             <div className="flex flex-wrap gap-1">
                               {(backend.config as any).args.map((arg: string, i: number) => (
-                                <code key={i} className="text-xs text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded font-mono">{arg}</code>
+                                <code key={i} className="text-xs text-ink-2 bg-neutral-wash px-1.5 py-0.5 rounded-control font-mono">{arg}</code>
                               ))}
                             </div>
                           </div>
                         )}
                         {Object.keys((backend.config as any).env || {}).length > 0 && (
                           <div className="flex items-start gap-2">
-                            <span className="text-xs text-gray-500 w-16 shrink-0 mt-0.5">Env:</span>
+                            <span className="text-xs text-ink-3 w-16 shrink-0 mt-0.5">Env:</span>
                             <div className="space-y-1">
                               {Object.entries((backend.config as any).env || {}).map(([k, v]) => (
                                 <div key={k} className="text-xs font-mono">
-                                  <span className="text-amber-400">{k}</span>
-                                  <span className="text-gray-600">=</span>
-                                  <span className="text-gray-400">{String(v).length > 40 ? String(v).slice(0, 40) + '...' : String(v)}</span>
+                                  <span className="text-warn">{k}</span>
+                                  <span className="text-ink-4">=</span>
+                                  <span className="text-ink-2">{String(v).length > 40 ? String(v).slice(0, 40) + '...' : String(v)}</span>
                                 </div>
                               ))}
                             </div>
@@ -830,10 +819,10 @@ export default function BackendConfig({ isAdmin }: Props) {
                     {backend.transport === 'agent' && (
                       <div className="mb-3">
                         <div className="flex items-center gap-2 mb-3">
-                          <Boxes className="w-4 h-4 text-accent" />
-                          <span className="text-xs font-medium text-gray-300">Connected MCP Servers</span>
+                          <Boxes className="w-4 h-4 text-beam" />
+                          <span className="text-xs font-medium text-ink-2">Connected MCP servers</span>
                           {(backend.config as any).sub_backends?.length > 0 && (
-                            <span className="text-[10px] text-gray-500 bg-surface-active px-1.5 py-0.5 rounded">
+                            <span className="text-micro text-ink-3 bg-high px-1.5 py-0.5 rounded-control">
                               {(backend.config as any).sub_backends.length} server{(backend.config as any).sub_backends.length !== 1 ? 's' : ''}
                             </span>
                           )}
@@ -843,44 +832,44 @@ export default function BackendConfig({ isAdmin }: Props) {
                             {((backend.config as any).sub_backends as any[]).map((sub: any, i: number) => {
                               const SubIcon = TRANSPORT_ICONS[sub.transport] || Globe;
                               return (
-                                <div key={i} className="bg-[#0a0a0f] border border-border rounded-lg p-3">
+                                <div key={i} className="bg-inset border border-line rounded-row p-3">
                                   <div className="flex items-center justify-between mb-2">
                                     <div className="flex items-center gap-2">
-                                      <SubIcon className="w-3.5 h-3.5 text-accent" />
-                                      <span className="text-sm font-medium text-white">{sub.name}</span>
-                                      <span className="text-[10px] text-gray-500 bg-surface-active px-1.5 py-0.5 rounded">{sub.transport}</span>
+                                      <SubIcon className="w-3.5 h-3.5 text-beam" />
+                                      <span className="text-sm font-medium text-ink">{sub.name}</span>
+                                      <span className="text-micro text-ink-3 bg-high px-1.5 py-0.5 rounded-control">{sub.transport}</span>
                                     </div>
-                                    <span className="text-[10px] text-gray-500">{sub.tool_count} tool{sub.tool_count !== 1 ? 's' : ''}</span>
+                                    <span className="text-micro text-ink-3">{sub.tool_count} tool{sub.tool_count !== 1 ? 's' : ''}</span>
                                   </div>
                                   <div className="space-y-1.5">
                                     {sub.command && (
                                       <div className="flex items-start gap-2">
-                                        <span className="text-[10px] text-gray-500 w-16 shrink-0 mt-0.5 uppercase tracking-wider">Command</span>
-                                        <code className="text-xs text-emerald-400 font-mono">{sub.command}</code>
+                                        <span className="text-micro text-ink-3 w-16 shrink-0 mt-0.5 uppercase tracking-wider">Command</span>
+                                        <code className="text-xs text-beam font-mono">{sub.command}</code>
                                       </div>
                                     )}
                                     {sub.args?.length > 0 && (
                                       <div className="flex items-start gap-2">
-                                        <span className="text-[10px] text-gray-500 w-16 shrink-0 mt-0.5 uppercase tracking-wider">Args</span>
+                                        <span className="text-micro text-ink-3 w-16 shrink-0 mt-0.5 uppercase tracking-wider">Args</span>
                                         <div className="flex flex-wrap gap-1">
                                           {sub.args.map((arg: string, j: number) => (
-                                            <code key={j} className="text-xs text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded font-mono">{arg}</code>
+                                            <code key={j} className="text-xs text-ink-2 bg-neutral-wash px-1.5 py-0.5 rounded-control font-mono">{arg}</code>
                                           ))}
                                         </div>
                                       </div>
                                     )}
                                     {sub.url && (
                                       <div className="flex items-start gap-2">
-                                        <span className="text-[10px] text-gray-500 w-16 shrink-0 mt-0.5 uppercase tracking-wider">URL</span>
-                                        <code className="text-xs text-blue-400 font-mono">{sub.url}</code>
+                                        <span className="text-micro text-ink-3 w-16 shrink-0 mt-0.5 uppercase tracking-wider">URL</span>
+                                        <code className="text-xs text-ink-2 font-mono">{sub.url}</code>
                                       </div>
                                     )}
                                     {sub.env_keys?.length > 0 && (
                                       <div className="flex items-start gap-2">
-                                        <span className="text-[10px] text-gray-500 w-16 shrink-0 mt-0.5 uppercase tracking-wider">Env</span>
+                                        <span className="text-micro text-ink-3 w-16 shrink-0 mt-0.5 uppercase tracking-wider">Env</span>
                                         <div className="flex flex-wrap gap-1">
                                           {sub.env_keys.map((key: string) => (
-                                            <span key={key} className="text-xs text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded font-mono">{key}</span>
+                                            <span key={key} className="text-xs text-warn bg-warn-wash px-1.5 py-0.5 rounded-control font-mono">{key}</span>
                                           ))}
                                         </div>
                                       </div>
@@ -891,67 +880,83 @@ export default function BackendConfig({ isAdmin }: Props) {
                             })}
                           </div>
                         ) : (
-                          <p className="text-xs text-gray-500">No sub-backend information available. Reconnect the agent to populate.</p>
+                          <p className="text-xs text-ink-3">No sub-backend information available. Reconnect the agent to refresh it.</p>
                         )}
                       </div>
                     )}
                     {backend.transport !== 'stdio' && backend.transport !== 'agent' && (
-                      <pre className="text-xs text-gray-400 bg-[#0a0a0f] p-3 rounded-lg overflow-auto max-h-48 font-mono mb-3">
+                      <pre className="text-xs text-ink-2 bg-inset p-3 rounded-row overflow-auto max-h-48 font-mono mb-3">
                         {JSON.stringify(backend.config, null, 2)}
                       </pre>
                     )}
-                    <div className="grid grid-cols-3 gap-4 text-sm border-t border-border/50 pt-3">
-                      <div><span className="text-gray-500">Created:</span> <span className="text-gray-300 text-xs">{new Date(backend.created_at).toLocaleString()}</span></div>
-                      <div><span className="text-gray-500">Last Health Check:</span> <span className="text-gray-300 text-xs">{backend.last_health_check ? new Date(backend.last_health_check).toLocaleString() : 'Never'}</span></div>
-                      <div><span className="text-gray-500">Backend ID:</span> <span className="text-gray-300 text-xs font-mono">{backend.backend_id.slice(0, 8)}</span></div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-3 border-t border-line-soft pt-3">
+                      <div>
+                        <Label className="block">Created</Label>
+                        <span className="text-2xs text-ink-2">{fmt.dateTime(backend.created_at)}</span>
+                      </div>
+                      <div>
+                        <Label className="block">Last health check</Label>
+                        <span className="text-2xs text-ink-2">
+                          {backend.last_health_check ? fmt.relative(backend.last_health_check) : 'Never'}
+                        </span>
+                      </div>
+                      <div>
+                        <Label className="block">Backend ID</Label>
+                        <Mono className="text-2xs text-ink-2">{backend.backend_id.slice(0, 8)}</Mono>
+                      </div>
                     </div>
                   </div>
                 )}
               </div>
             );
-          })
-        )}
-      </div>
+          })}
+        </RailList>
+      )}
 
       {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-surface border border-border rounded-2xl p-6 w-full max-w-sm">
-            <h3 className="text-base font-semibold text-white mb-2">Delete Backend</h3>
-            <p className="text-sm text-gray-400 mb-4">Are you sure you want to delete this backend? This action cannot be undone.</p>
+        <div className="fixed inset-0 bg-scrim flex items-center justify-center z-50">
+          <div className="bg-panel border border-line rounded-panel p-6 w-full max-w-sm">
+            <h3 className="text-md font-semibold text-ink mb-2">Delete this backend?</h3>
+            <p className="text-sm text-ink-2 mb-4">
+              <span className="font-medium text-ink">
+                {backends.find(b => b.backend_id === showDeleteConfirm)?.name}
+              </span>{' '}
+              and its tools are withdrawn from the gateway. This cannot be undone.
+            </p>
             <div className="flex gap-3">
-              <button onClick={() => setShowDeleteConfirm(null)} className="flex-1 py-2 bg-surface-hover border border-border text-gray-300 text-sm rounded-lg hover:bg-surface-active transition-colors">Cancel</button>
-              <button onClick={confirmDeleteBackend} className="flex-1 py-2 bg-danger hover:bg-danger/80 text-white text-sm font-medium rounded-lg transition-colors">Yes, Delete</button>
+              <button onClick={() => setShowDeleteConfirm(null)} className="flex-1 py-2 bg-raised border border-line text-ink-2 text-sm rounded-row hover:bg-high transition-colors">Cancel</button>
+              <button onClick={confirmDeleteBackend} className="flex-1 py-2 bg-deny hover:opacity-90 text-on-solid text-sm font-medium rounded-row transition-colors">Delete backend</button>
             </div>
           </div>
         </div>
       )}
 
       {showJsonEditor && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-surface border border-border rounded-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-scrim flex items-center justify-center z-50">
+          <div className="bg-panel border border-line rounded-panel p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-base font-semibold text-white">Edit Backends JSON</h3>
-                <p className="text-xs text-gray-500 mt-0.5">Edit all backend configurations as JSON. Existing backends are matched by name.</p>
+                <h3 className="text-md font-semibold text-ink">Edit backends as JSON</h3>
+                <p className="text-xs text-ink-3 mt-0.5">Edit all backend configurations as JSON. Existing backends are matched by name.</p>
               </div>
-              <button onClick={() => setShowJsonEditor(false)} className="text-gray-500 hover:text-gray-300">
+              <button onClick={() => setShowJsonEditor(false)} className="text-ink-3 hover:text-ink-2">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <textarea
               value={jsonContent}
               onChange={e => setJsonContent(e.target.value)}
-              className="w-full h-96 px-4 py-3 bg-[#0a0a0f] border border-border rounded-lg text-xs text-gray-300 font-mono focus:outline-none focus:border-accent/50 resize-none"
+              className="w-full h-96 px-4 py-3 bg-inset border border-line rounded-row text-xs text-ink-2 font-mono focus:outline-none focus:border-beam-edge resize-none"
               spellCheck={false}
             />
             {jsonError && (
-              <div className="mt-2 px-3 py-2 bg-danger/10 border border-danger/20 rounded-lg">
-                <p className="text-xs text-danger">{jsonError}</p>
+              <div className="mt-2 px-3 py-2 bg-deny-wash border border-deny-edge rounded-row">
+                <p className="text-xs text-deny">{jsonError}</p>
               </div>
             )}
             <div className="flex gap-3 mt-4">
-              <button onClick={() => setShowJsonEditor(false)} className="flex-1 py-2 bg-surface-hover border border-border text-gray-300 text-sm rounded-lg hover:bg-surface-active transition-colors">Cancel</button>
-              <button onClick={saveJsonBackends} disabled={jsonSaving} className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50">{jsonSaving ? 'Saving…' : 'Save Changes'}</button>
+              <button onClick={() => setShowJsonEditor(false)} className="flex-1 py-2 bg-raised border border-line text-ink-2 text-sm rounded-row hover:bg-high transition-colors">Cancel</button>
+              <button onClick={saveJsonBackends} disabled={jsonSaving} className="flex-1 py-2 bg-solid hover:bg-solid-hover text-on-solid text-sm font-medium rounded-row transition-colors disabled:opacity-50">{jsonSaving ? 'Saving...' : 'Save changes'}</button>
             </div>
           </div>
         </div>
@@ -959,38 +964,38 @@ export default function BackendConfig({ isAdmin }: Props) {
 
       {/* Create / Edit modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-surface border border-border rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-scrim flex items-center justify-center z-50">
+          <div className="bg-panel border border-line rounded-panel p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
-              <h3 className="text-base font-semibold text-white">{editingBackend ? 'Edit MCP Server' : 'Add MCP Server'}</h3>
-              <button onClick={() => { setShowModal(false); resetForm(); }} className="text-gray-500 hover:text-gray-300">
+              <h3 className="text-md font-semibold text-ink">{editingBackend ? 'Edit backend' : 'Add backend'}</h3>
+              <button onClick={() => { setShowModal(false); resetForm(); }} className="text-ink-3 hover:text-ink-2">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Server Name</label>
+                <label className="block text-xs font-medium text-ink-2 mb-1.5 uppercase tracking-wider">Backend name</label>
                 <input
                   type="text"
                   value={name}
                   onChange={e => setName(e.target.value)}
                   disabled={!!editingBackend}
                   className={clsx(
-                    'w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white focus:outline-none focus:border-accent/50',
+                    'w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink focus:outline-none focus:border-beam-edge',
                     editingBackend && 'opacity-60 cursor-not-allowed'
                   )}
-                  placeholder="e.g., gitea, n8n-mcp, filesystem"
+                  placeholder="e.g. gitea, n8n-mcp, filesystem"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Transport</label>
+                  <label className="block text-xs font-medium text-ink-2 mb-1.5 uppercase tracking-wider">Transport</label>
                   <select
                     value={transport}
                     onChange={e => setTransport(e.target.value)}
-                    className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-gray-300 focus:outline-none focus:border-accent/50"
+                    className="w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink-2 focus:outline-none focus:border-beam-edge"
                   >
                     <option value="stdio">stdio</option>
                     <option value="streamable-http">streamable-http</option>
@@ -998,11 +1003,11 @@ export default function BackendConfig({ isAdmin }: Props) {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Risk Category</label>
+                  <label className="block text-xs font-medium text-ink-2 mb-1.5 uppercase tracking-wider">Risk category</label>
                   <select
                     value={riskCategory}
                     onChange={e => setRiskCategory(e.target.value)}
-                    className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-gray-300 focus:outline-none focus:border-accent/50"
+                    className="w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink-2 focus:outline-none focus:border-beam-edge"
                   >
                     <option value="read">read</option>
                     <option value="write">write</option>
@@ -1018,32 +1023,32 @@ export default function BackendConfig({ isAdmin }: Props) {
               {transport === 'stdio' && (
                 <>
                   <div>
-                    <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Command</label>
+                    <label className="block text-xs font-medium text-ink-2 mb-1.5 uppercase tracking-wider">Command</label>
                     <input
                       type="text"
                       value={stdioForm.command}
                       onChange={e => setStdioForm({ ...stdioForm, command: e.target.value })}
-                      className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white font-mono focus:outline-none focus:border-accent/50"
-                      placeholder="e.g., npx, go, node, python"
+                      className="w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink font-mono focus:outline-none focus:border-beam-edge"
+                      placeholder="e.g. npx, go, node, python"
                     />
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider">Arguments</label>
-                      <button type="button" onClick={addArg} className="text-xs text-accent hover:text-accent-hover transition-colors">+ Add Arg</button>
+                      <label className="block text-xs font-medium text-ink-2 uppercase tracking-wider">Arguments</label>
+                      <button type="button" onClick={addArg} className="text-xs text-beam hover:text-beam transition-colors">+ Add argument</button>
                     </div>
                     <div className="space-y-2">
                       {stdioForm.args.map((arg, i) => (
                         <div key={i} className="flex items-center gap-2">
-                          <span className="text-xs text-gray-600 font-mono w-5 text-right shrink-0">{i}</span>
+                          <span className="text-xs text-ink-4 font-mono w-5 text-right shrink-0">{i}</span>
                           <input
                             type="text"
                             value={arg}
                             onChange={e => updateArg(i, e.target.value)}
-                            placeholder={i === 0 ? 'e.g., run, -y, n8n-mcp' : ''}
-                            className="flex-1 px-2.5 py-1.5 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none focus:border-accent/50"
+                            placeholder={i === 0 ? 'e.g. run, -y, n8n-mcp' : ''}
+                            className="flex-1 px-2.5 py-1.5 bg-inset border border-line rounded-row text-xs text-ink font-mono focus:outline-none focus:border-beam-edge"
                           />
-                          <button type="button" onClick={() => removeArg(i)} className="p-1 text-gray-600 hover:text-danger transition-colors">
+                          <button type="button" onClick={() => removeArg(i)} className="p-1 text-ink-4 hover:text-deny transition-colors">
                             <X className="w-3.5 h-3.5" />
                           </button>
                         </div>
@@ -1057,13 +1062,13 @@ export default function BackendConfig({ isAdmin }: Props) {
               {transport !== 'stdio' && (
                 <>
                   <div>
-                    <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">URL</label>
+                    <label className="block text-xs font-medium text-ink-2 mb-1.5 uppercase tracking-wider">URL</label>
                     <input
                       type="text"
                       value={httpForm.url}
                       onChange={e => setHttpForm({ ...httpForm, url: e.target.value })}
-                      className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white font-mono focus:outline-none focus:border-accent/50"
-                      placeholder="e.g., http://localhost:8080/mcp"
+                      className="w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink font-mono focus:outline-none focus:border-beam-edge"
+                      placeholder="e.g. http://localhost:8080/mcp"
                     />
                   </div>
                   {renderEnvFields('http')}
@@ -1071,24 +1076,24 @@ export default function BackendConfig({ isAdmin }: Props) {
               )}
 
               {error && (
-                <div className="px-3 py-2 bg-danger/10 border border-danger/20 rounded-lg">
-                  <p className="text-xs text-danger">{error}</p>
+                <div className="px-3 py-2 bg-deny-wash border border-deny-edge rounded-row">
+                  <p className="text-xs text-deny">{error}</p>
                 </div>
               )}
 
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => { setShowModal(false); resetForm(); }}
-                  className="flex-1 py-2 bg-surface-hover border border-border text-gray-300 text-sm rounded-lg hover:bg-surface-active transition-colors"
+                  className="flex-1 py-2 bg-raised border border-line text-ink-2 text-sm rounded-row hover:bg-high transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={saveBackend}
                   disabled={isSubmitting}
-                  className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                  className="flex-1 py-2 bg-solid hover:bg-solid-hover text-on-solid text-sm font-medium rounded-row transition-colors disabled:opacity-50"
                 >
-                  {isSubmitting ? 'Saving…' : (editingBackend ? 'Save Changes' : 'Add Server')}
+                  {isSubmitting ? 'Saving...' : (editingBackend ? 'Save changes' : 'Add backend')}
                 </button>
               </div>
             </div>
@@ -1098,26 +1103,26 @@ export default function BackendConfig({ isAdmin }: Props) {
 
       {/* Connect / Client Config Modal */}
       {showConnectModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-surface border border-border rounded-2xl p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-scrim flex items-center justify-center z-50">
+          <div className="bg-panel border border-line rounded-panel p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
               <div>
-                <h3 className="text-base font-semibold text-white">Connect AI Client</h3>
-                <p className="text-xs text-gray-500 mt-0.5">Add this config to connect your AI client to the gateway</p>
+                <h3 className="text-md font-semibold text-ink">Connect a client</h3>
+                <p className="text-xs text-ink-3 mt-0.5">Add this config to connect your AI client to the gateway.</p>
               </div>
-              <button onClick={() => setShowConnectModal(false)} className="text-gray-500 hover:text-gray-300">
+              <button onClick={() => setShowConnectModal(false)} className="text-ink-3 hover:text-ink-2">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Tab bar */}
-            <div className="flex border-b border-border mb-4 overflow-x-auto">
+            <div className="flex border-b border-line mb-4 overflow-x-auto">
               {CONNECT_TABS.map(tab => (
                 <button
                   key={tab.key}
                   onClick={() => { setConnectTab(tab.key); setCopied(false); }}
                   className={clsx('px-3 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px whitespace-nowrap shrink-0',
-                    connectTab === tab.key ? 'border-accent text-white' : 'border-transparent text-gray-500 hover:text-gray-300'
+                    connectTab === tab.key ? 'border-beam-edge text-ink' : 'border-transparent text-ink-3 hover:text-ink-2'
                   )}
                 >
                   {tab.label}
@@ -1126,51 +1131,51 @@ export default function BackendConfig({ isAdmin }: Props) {
             </div>
 
             {connectLoading ? (
-              <div className="py-8 text-center text-gray-500 text-sm">Loading...</div>
+              <div className="py-8 text-center text-ink-3 text-sm">Loading...</div>
             ) : (
               <>
                 {/* Generate / rotate this client's key */}
                 <div className="flex items-center justify-between gap-3 mb-3">
-                  <p className="text-[11px] text-gray-500">One key per client. Generating a new key revokes the old one.</p>
+                  <p className="text-2xs text-ink-3">One key per client. Generating a new key revokes the old one.</p>
                   <button
                     onClick={regenerateAppKey}
                     disabled={regeneratingKey}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 bg-accent/10 border border-accent/30 text-accent text-xs rounded-lg hover:bg-accent/20 transition-colors disabled:opacity-50 shrink-0"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 bg-beam-wash border border-beam-edge text-beam text-xs rounded-row hover:bg-beam-wash/20 transition-colors disabled:opacity-50 shrink-0"
                   >
                     <RotateCcw className={clsx('w-3.5 h-3.5', regeneratingKey && 'animate-spin')} />
-                    {regeneratingKey ? 'Generating…' : 'Generate new key'}
+                    {regeneratingKey ? 'Generating...' : 'Generate new key'}
                   </button>
                 </div>
                 {regenError && (
-                  <div className="mb-3 px-3 py-2 bg-danger/10 border border-danger/20 rounded-lg">
-                    <p className="text-xs text-danger">{regenError}</p>
+                  <div className="mb-3 px-3 py-2 bg-deny-wash border border-deny-edge rounded-row">
+                    <p className="text-xs text-deny">{regenError}</p>
                   </div>
                 )}
 
                 {connectTab === 'openwebui' ? (
                   <>
                     <div className="mb-3 space-y-3">
-                      <p className="text-xs text-gray-400">
+                      <p className="text-xs text-ink-2">
                         Open WebUI (v0.6.31+) connects to MCP servers through the admin UI, not a config file.
                       </p>
-                      <ol className="text-xs text-gray-400 space-y-2 list-decimal list-inside">
-                        <li>Go to <span className="text-white font-medium">Admin Settings → External Tools</span></li>
-                        <li>Click <span className="text-white font-medium">+ (Add Server)</span></li>
-                        <li>Set <span className="text-white font-medium">Type</span> to <code className="text-accent bg-accent/10 px-1.5 py-0.5 rounded text-[11px]">MCP (Streamable HTTP)</code></li>
-                        <li>Enter the <span className="text-white font-medium">Server URL</span> below</li>
-                        <li>Set <span className="text-white font-medium">Auth</span> to <code className="text-accent bg-accent/10 px-1.5 py-0.5 rounded text-[11px]">Bearer</code> and paste the token</li>
+                      <ol className="text-xs text-ink-2 space-y-2 list-decimal list-inside">
+                        <li>Go to <span className="text-ink font-medium">Admin Settings → External Tools</span></li>
+                        <li>Click <span className="text-ink font-medium">+ (Add Server)</span></li>
+                        <li>Set <span className="text-ink font-medium">Type</span> to <code className="text-beam bg-beam-wash px-1.5 py-0.5 rounded-control text-2xs">MCP (Streamable HTTP)</code></li>
+                        <li>Enter the <span className="text-ink font-medium">Server URL</span> below</li>
+                        <li>Set <span className="text-ink font-medium">Auth</span> to <code className="text-beam bg-beam-wash px-1.5 py-0.5 rounded-control text-2xs">Bearer</code> and paste the token</li>
                         <li>Save and restart Open WebUI if prompted</li>
                       </ol>
                     </div>
 
                     <div className="space-y-3">
                       <div>
-                        <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Server URL</label>
+                        <label className="block text-micro font-medium text-ink-3 uppercase tracking-wider mb-1">Server URL</label>
                         <div className="relative">
                           <input
                             readOnly
                             value={getGatewayUrl()}
-                            className="w-full px-3 py-2 pr-16 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none"
+                            className="w-full px-3 py-2 pr-16 bg-inset border border-line rounded-row text-xs text-ink font-mono focus:outline-none"
                           />
                           <button
                             onClick={async () => {
@@ -1179,8 +1184,8 @@ export default function BackendConfig({ isAdmin }: Props) {
                               setTimeout(() => setCopied(false), 2000);
                             }}
                             className={clsx(
-                              'absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors',
-                              copied ? 'bg-success/20 text-success' : 'bg-surface-hover text-gray-400 hover:text-white'
+                              'absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2 py-1 rounded-control text-micro transition-colors',
+                              copied ? 'bg-beam-wash text-beam' : 'bg-raised text-ink-2 hover:text-ink'
                             )}
                           >
                             {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
@@ -1190,12 +1195,12 @@ export default function BackendConfig({ isAdmin }: Props) {
                       </div>
 
                       <div>
-                        <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Bearer Token</label>
+                        <label className="block text-micro font-medium text-ink-3 uppercase tracking-wider mb-1">Bearer token</label>
                         <div className="relative">
                           <input
                             readOnly
                             value={getKeyForDisplay()}
-                            className="w-full px-3 py-2 pr-16 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none"
+                            className="w-full px-3 py-2 pr-16 bg-inset border border-line rounded-row text-xs text-ink font-mono focus:outline-none"
                           />
                           <button
                             onClick={async () => {
@@ -1204,8 +1209,8 @@ export default function BackendConfig({ isAdmin }: Props) {
                               setTimeout(() => setCopied(false), 2000);
                             }}
                             className={clsx(
-                              'absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors',
-                              copied ? 'bg-success/20 text-success' : 'bg-surface-hover text-gray-400 hover:text-white'
+                              'absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2 py-1 rounded-control text-micro transition-colors',
+                              copied ? 'bg-beam-wash text-beam' : 'bg-raised text-ink-2 hover:text-ink'
                             )}
                           >
                             {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
@@ -1218,55 +1223,55 @@ export default function BackendConfig({ isAdmin }: Props) {
                 ) : (
                   <>
                     <div className="mb-2">
-                      <p className="text-xs text-gray-500">{getConfigHint()}</p>
+                      <p className="text-xs text-ink-3">{getConfigHint()}</p>
                     </div>
 
                     {connectTab === 'clawbot' && (
-                      <div className="mb-3 p-3 bg-surface-hover rounded-lg border border-border/50">
-                        <h4 className="text-xs font-medium text-white mb-2">Clawbot Setup Instructions</h4>
-                        <ol className="text-xs text-gray-400 space-y-1.5 list-decimal list-inside">
+                      <div className="mb-3 p-3 bg-raised rounded-row border border-line-soft">
+                        <h4 className="text-xs font-medium text-ink mb-2">Clawbot setup instructions</h4>
+                        <ol className="text-xs text-ink-2 space-y-1.5 list-decimal list-inside">
                           <li>Ensure Clawbot v2.0+ is installed with MCP support</li>
                           <li>Add the config below to your Clawbot configuration file</li>
                           <li>Restart Clawbot to load the new MCP gateway connection</li>
-                          <li>Verify connection with <code className="text-accent bg-accent/10 px-1 py-0.5 rounded text-[10px]">clawbot mcp list</code></li>
+                          <li>Verify connection with <code className="text-beam bg-beam-wash px-1 py-0.5 rounded-control text-micro">clawbot mcp list</code></li>
                         </ol>
                       </div>
                     )}
 
                     {connectTab === 'codex' && (
-                      <div className="mb-3 p-3 bg-surface-hover rounded-lg border border-border/50">
-                        <h4 className="text-xs font-medium text-white mb-2">Codex Setup Instructions</h4>
-                        <ol className="text-xs text-gray-400 space-y-1.5 list-decimal list-inside">
-                          <li>Create or edit <code className="text-accent bg-accent/10 px-1 py-0.5 rounded text-[10px]">~/.codex/mcp.json</code></li>
+                      <div className="mb-3 p-3 bg-raised rounded-row border border-line-soft">
+                        <h4 className="text-xs font-medium text-ink mb-2">Codex setup instructions</h4>
+                        <ol className="text-xs text-ink-2 space-y-1.5 list-decimal list-inside">
+                          <li>Create or edit <code className="text-beam bg-beam-wash px-1 py-0.5 rounded-control text-micro">~/.codex/mcp.json</code></li>
                           <li>Add the configuration block below</li>
-                          <li>Restart Codex or run <code className="text-accent bg-accent/10 px-1 py-0.5 rounded text-[10px]">codex mcp refresh</code></li>
+                          <li>Restart Codex or run <code className="text-beam bg-beam-wash px-1 py-0.5 rounded-control text-micro">codex mcp refresh</code></li>
                           <li>Tools from the gateway will appear in your Codex session</li>
                         </ol>
                       </div>
                     )}
 
                     {connectTab === 'lmstudio' && (
-                      <div className="mb-3 p-3 bg-surface-hover rounded-lg border border-border/50">
-                        <h4 className="text-xs font-medium text-white mb-2">LM Studio Setup Instructions</h4>
-                        <ol className="text-xs text-gray-400 space-y-1.5 list-decimal list-inside">
-                          <li>Open LM Studio (v0.3.12+) and go to <span className="text-white font-medium">Settings → MCP Servers</span></li>
-                          <li>Click <span className="text-white font-medium">Add Server</span> and paste the configuration below</li>
+                      <div className="mb-3 p-3 bg-raised rounded-row border border-line-soft">
+                        <h4 className="text-xs font-medium text-ink mb-2">LM Studio setup instructions</h4>
+                        <ol className="text-xs text-ink-2 space-y-1.5 list-decimal list-inside">
+                          <li>Open LM Studio (v0.3.12+) and go to <span className="text-ink font-medium">Settings → MCP Servers</span></li>
+                          <li>Click <span className="text-ink font-medium">Add Server</span> and paste the configuration below</li>
                           <li>Save and restart the chat session to load MCP tools</li>
                         </ol>
                       </div>
                     )}
 
                     <div className="relative">
-                      <pre className="bg-[#0a0a0f] border border-border rounded-lg p-4 text-xs text-gray-300 font-mono overflow-auto max-h-64">
+                      <pre className="bg-inset border border-line rounded-row p-4 text-xs text-ink-2 font-mono overflow-auto max-h-64">
                         {getConfigForDisplay()}
                       </pre>
                       <button
                         onClick={copyConfig}
                         className={clsx(
-                          'absolute top-2 right-2 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors',
+                          'absolute top-2 right-2 flex items-center gap-1.5 px-2.5 py-1.5 rounded-control text-xs transition-colors',
                           copied
-                            ? 'bg-success/20 text-success'
-                            : 'bg-surface-hover text-gray-400 hover:text-white'
+                            ? 'bg-beam-wash text-beam'
+                            : 'bg-raised text-ink-2 hover:text-ink'
                         )}
                       >
                         {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -1276,14 +1281,14 @@ export default function BackendConfig({ isAdmin }: Props) {
                   </>
                 )}
 
-                <p className="text-xs text-gray-600 mt-3">{getConfigNote()}</p>
+                <p className="text-xs text-ink-4 mt-3">{getConfigNote()}</p>
               </>
             )}
 
             <div className="flex justify-end mt-4">
               <button
                 onClick={() => setShowConnectModal(false)}
-                className="px-4 py-2 bg-surface-hover border border-border text-gray-300 text-sm rounded-lg hover:bg-surface-active transition-colors"
+                className="px-4 py-2 bg-raised border border-line text-ink-2 text-sm rounded-row hover:bg-high transition-colors"
               >
                 Done
               </button>
@@ -1292,118 +1297,6 @@ export default function BackendConfig({ isAdmin }: Props) {
         </div>
       )}
 
-      {/* Add Agent Modal */}
-      {showAgentModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-surface border border-border rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 bg-accent/10 rounded-xl flex items-center justify-center">
-                  <Laptop className="w-5 h-5 text-accent" />
-                </div>
-                <div>
-                  <h3 className="text-base font-semibold text-white">Add Agent</h3>
-                  <p className="text-xs text-gray-500 mt-0.5">Connect MCP servers from a remote machine</p>
-                </div>
-              </div>
-              <button onClick={() => setShowAgentModal(false)} className="text-gray-500 hover:text-gray-300">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {!agentKey ? (
-              <>
-                <div className="mb-4">
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Agent Name</label>
-                  <input
-                    type="text"
-                    value={agentName}
-                    onChange={e => setAgentName(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') createAgent(); }}
-                    placeholder="macbook-pro"
-                    autoFocus
-                    className="w-full px-3 py-2.5 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white focus:outline-none focus:border-accent/50 transition-colors"
-                  />
-                  <p className="text-[10px] text-gray-600 mt-1">A label to identify this machine (e.g. your laptop or a dev box).</p>
-                </div>
-
-                {agentError && (
-                  <div className="mb-4 px-3 py-2 bg-danger/10 border border-danger/20 rounded-lg">
-                    <p className="text-xs text-danger">{agentError}</p>
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2">
-                  <button
-                    onClick={() => setShowAgentModal(false)}
-                    className="px-4 py-2 bg-surface-hover border border-border text-gray-300 text-sm rounded-lg hover:bg-surface-active transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={createAgent}
-                    disabled={agentSubmitting}
-                    className="px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    {agentSubmitting ? 'Creating…' : 'Create Agent'}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="mb-4 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                  <p className="text-xs text-amber-400">Copy this key now — it won't be shown again.</p>
-                </div>
-
-                <div className="space-y-3 mb-4">
-                  <div>
-                    <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">API Key</label>
-                    <div className="relative">
-                      <input
-                        readOnly
-                        value={agentKey}
-                        className="w-full px-3 py-2 pr-16 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none"
-                      />
-                      <button
-                        onClick={async () => { await navigator.clipboard.writeText(agentKey); setAgentCopied(true); setTimeout(() => setAgentCopied(false), 2000); }}
-                        className={clsx('absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors',
-                          agentCopied ? 'bg-success/20 text-success' : 'bg-surface-hover text-gray-400 hover:text-white')}
-                      >
-                        {agentCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                        {agentCopied ? 'Copied' : 'Copy'}
-                      </button>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Gateway URL</label>
-                    <input readOnly value={getAgentWsUrl()} className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-xs text-white font-mono focus:outline-none" />
-                  </div>
-                </div>
-
-                <div className="mb-4 p-3 bg-surface-hover rounded-lg border border-border/50">
-                  <h4 className="text-xs font-medium text-white mb-2">Configure the agent on {agentName || 'your machine'}</h4>
-                  <ol className="text-xs text-gray-400 space-y-1.5 list-decimal list-inside">
-                    <li>Install the MCP Gateway Agent (see the project README).</li>
-                    <li>Run <code className="text-accent bg-accent/10 px-1 py-0.5 rounded text-[10px]">mcp-gateway-agent setup</code></li>
-                    <li>Enter the <span className="text-white">Gateway URL</span> and <span className="text-white">API Key</span> above.</li>
-                    <li>Add your local MCP backends when prompted, then start the agent.</li>
-                  </ol>
-                  <p className="text-[10px] text-gray-600 mt-2">Once connected, the agent appears here as a backend and its tools become available through the gateway.</p>
-                </div>
-
-                <div className="flex justify-end">
-                  <button
-                    onClick={() => { setShowAgentModal(false); loadBackends(); }}
-                    className="px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
-                  >
-                    Done
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
