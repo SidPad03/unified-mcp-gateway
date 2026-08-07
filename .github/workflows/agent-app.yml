@@ -115,12 +115,19 @@ jobs:
             --version "${{ steps.version.outputs.version }}" \
             --universal --dmg
 
+      # `lipo` lists slices in the order they were combined, not a fixed one.
+      # The old check grepped `-info` output for the literal string
+      # "arm64 x86_64", so a genuinely universal bundle that lipo described as
+      # "x86_64 arm64" failed the build. Ask for each architecture separately.
       - name: Verify the bundle is universal
         run: |
           BINARY="mcp-gateway-agent/build/MCP Gateway Agent.app/Contents/MacOS/MCPGatewayAgent"
-          lipo -info "$BINARY"
-          lipo -info "$BINARY" | grep -q "arm64 x86_64" \
-            || { echo "::error::the binary is not universal"; exit 1; }
+          ARCHS=$(lipo -archs "$BINARY")
+          echo "Architectures: $ARCHS"
+          for want in arm64 x86_64; do
+            grep -qw "$want" <<<"$ARCHS" \
+              || { echo "::error::the binary has no $want slice (found: $ARCHS)"; exit 1; }
+          done
 
       - name: Notarize
         if: env.APPLE_ID != '' && github.event_name == 'push'

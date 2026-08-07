@@ -209,6 +209,21 @@ jobs:
       - name: Set image name
         run: echo "IMAGE=docker.io/${DOCKERHUB_NAMESPACE}/${{ matrix.component.name }}" >> "$GITHUB_ENV"
 
+      # `runs-on: [self-hosted, homelab]` matches any runner carrying those
+      # labels, so a machine whose runner user is not in the `docker` group can
+      # take the job and then fail several steps later, inside setup-qemu, with
+      # a bare "permission denied ... /var/run/docker.sock" and no hint as to
+      # which host or what to do. Fail here instead, naming both.
+      - name: Preflight - the Docker daemon must be reachable
+        run: |
+          if ! docker info >/dev/null 2>&1; then
+            echo "::error::Runner $(hostname) cannot reach the Docker daemon. Add its runner user to the docker group and restart the runner service."
+            echo "On that host:"
+            echo "  sudo usermod -aG docker $(id -un)"
+            echo "  sudo systemctl restart 'actions.runner.*'"
+            exit 1
+          fi
+
       # Still needed, but for much less than before. The Rust build is
       # cross-compiled; what is emulated is the server runtime stage's apt-get
       # and two tarballs. The dashboard emulates nothing at all — its runtime
@@ -248,6 +263,24 @@ jobs:
       - name: Inspect manifest
         if: github.event_name == 'push'
         run: docker buildx imagetools inspect "${IMAGE}:v${{ needs.version.outputs.version }}"
+
+      # A self-hosted runner keeps whatever a job leaves behind, and a
+      # multi-arch buildx run leaves a lot: cache blobs, dangling layers, the
+      # emulator image. Left alone the fleet fills its disk and starts
+      # thrashing, which reads as a memory problem long before it reads as a
+      # disk one.
+      #
+      # Deliberately narrow, because these boxes also run the homelab's own
+      # services: `image prune` without `-a` removes only dangling layers, and
+      # nothing here can touch a tagged image, a volume, or a running container.
+      # `always()` because a failed build is when the most is left behind.
+      - name: Free the runner
+        if: always()
+        run: |
+          docker buildx prune --force --filter until=72h || true
+          docker image prune --force || true
+          echo "-- disk --";   df -h / | tail -1 || true
+          echo "-- memory --"; free -h | head -2 || true
 
   # ── Prune ─────────────────────────────────────────────────────────────
   # Keeps storage bounded: `latest` plus the newest KEEP_VERSIONS version tags
