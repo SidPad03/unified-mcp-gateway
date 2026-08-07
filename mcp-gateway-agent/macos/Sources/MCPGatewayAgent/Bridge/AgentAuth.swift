@@ -1,4 +1,4 @@
-import AuthenticationServices
+import AppKit
 import CryptoKit
 import Foundation
 
@@ -39,10 +39,17 @@ struct SignedInAccount: Codable, Sendable, Equatable {
 /// Browser sign-in against the gateway.
 ///
 /// OAuth 2.0 authorization code with PKCE, the shape RFC 8252 recommends for a
-/// native app. `ASWebAuthenticationSession` does the heavy lifting: it opens a
-/// real Safari context — so an existing dashboard login is reused and a password
-/// manager works — and it intercepts our custom-scheme redirect itself rather
-/// than making us run a loopback HTTP server.
+/// native app.
+///
+/// The page opens in the user's **default browser**, as a tab, rather than in an
+/// `ASWebAuthenticationSession`. That class is the usual answer and it does
+/// intercept the redirect for you, but it presents its own Safari-backed window
+/// on top of the app: a second browser, with its own chrome, that is not the one
+/// the user is already looking at. Handing the URL to `NSWorkspace` puts it in
+/// the window they already have open, with the session and the password manager
+/// they already use. The cost is that the redirect comes back through the
+/// registered `mcp-gateway-agent://` scheme instead, so `resume(with:)` below is
+/// wired to the app's URL handler.
 ///
 /// What comes back is an ordinary `mcpgw_` API key, which is what the tunnel has
 /// always authenticated with. The flow replaces the *human* step of creating one
@@ -52,6 +59,7 @@ final class AgentAuth: NSObject {
     enum Failure: LocalizedError {
         case badGatewayURL
         case cancelled
+        case timedOut
         case mismatchedState
         case noCode
         case server(String)
@@ -62,6 +70,8 @@ final class AgentAuth: NSObject {
                 "That does not look like a gateway address."
             case .cancelled:
                 "Sign-in was cancelled."
+            case .timedOut:
+                "Sign-in was not completed in time. Try again."
             case .mismatchedState:
                 "The sign-in response did not match this request. Try again."
             case .noCode:
@@ -75,9 +85,15 @@ final class AgentAuth: NSObject {
     static let callbackScheme = "mcp-gateway-agent"
     static let redirectURI = "mcp-gateway-agent://auth/callback"
 
-    /// Kept alive for the duration of the flow; `ASWebAuthenticationSession`
-    /// does not retain itself.
-    private var session: ASWebAuthenticationSession?
+    /// Parked while the browser has the user. Resumed by `resume(with:)` when
+    /// the redirect comes back through the app's URL handler, or failed by the
+    /// deadline below.
+    private var pending: CheckedContinuation<URL, Error>?
+
+    /// The gateway forgets a pending authorization after five minutes, so there
+    /// is nothing left to come back to past that. Without a deadline an
+    /// abandoned sign-in would leave the button spinning until the app quit.
+    private static let deadline: Duration = .seconds(300)
 
     struct Result: Sendable {
         var account: SignedInAccount
@@ -134,31 +150,41 @@ final class AgentAuth: NSObject {
     // ── Browser ─────────────────────────────────────────────────────────
 
     private func present(_ url: URL) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            let session = ASWebAuthenticationSession(
-                url: url,
-                callbackURLScheme: Self.callbackScheme
-            ) { callback, error in
-                if let callback {
-                    continuation.resume(returning: callback)
-                } else if let error = error as? ASWebAuthenticationSessionError,
-                    error.code == .canceledLogin
-                {
-                    continuation.resume(throwing: Failure.cancelled)
-                } else {
-                    continuation.resume(throwing: error ?? Failure.cancelled)
-                }
-            }
-            session.presentationContextProvider = self
-            // Deliberately *not* ephemeral: reusing an existing dashboard login
-            // is most of the point of doing this in a browser.
-            session.prefersEphemeralWebBrowserSession = false
-            self.session = session
+        // A tab in whatever browser the user actually uses, carrying whatever
+        // dashboard session and password manager they already have there.
+        guard NSWorkspace.shared.open(url) else { throw Failure.cancelled }
 
-            if !session.start() {
-                continuation.resume(throwing: Failure.cancelled)
-            }
+        // Nothing tells us the user gave up: they can close the tab, or never
+        // finish. The deadline is what stops `signingIn` spinning forever.
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(for: Self.deadline)
+            guard !Task.isCancelled else { return }
+            await self?.fail(.timedOut)
         }
+        defer { timeout.cancel() }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            // A second attempt while one is outstanding supersedes it, rather
+            // than leaking a continuation that nothing will ever resume.
+            pending?.resume(throwing: Failure.cancelled)
+            pending = continuation
+        }
+    }
+
+    /// The redirect, handed over by the app's `mcp-gateway-agent://` handler.
+    ///
+    /// Ignores anything that arrives with no sign-in outstanding, so a stale
+    /// link opened by hand cannot resume a flow that already finished.
+    func resume(with url: URL) {
+        guard let continuation = pending else { return }
+        pending = nil
+        continuation.resume(returning: url)
+    }
+
+    private func fail(_ failure: Failure) {
+        guard let continuation = pending else { return }
+        pending = nil
+        continuation.resume(throwing: failure)
     }
 
     // ── Token exchange ──────────────────────────────────────────────────
@@ -228,12 +254,6 @@ final class AgentAuth: NSObject {
 
     static func challenge(for verifier: String) -> String {
         base64URL(Data(SHA256.hash(data: Data(verifier.utf8))))
-    }
-}
-
-extension AgentAuth: ASWebAuthenticationPresentationContextProviding {
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first ?? ASPresentationAnchor()
     }
 }
 
