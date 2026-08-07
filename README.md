@@ -172,15 +172,54 @@ Requires macOS 26 or later, Apple Silicon or Intel.
 
 ### Install
 
-Download `MCP-Gateway-Agent-<version>.dmg` from the
-[latest agent release](https://github.com/SidPad03/unified-mcp-gateway/releases)
-and drag it to Applications.
+Homebrew is the easiest route, and the one that upgrades cleanly:
 
-> **First launch needs one extra step.** The app is ad-hoc signed rather than
-> notarized, so macOS will say it "cannot be opened". **Right-click the app and
-> choose Open**, then confirm — macOS remembers the choice. From a terminal:
-> `xattr -dr com.apple.quarantine "/Applications/MCP Gateway Agent.app"`.
-> Updates installed from inside the app are unaffected.
+```bash
+brew install --cask sidpad03/tap/mcp-gateway-agent
+```
+
+Later versions arrive with `brew upgrade --cask mcp-gateway-agent`.
+
+Or download `MCP-Gateway-Agent-<version>.dmg` from the
+[latest agent release](https://github.com/SidPad03/unified-mcp-gateway/releases)
+and drag it to Applications. Updating is then yours to do.
+
+### First launch: macOS blocks it once
+
+The app is ad-hoc signed rather than notarized, so Gatekeeper refuses it the
+first time and says it cannot be opened because Apple cannot check it for
+malicious software. Right-clicking and choosing Open does not get past this on
+current macOS. What does:
+
+1. Open the app, and dismiss the warning.
+2. Go to **System Settings**, then **Privacy & Security**.
+3. Scroll to the **Security** section. There is a line naming the app that was
+   just blocked, with an **Open Anyway** button beside it.
+4. Click **Open Anyway**, authenticate, and confirm **Open** in the dialog.
+
+macOS remembers, so this is once per install. In one line instead:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/MCP Gateway Agent.app"
+```
+
+Updates the app installs itself are not quarantined and skip all of this.
+
+### The keychain prompt
+
+The gateway API key is kept in your login keychain rather than in a config file,
+so the first time the app reads it macOS asks:
+
+> MCP Gateway Agent wants to use your confidential information stored in
+> "gateway-api-key" in your keychain.
+
+Type your login password and click **Always Allow**, not Allow. Allow answers
+for that single read, so you would be asked again on the next launch.
+
+Expect it once more after an update. Keychain access is granted to a code
+signature, and an ad-hoc signature differs in every build, so macOS sees each new
+version as a different application asking for the first time. Signing with a
+Developer ID certificate is what removes the prompt for good.
 
 ### Set up
 
