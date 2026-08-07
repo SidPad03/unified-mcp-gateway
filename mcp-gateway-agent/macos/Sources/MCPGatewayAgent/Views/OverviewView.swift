@@ -8,9 +8,24 @@ import SwiftUI
 /// and never waits on the network.
 struct OverviewView: View {
     @Environment(AgentModel.self) private var model
+    @Environment(\.controlActiveState) private var activeState
     @Binding var page: Page
 
     @State private var buckets: [Bucket] = []
+
+    /// Uptime is a clock, and this page had nothing driving it.
+    ///
+    /// Every other figure here is a counter that only moves when a call
+    /// arrives, so refreshing on events was enough for them. The snapshot was
+    /// refreshed at launch, at sign-in and after an action, and never in
+    /// between, which left the uptime frozen at whatever it read when the page
+    /// was built: it appeared to advance only when you navigated away and came
+    /// back, which reads as broken rather than as slow.
+    ///
+    /// A second is affordable because none of this is a network call. The core
+    /// already holds every number on this page, so a poll is one local IPC
+    /// round trip, and it stops entirely when the window loses focus.
+    private static let refreshInterval = Duration.seconds(1)
 
     var body: some View {
         ScrollView {
@@ -37,6 +52,7 @@ struct OverviewView: View {
         .scrollBounceBehavior(.basedOnSize)
         .onAppear(perform: rebuildBuckets)
         .onChange(of: model.callRevision) { _, _ in rebuildBuckets() }
+        .task { await keepCurrent() }
     }
 
     // ── Hero ────────────────────────────────────────────────────────────
@@ -196,6 +212,17 @@ struct OverviewView: View {
     /// Rebuilt when the calls change, not on every render — bucketing a thousand
     /// records ten times a second to redraw twenty-four bars is work nobody
     /// sees.
+    /// Cancelled with the view, and idle while the window is in the background:
+    /// a Mac that is not being looked at has no reason to be counting.
+    private func keepCurrent() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: Self.refreshInterval)
+            if Task.isCancelled { return }
+            guard activeState != .inactive else { continue }
+            await model.refreshSnapshot()
+        }
+    }
+
     private func rebuildBuckets() {
         let calendar = Calendar.current
         guard let start = calendar.date(byAdding: .hour, value: -23, to: Date()) else {

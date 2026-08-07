@@ -98,8 +98,39 @@ struct GatewayAPI: Sendable {
         } catch let error as URLError where error.code == .cancelled {
             // The page went away mid-request; not worth surfacing.
             throw error
+        } catch let error as DecodingError {
+            throw Failure.transport(Self.describe(error, path: path))
         } catch {
             throw Failure.transport(error.localizedDescription)
+        }
+    }
+
+    /// Foundation renders every `DecodingError` as one of two sentences, and
+    /// neither names the field, the request, or anything you could act on. "The
+    /// data couldn't be read because it is missing." is what a user saw when a
+    /// gateway a few versions behind left one number out of one response, and it
+    /// gives whoever reads it no way to tell that from a broken connection.
+    private static func describe(_ error: DecodingError, path: String) -> String {
+        func field(_ context: DecodingError.Context) -> String {
+            let steps = context.codingPath.map(\.stringValue).filter { !$0.isEmpty }
+            return steps.isEmpty ? "the response" : "'\(steps.joined(separator: "."))'"
+        }
+        let older = "This usually means the gateway is older than the app; updating it should fix it."
+
+        switch error {
+        case let .keyNotFound(key, context):
+            let container = context.codingPath.isEmpty ? "" : " in \(field(context))"
+            return "The gateway's /\(path) response has no '\(key.stringValue)'\(container). \(older)"
+        case let .valueNotFound(_, context):
+            return "The gateway sent no value for \(field(context)) in /\(path). \(older)"
+        case let .typeMismatch(type, context):
+            return "The gateway sent \(field(context)) in /\(path) as the wrong type; "
+                + "this app expects \(type). \(older)"
+        case let .dataCorrupted(context):
+            return "The gateway's /\(path) response could not be read at \(field(context)): "
+                + context.debugDescription
+        @unknown default:
+            return "The gateway's /\(path) response could not be read."
         }
     }
 
@@ -119,8 +150,23 @@ struct GatewayAPI: Sendable {
 struct AuditPage: Decodable, Sendable {
     var events: [AuditEvent]
     var total: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case events, total
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        events = try c.decodeIfPresent([AuditEvent].self, forKey: .events) ?? []
+        // A count, so an absent one is zero. It only drives the "showing n of m"
+        // line; losing the whole page over it would be a poor trade.
+        total = try c.decodeIfPresent(Int.self, forKey: .total) ?? 0
+    }
 }
 
+/// What a row cannot be drawn without stays required: without an id, a time, a
+/// tool and an outcome there is no event here to show. Everything else is
+/// context, and a row missing its trace id is still worth a line in the table.
 struct AuditEvent: Decodable, Sendable, Identifiable, Equatable {
     var eventId: String
     var timestamp: Date
@@ -135,12 +181,46 @@ struct AuditEvent: Decodable, Sendable, Identifiable, Equatable {
     var policyDecision: String?
     var application: String?
 
+    private enum CodingKeys: String, CodingKey {
+        case eventId, timestamp, traceId, userId, toolName, backendName
+        case riskCategory, durationMs, status, errorMessage, policyDecision, application
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        eventId = try c.decode(String.self, forKey: .eventId)
+        timestamp = try c.decode(Date.self, forKey: .timestamp)
+        toolName = try c.decode(String.self, forKey: .toolName)
+        status = try c.decode(String.self, forKey: .status)
+        traceId = try c.decodeIfPresent(String.self, forKey: .traceId) ?? ""
+        backendName = try c.decodeIfPresent(String.self, forKey: .backendName) ?? ""
+        userId = try c.decodeIfPresent(String.self, forKey: .userId)
+        riskCategory = try c.decodeIfPresent(String.self, forKey: .riskCategory)
+        durationMs = try c.decodeIfPresent(Double.self, forKey: .durationMs)
+        errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        policyDecision = try c.decodeIfPresent(String.self, forKey: .policyDecision)
+        application = try c.decodeIfPresent(String.self, forKey: .application)
+    }
+
     var id: String { eventId }
 
     var isError: Bool { status == "error" || status == "tool_error" }
     var isDenied: Bool { status == "denied" }
 }
 
+/// Every field here is optional on the wire, and that is deliberate.
+///
+/// These are counts and averages: a gateway that omits one, or sends null for
+/// it, is telling us zero. Declaring them required meant the opposite — one
+/// absent number failed the whole decode, the page lost its summary *and* its
+/// event list, and all the user got was "The data couldn't be read because it is
+/// missing." The most likely field to go missing is exactly the one that does so
+/// hardest to notice: `avg_duration_ms` is `AVG(duration_ms)`, which SQL returns
+/// as NULL when there is nothing to average, so a gateway build without the
+/// coalesce breaks this page precisely when there are no events to show.
+///
+/// A summary is worth showing with a hole in it. It is not worth taking the rest
+/// of the page down for.
 struct AuditStats: Decodable, Sendable {
     var totalEvents: Int
     var events24h: Int
@@ -151,6 +231,40 @@ struct AuditStats: Decodable, Sendable {
     var topTools: [ToolStat]
     var statusBreakdown: [StatusStat]
     var hourlyVolume: [HourlyStat]
+
+    private enum CodingKeys: String, CodingKey {
+        // `events24H`, with the capital H, is not a typo and is the whole reason
+        // this page failed.
+        //
+        // `.convertFromSnakeCase` splits on underscores and capitalises each
+        // following component, and `24h` capitalises to `24H` — the digits are
+        // skipped and the first *letter* is raised. So the gateway's
+        // `events_24h` arrives as `events24H`, the synthesised key for a
+        // property named `events24h` did not match it, and the decode failed
+        // with `keyNotFound`. Foundation renders that as "The data couldn't be
+        // read because it is missing.", which is what the Audit page showed
+        // instead of a summary — against every gateway, healthy or not, since
+        // this was written.
+        //
+        // Spelled out rather than left to the strategy, because the strategy is
+        // the thing that got it wrong.
+        case events24h = "events24H"
+        case totalEvents, successCount, errorCount, deniedCount
+        case avgDurationMs, topTools, statusBreakdown, hourlyVolume
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        totalEvents = try c.decodeIfPresent(Int.self, forKey: .totalEvents) ?? 0
+        events24h = try c.decodeIfPresent(Int.self, forKey: .events24h) ?? 0
+        successCount = try c.decodeIfPresent(Int.self, forKey: .successCount) ?? 0
+        errorCount = try c.decodeIfPresent(Int.self, forKey: .errorCount) ?? 0
+        deniedCount = try c.decodeIfPresent(Int.self, forKey: .deniedCount) ?? 0
+        avgDurationMs = try c.decodeIfPresent(Double.self, forKey: .avgDurationMs) ?? 0
+        topTools = try c.decodeIfPresent([ToolStat].self, forKey: .topTools) ?? []
+        statusBreakdown = try c.decodeIfPresent([StatusStat].self, forKey: .statusBreakdown) ?? []
+        hourlyVolume = try c.decodeIfPresent([HourlyStat].self, forKey: .hourlyVolume) ?? []
+    }
 
     struct ToolStat: Decodable, Sendable, Identifiable, Equatable {
         var toolName: String
