@@ -36,7 +36,15 @@ function readCache(): Entry | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Entry;
     // A cache written by an older build may not have the shape we expect.
-    return parsed && parsed.status && typeof parsed.checkedAt === 'number' ? parsed : null;
+    if (!parsed || !parsed.status || typeof parsed.checkedAt !== 'number') return null;
+    // An answer is only about the version it was computed against. Deploying a
+    // new image reloads the page as a new build, and the old answer is then
+    // about a question nobody is asking: it would go on reporting the update
+    // you just installed as still available until the six-hour age limit ran
+    // out, which is why only the Check button appeared to fix it. Age is the
+    // second test, not the first.
+    if (parsed.status.current_version !== __APP_VERSION__) return null;
+    return parsed;
   } catch {
     return null;
   }

@@ -88,9 +88,15 @@ final class AgentModel {
         }
 
         account = SignedInAccount.load()
-        await migrateLegacyKeyIfNeeded()
 
-        if let key = Keychain.read(), !key.isEmpty {
+        // One read, not two. On an ad-hoc signed build every read of this item
+        // can raise "MCP Gateway Agent wants to use your confidential
+        // information", and reading once here and again inside the migration
+        // check asked twice on every single launch.
+        var key = Keychain.read()
+        if key == nil { key = await migrateLegacyKeyIfNeeded() }
+
+        if let key, !key.isEmpty {
             apiKey = key
             try? await bridge.send(.setApiKey(key))
         }
@@ -102,21 +108,30 @@ final class AgentModel {
     /// Move a plaintext key out of a `config.toml` written by the old terminal
     /// agent, then rewrite the file without it.
     ///
-    /// Only ever runs when the Keychain has nothing — an existing item always
-    /// wins, so this cannot clobber a key the user signed in for.
-    private func migrateLegacyKeyIfNeeded() async {
-        guard Keychain.read() == nil else { return }
+    /// Only ever called when the Keychain has nothing — an existing item always
+    /// wins, so this cannot clobber a key the user signed in for. The caller
+    /// does that check, so this does not re-read the Keychain itself.
+    ///
+    /// Returns the migrated key, or nil if there was nothing to migrate.
+    private func migrateLegacyKeyIfNeeded() async -> String? {
         guard let legacy = try? await bridge.send(.takeLegacyApiKey, as: LegacyKey.self),
             let key = legacy.key, !key.isEmpty
-        else { return }
+        else { return nil }
 
         do {
             try Keychain.write(key)
-            apiKey = key
-            try await bridge.send(.setApiKey(key))
+            return key
         } catch {
             lastError = "Could not move the existing API key into the Keychain: \(error.localizedDescription)"
+            return nil
         }
+    }
+
+    /// The `mcp-gateway-agent://auth/callback` redirect, from the app's URL
+    /// handler. Sign-in waits on this now that the page opens in the user's own
+    /// browser rather than in a window this app presents.
+    func handleCallbackURL(_ url: URL) {
+        auth.resume(with: url)
     }
 
     func shutdown() {
@@ -214,6 +229,16 @@ final class AgentModel {
             )
             try await bridge.send(.setApiKey(result.apiKey))
             await refreshSnapshot()
+
+            // Come back to the front. The browser took focus to run the sign-in
+            // and does not hand it back, and the activation policy is synced
+            // from window visibility — so with no window key, the app can be
+            // left in `.accessory` with its Dock icon gone, which is
+            // indistinguishable from having quit. Ask for both explicitly
+            // rather than hoping the window notifications land in a useful
+            // order.
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
         } catch AgentAuth.Failure.cancelled {
             // Closing the sign-in window is not an error worth a banner.
         } catch {

@@ -194,8 +194,13 @@ async fn metrics_summary(
             .collect(),
         hourly_volume: hourly_volume
             .into_iter()
+            // RFC 3339, the same as `/audit/stats` sends. A bare "%H:%M" is not
+            // a date: `new Date("05:00")` is Invalid Date, so the chart's axis
+            // read "Invalid Date" and its tooltip fell back to the em dash.
+            // The client needs the full instant anyway, to render the hour in
+            // the reader's own timezone rather than the server's.
             .map(|(hour, count)| HourlyVolume {
-                hour: hour.format("%H:%M").to_string(),
+                hour: hour.to_rfc3339(),
                 count,
             })
             .collect(),

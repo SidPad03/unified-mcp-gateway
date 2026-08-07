@@ -94,6 +94,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
 
+        // The sign-in redirect comes back as `mcp-gateway-agent://auth/callback`
+        // now that the page opens in the user's own browser. Registered here
+        // rather than as SwiftUI's `.onOpenURL` because that is attached to a
+        // view, and this app runs perfectly well with its window closed: the
+        // redirect has to be received whether anything is on screen or not.
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURL(event:reply:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+
         // Started at login: come up in the menu bar with no window and no focus
         // steal. Someone who set "start at login" wants their backends
         // connected after a reboot, not an app window in front of whatever they
@@ -117,6 +129,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Menu-bar apps do not quit when their last window closes.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    @objc private func handleGetURL(event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+            let url = URL(string: string)
+        else { return }
+        model?.handleCallbackURL(url)
     }
 
     /// Reopening from the Dock or Spotlight brings the window back.

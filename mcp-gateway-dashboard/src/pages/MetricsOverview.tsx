@@ -152,7 +152,12 @@ export default function MetricsOverview() {
                   {fmt.count(metrics.calls_last_24h)}
                 </div>
                 <div className="text-2xs text-ink-4 mt-1.5 tabular-nums">
-                  {fmt.count(metrics.total_tool_calls)} since the gateway started
+                  {/* `total_tool_calls` counts rows in audit_events, so it is
+                      everything the trail currently holds: it outlives restarts
+                      and redeploys, and Clear resets it. It was labelled "since
+                      the gateway started", which claims a process lifetime for a
+                      number that has none. */}
+                  {fmt.count(metrics.total_tool_calls)} in the audit trail
                 </div>
               </div>
               <div className="flex items-end gap-7 flex-wrap">
