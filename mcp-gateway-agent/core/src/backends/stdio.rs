@@ -277,14 +277,29 @@ mod tests {
     #[tokio::test]
     async fn a_backend_that_exits_reports_eof_not_a_hang() {
         let mut spawned = spawn(&echo_server("exit 3")).unwrap();
+
+        // Reap the child before asking it anything. Without this the test races
+        // the kernel: `stdin` is a `BufWriter`, so a request this small never
+        // reaches a syscall in `write_all` — it is the *flush* that touches the
+        // pipe. If the exit has not been observed yet the flush succeeds into a
+        // pipe nobody will read and the failure arrives later as EOF; if it has,
+        // the flush takes EPIPE. Both are correct, and which one you get is not
+        // this test's business — but an assertion listing error spellings
+        // silently depended on it, passed on macOS, and flaked on the Linux
+        // runner.
+        let _ = spawned.child.wait().await;
+
         let err = spawned
             .session
             .request("initialize", serde_json::json!({}), Duration::from_secs(5))
             .await
             .unwrap_err();
+
+        // The contract is in the name: fail promptly rather than leaving the
+        // request outstanding until the timeout. Assert that, not the wording.
         assert!(
-            err.contains("EOF") || err.contains("Write") || err.contains("Read"),
-            "{err}"
+            !err.contains("Timed out"),
+            "a backend that exits must fail fast, not hang: {err}"
         );
     }
 
