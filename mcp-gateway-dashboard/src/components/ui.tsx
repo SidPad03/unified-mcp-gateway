@@ -601,7 +601,10 @@ export function PasswordInput({
       <input
         {...rest}
         type={shown ? 'text' : 'password'}
-        className={clsx(FIELD, 'h-9 pl-2.5 pr-9 text-xs', className)}
+        // `w-full` like Input and Textarea. Without it the input keeps its
+        // intrinsic size attribute, so on the sign-in form the password box came
+        // out narrower than the username box above it.
+        className={clsx(FIELD, 'w-full h-9 pl-2.5 pr-9 text-xs', className)}
       />
       <button
         type="button"

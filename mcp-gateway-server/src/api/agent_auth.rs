@@ -436,68 +436,104 @@ fn approval_html(request_id: &str, agent_id: &str) -> String {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Authorize MCP Gateway Agent</title>
 <style>
-  :root {{ color-scheme: dark; }}
+  /* The dashboard's tokens, inlined. This page can fetch no stylesheet and no
+     font - its own CSP forbids it, and the gateway is meant to run air-gapped -
+     so the values are duplicated rather than shared. Keep them in step with
+     mcp-gateway-dashboard/src/index.css. */
+  :root {{
+    color-scheme: dark;
+    --void: #06080B; --panel: #0B0E14; --inset: #04060A;
+    --line: rgba(148,173,214,.10);
+    --text: #E4E9F2; --text-3: #6B7A93;
+    --beam: #3FD69B; --beam-wash: rgba(63,214,155,.10); --beam-edge: rgba(63,214,155,.30);
+    --deny: #F25F6B;
+    --solid: #E4E9F2; --on-solid: #06080B;
+  }}
   * {{ box-sizing: border-box; }}
   body {{
-    margin: 0; min-height: 100vh; display: grid; place-items: center;
-    background: #0a0a0f; color: #e5e7eb;
-    font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+    background: var(--void); color: var(--text);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   }}
   .card {{
-    width: min(420px, calc(100vw - 32px));
-    background: #0f0f17; border: 1px solid #1e1e2e; border-radius: 16px;
-    padding: 28px;
+    width: min(352px, 100%);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px;
   }}
+  .head {{
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center; margin-bottom: 22px;
+  }}
+  /* The mark on a lit tile: the same lockup the dashboard's own sign-in page
+     uses, so this does not read as a different product mid-sign-in. */
   .mark {{
-    width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
-    background: rgba(124, 92, 252, .16); margin-bottom: 18px;
+    width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center;
+    background: var(--beam-wash); border: 1px solid var(--beam-edge);
+    color: var(--beam); margin-bottom: 16px;
   }}
-  h1 {{ font-size: 17px; margin: 0 0 6px; letter-spacing: -.01em; }}
-  p.sub {{ margin: 0 0 22px; color: #9ca3af; font-size: 13px; }}
+  h1 {{ font-size: 18px; font-weight: 600; margin: 0 0 6px; letter-spacing: -.01em; }}
+  p.sub {{ margin: 0; color: var(--text-3); font-size: 12px; max-width: 42ch; }}
   .agent {{
-    display: flex; align-items: center; gap: 10px; margin-bottom: 22px;
-    padding: 12px 14px; border: 1px solid #1e1e2e; border-radius: 10px; background: #0c0c14;
+    margin-bottom: 18px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--inset);
   }}
-  .agent b {{ font-weight: 600; font-size: 13px; }}
-  .agent span {{ color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: .12em; }}
-  label {{ display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .12em;
-           color: #9ca3af; margin: 0 0 6px; }}
+  /* Every identifier in this product is set in mono. */
+  .agent b {{
+    font-weight: 500; font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }}
+  label, .agent span {{
+    display: block; font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .16em; color: var(--text-3);
+  }}
+  label {{ margin: 0 0 6px; }}
+  /* Fields are painted darker than the surface they sit on, in both themes. */
   input {{
-    width: 100%; padding: 10px 12px; margin-bottom: 14px; font-size: 14px;
-    color: #e5e7eb; background: #0c0c14; border: 1px solid #1e1e2e; border-radius: 10px;
+    width: 100%; height: 36px; padding: 0 10px; margin-bottom: 14px; font-size: 12px;
+    color: var(--text); background: var(--inset);
+    border: 1px solid var(--line); border-radius: 6px;
   }}
-  input:focus {{ outline: none; border-color: #7c5cfc; box-shadow: 0 0 0 3px rgba(124,92,252,.18); }}
+  input:focus {{
+    outline: none; border-color: var(--beam-edge); box-shadow: 0 0 0 3px var(--beam-wash);
+  }}
+  /* Near-white, never the accent. Green means "alive" in this product rather
+     than "clickable", and a primary action that takes it costs it that job. */
   button {{
-    width: 100%; padding: 11px 14px; font-size: 14px; font-weight: 600; cursor: pointer;
-    color: #fff; background: #7c5cfc; border: 0; border-radius: 10px;
+    width: 100%; height: 36px; font-size: 13px; font-weight: 600; cursor: pointer;
+    color: var(--on-solid); background: var(--solid); border: 0; border-radius: 6px;
+    transition: opacity .15s;
   }}
-  button:hover:not(:disabled) {{ background: #6a4de0; }}
-  button:disabled {{ opacity: .55; cursor: default; }}
-  .msg {{ margin-top: 14px; font-size: 13px; min-height: 19px; }}
-  .msg.error {{ color: #ef4444; }}
-  .msg.ok {{ color: #22c55e; }}
+  button:hover:not(:disabled) {{ opacity: .9; }}
+  button:disabled {{ opacity: .45; cursor: default; }}
+  .msg {{ margin-top: 12px; font-size: 12px; min-height: 18px; color: var(--text-3); }}
+  .msg.error {{ color: var(--deny); }}
+  .msg.ok {{ color: var(--beam); }}
   .done {{ text-align: center; }}
-  .done svg {{ margin-bottom: 14px; }}
 </style>
 </head>
 <body>
   <main class="card" id="card">
-    <div class="mark" aria-hidden="true">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#7c5cfc"
-           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 5l5.5 5.5M3 12h5.5M3 19l5.5-5.5"/>
-        <path d="M12 8l4 4-4 4-4-4z"/>
-        <path d="M16 12h5"/>
-      </svg>
+    <div class="head">
+      <div class="mark" aria-hidden="true">
+        <!-- The shared mark, path for path from brand/mcp-gateway-mark.svg.
+             The glyph here used to be an unrelated placeholder in a violet that
+             appears nowhere else in the product. -->
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 6.5H5L9 12"/>
+          <path d="M2 12H9"/>
+          <path d="M2 17.5H5L9 12"/>
+          <path d="M9 12L13 8L17 12L13 16Z"/>
+          <path d="M17 12H22"/>
+        </svg>
+      </div>
+      <h1>Authorize MCP Gateway Agent</h1>
+      <p class="sub">Sign in to let this Mac connect its local MCP servers to the gateway.</p>
     </div>
-    <h1>Authorize MCP Gateway Agent</h1>
-    <p class="sub">Sign in to let this Mac connect its local MCP servers to the gateway.</p>
 
     <div class="agent">
-      <div>
-        <span>Machine</span>
-        <div><b>{agent}</b></div>
-      </div>
+      <span>Machine</span>
+      <div><b>{agent}</b></div>
     </div>
 
     <form id="form" autocomplete="on">

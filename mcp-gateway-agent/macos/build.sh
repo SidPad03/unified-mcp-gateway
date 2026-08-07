@@ -120,9 +120,14 @@ make_icons() {
 
   local work
   work="$(mktemp -d)"
-  # qlmanage ships with macOS and rasterises SVG; no extra dependency.
-  qlmanage -t -s 1024 -o "$work" "$source_svg" >/dev/null 2>&1 || true
-  local png="$work/$(basename "$source_svg").png"
+  # `sips -s format png`, not `qlmanage -t`. qlmanage renders a Quick Look
+  # *thumbnail*: it composites the artwork onto an opaque background and frames
+  # it, so the result is 100% opaque with a #DDD edge. That put a white border
+  # around the Dock icon, and made the menu-bar icon a solid white square, since
+  # a template image is drawn from its alpha channel alone. sips rasterises the
+  # vector at the size asked for and keeps the transparency.
+  local png="$work/icon.png"
+  sips -s format png -Z 1024 "$source_svg" --out "$png" >/dev/null 2>&1 || true
   [[ -f "$png" ]] || { say "Could not rasterise the icon; skipping"; rm -rf "$work"; return; }
 
   local iconset="$work/AppIcon.iconset"
@@ -139,12 +144,11 @@ make_icons() {
   # when the menu is open.
   local tray_svg="$REPO_ROOT/brand/agent-tray-Template.svg"
   if [[ -f "$tray_svg" ]]; then
-    qlmanage -t -s 44 -o "$work" "$tray_svg" >/dev/null 2>&1 || true
-    local tray_png="$work/$(basename "$tray_svg").png"
-    if [[ -f "$tray_png" ]]; then
-      sips -z 22 22 "$tray_png" --out "$out/agent-tray-Template.png" >/dev/null
-      sips -z 44 44 "$tray_png" --out "$out/agent-tray-Template@2x.png" >/dev/null
-    fi
+    # Rasterised at each size from the vector rather than scaled from one
+    # bitmap, and again via sips so the alpha survives — this one is a template
+    # image, so its alpha channel is the whole icon.
+    sips -s format png -Z 22 "$tray_svg" --out "$out/agent-tray-Template.png" >/dev/null 2>&1 || true
+    sips -s format png -Z 44 "$tray_svg" --out "$out/agent-tray-Template@2x.png" >/dev/null 2>&1 || true
   fi
   rm -rf "$work"
 }

@@ -113,8 +113,12 @@ async fn metrics_summary(
         "SELECT COUNT(*) FROM audit_events WHERE status IN ('error', 'tool_error') AND timestamp > NOW() - INTERVAL '24 hours'"
     ).fetch_one(&state.db).await?;
 
+    // A fraction in 0.0..=1.0, not a percentage. Both callers treat it as one:
+    // the dashboard renders it through `fmt.percent`, which multiplies by 100,
+    // and tones it against 0.01 / 0.05 thresholds. Returning 70.0 for a 70%
+    // error rate therefore drew "7000%" and painted every non-zero rate red.
     let error_rate = if calls_last_24h > 0 {
-        error_count as f64 / calls_last_24h as f64 * 100.0
+        error_count as f64 / calls_last_24h as f64
     } else {
         0.0
     };
