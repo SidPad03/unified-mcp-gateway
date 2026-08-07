@@ -293,8 +293,16 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             APP_VERSION=${{ needs.version.outputs.version }}
+          # Read the cache everywhere, write it only from main.
+          #
+          # `mode=max` exports every intermediate layer, and on a self-hosted
+          # runner that upload crosses the building's own connection instead of
+          # hopping inside Azure. Measured here: the server build spent 215s of
+          # its 507s exporting cache, 42% of the job, to produce an entry the
+          # next push to main overwrites anyway. Pull requests still read the
+          # cache, so they keep the speed-up without paying to refill it.
           cache-from: type=gha,scope=${{ matrix.component.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}
+          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=gha,mode=max,scope={0}', matrix.component.name) || '' }}
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: |
             ${{ env.IMAGE }}:latest
