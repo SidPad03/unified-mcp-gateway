@@ -9,18 +9,47 @@ name: Agent app
 # compile, the bundle, and the release artifacts.
 #
 # The repository is public, so GitHub-hosted runners are unmetered.
+# Called by ci.yml rather than triggered on its own.
+#
+# It used to run independently on any change under `mcp-gateway-agent/**`, which
+# is what let the two release lines come apart: when CI failed, this carried on
+# publishing, and gateway-v1.0.3 sat next to agent-v1.0.5. Nothing could gate one
+# on the other because they were separate workflow runs with no edge between
+# them. As a called workflow it is a node in ci.yml's graph, so the images can
+# depend on it and the version is handed in rather than counted here.
+#
+# It builds and signs; it does not publish. Cutting the release here would only
+# move the race rather than remove it — the app would ship the moment it built,
+# and an image build that failed afterwards would still leave the two lines
+# apart. ci.yml collects the artifacts below and releases both components
+# together, once everything has been built.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'mcp-gateway-agent/**'
-      - '.github/workflows/agent-app.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'mcp-gateway-agent/**'
-      - '.github/workflows/agent-app.yml'
+  workflow_call:
+    inputs:
+      version:
+        description: The version to build, decided once by the caller.
+        required: true
+        type: string
+      release:
+        description: >-
+          Whether this build is headed for a release, which is what decides
+          if it is worth notarizing. Publishing itself happens in ci.yml.
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      version:
+        description: The version that was built.
+        value: ${{ jobs.build.outputs.version }}
+      archive:
+        description: Filename of the update archive inside the artifact.
+        value: ${{ jobs.build.outputs.archive }}
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build by hand. Nothing is published.
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -35,10 +64,12 @@ jobs:
     # Liquid Glass needs the macOS 26 SDK, which means Xcode 26, which means a
     # macos-26 image. macos-14 cannot build this app.
     runs-on: macos-26
+    # Read-only: this job hands its output to ci.yml, which does the writing.
     permissions:
-      contents: write
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      archive: ${{ steps.archive.outputs.archive }}
     # Hoisted to the job so the `if:` conditions below can see them. A step-level
     # `env:` is not in scope for that step's own `if:`, which is a quiet way to
     # write a gate that never fires.
@@ -46,7 +77,6 @@ jobs:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       SIGNING_KEY: ${{ secrets.MCPGA_UPDATE_PRIVATE_KEY }}
-      TAP_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,30 +90,16 @@ jobs:
           workspaces: mcp-gateway-agent -> target
 
       # ── Version ────────────────────────────────────────────────────────
-      # Counted from the existing agent-v* releases, the same scheme the
-      # gateway uses. With every old release deleted, the first build of the app
-      # is agent-v1.0.0.
-      - name: Compute version
+      # Handed in, not counted. Two workflows each counting releases for
+      # themselves is what let the lines drift: both read the tag list at
+      # slightly different moments, and a failure in one left the other's
+      # number describing a build that shipped alone. ci.yml now counts once,
+      # across both lines, and every artifact in the run carries that number.
+      - name: Resolve version
         id: version
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
         run: |
-          BASE=$(grep '^version' mcp-gateway-agent/ffi/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          MAJOR_MINOR=$(echo "$BASE" | cut -d. -f1-2)
-
-          # One counter across both release lines, matching ci.yml. Counting only
-          # `agent-v*` here, and only `gateway-v*` there, is what let the two
-          # drift: a failed pipeline stopped one line while the other carried on,
-          # so the same number stopped describing the same build of the same
-          # product.
-          EXISTING=$(gh release list --limit 100 --json tagName -q '.[].tagName' \
-            | grep -E "^(agent|gateway)-v${MAJOR_MINOR}\." \
-            | sed -E "s/^(agent|gateway)-v${MAJOR_MINOR}\.//" \
-            | sort -n | tail -1 || true)
-
-          if [ -z "$EXISTING" ]; then PATCH=0; else PATCH=$((EXISTING + 1)); fi
-
-          VERSION="${MAJOR_MINOR}.${PATCH}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Agent version: ${VERSION}"
 
@@ -136,7 +152,7 @@ jobs:
           done
 
       - name: Notarize
-        if: env.APPLE_ID != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: env.APPLE_ID != '' && inputs.release
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -179,139 +195,24 @@ jobs:
             echo "signature=$(cat signature.txt)" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::MCPGA_UPDATE_PRIVATE_KEY is not set — this release cannot be auto-installed"
+            : > signature.txt
             echo "signature=" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── Release ────────────────────────────────────────────────────────
-      - name: Create the release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          cd mcp-gateway-agent/build
-          TAG="agent-v${VERSION}"
-
-          cat > notes.md <<EOF
-          MCP Gateway Agent v${VERSION} — universal (Apple Silicon and Intel), macOS 26 or later.
-
-          ## Installing
-
-          The app is ad-hoc signed rather than notarized, so the first launch needs one extra step:
-          **right-click the app and choose Open**, then confirm. macOS remembers the choice.
-          (Or run \`xattr -dr com.apple.quarantine "/Applications/MCP Gateway Agent.app"\`.)
-
-          Updates after that install themselves — the quarantine flag is not applied to them.
-
-          ## Setting it up
-
-          Open the app, enter your gateway address, and sign in through the browser.
-          There is no API key to create or paste.
-          EOF
-
-          gh release create "$TAG" \
-            --title "Agent v${VERSION}" \
-            --notes-file notes.md \
-            --target main \
-            "MCP-Gateway-Agent-${VERSION}.dmg" \
-            "${{ steps.archive.outputs.archive }}"
-
-      # ── Update manifest ────────────────────────────────────────────────
-      # Deliberately NOT releases/latest/download/…: this repository interleaves
-      # gateway-v* and agent-v* tags, so "latest release" is regularly a gateway
-      # release with no app in it, and the updater would 404. `agent-latest` is a
-      # permanent, non-"latest" release whose only asset is this manifest.
-      - name: Publish the update manifest
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
-          REPO: ${{ github.repository }}
-        run: |
-          cd mcp-gateway-agent/build
-          ARCHIVE="${{ steps.archive.outputs.archive }}"
-
-          jq -n \
-            --arg version "$VERSION" \
-            --arg url "https://github.com/${REPO}/releases/download/agent-v${VERSION}/${ARCHIVE}" \
-            --arg signature "${{ steps.archive.outputs.signature }}" \
-            --arg pubDate "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg notes "MCP Gateway Agent v${VERSION}" \
-            '{version: $version, url: $url, signature: $signature, pub_date: $pubDate, notes: $notes}' \
-            > appcast.json
-
-          gh release view agent-latest >/dev/null 2>&1 || \
-            gh release create agent-latest \
-              --title "Agent update manifest" \
-              --notes "Machine-readable pointer to the newest agent release. Not a release itself." \
-              --target main
-
-          gh release upload agent-latest appcast.json --clobber
-
-      # ── Homebrew tap ───────────────────────────────────────────────────
-      # Point the cask at the release that just published.
+      # ── Hand off ───────────────────────────────────────────────────────
+      # Everything the release needs travels as one artifact: the installer, the
+      # update archive, and the detached signature over it. ci.yml picks this up
+      # after the images are built and publishes the two components together.
       #
-      # Without this the tap goes stale the instant a version ships, and since
-      # the cask is what brew installs, `brew install` keeps handing out the
-      # previous build until somebody remembers to bump it by hand. That has
-      # already happened for three releases running.
-      #
-      # It needs a credential that can write to the *tap* repository, because the
-      # automatic GITHUB_TOKEN is scoped to this one. That credential is an SSH
-      # deploy key on SidPad03/homebrew-tap, with its private half stored here as
-      # HOMEBREW_TAP_SSH_KEY. A deploy key rather than a personal access token
-      # deliberately: it reaches exactly one repository, so the blast radius if
-      # this secret ever leaks is the tap and nothing else.
-      #
-      # Skipped when the secret is absent, so a fork still builds and releases.
-      - name: Update the Homebrew cask
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.TAP_KEY != ''
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          DMG="mcp-gateway-agent/build/MCP-Gateway-Agent-${VERSION}.dmg"
-          SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
-
-          # ssh will not read a key from stdin, so it goes to a file with tight
-          # permissions and is removed however this step exits.
-          KEYFILE="$(mktemp)"
-          trap 'rm -f "$KEYFILE"' EXIT
-          printf '%s\n' "$TAP_KEY" > "$KEYFILE"
-          chmod 600 "$KEYFILE"
-          export GIT_SSH_COMMAND="ssh -i $KEYFILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
-
-          git clone --depth 1 git@github.com:SidPad03/homebrew-tap.git tap
-          cd tap
-          CASK="Casks/mcp-gateway-agent.rb"
-
-          # Anchored to the start of the line so a version-shaped string
-          # anywhere else in the file, a comment or the livecheck regex, cannot
-          # be rewritten by accident.
-          sed -i '' -E "s|^  version \".*\"|  version \"${VERSION}\"|" "$CASK"
-          sed -i '' -E "s|^  sha256 \".*\"|  sha256 \"${SHA}\"|" "$CASK"
-
-          # A sed that matches nothing exits 0, so confirm rather than assume.
-          grep -q "^  version \"${VERSION}\"$" "$CASK" || {
-            echo "::error::the cask version was not rewritten"; exit 1; }
-          grep -q "^  sha256 \"${SHA}\"$" "$CASK" || {
-            echo "::error::the cask sha256 was not rewritten"; exit 1; }
-
-          if git diff --quiet; then
-            echo "cask already points at ${VERSION}"
-            exit 0
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -qam "mcp-gateway-agent ${VERSION}"
-          git push -q
-          echo "cask bumped to ${VERSION}"
-
+      # Uploaded on every run, not just releases. On a pull request it is the
+      # only way to get the built app off the runner and try it.
       - name: Upload the build
-        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: MCP-Gateway-Agent-${{ steps.version.outputs.version }}
-          path: mcp-gateway-agent/build/*.dmg
+          name: agent-app
+          path: |
+            mcp-gateway-agent/build/*.dmg
+            mcp-gateway-agent/build/*.app.tar.gz
+            mcp-gateway-agent/build/signature.txt
+          if-no-files-found: error
           retention-days: 7

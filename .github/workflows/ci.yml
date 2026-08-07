@@ -172,9 +172,15 @@ jobs:
   #
   # `always()` because a required check that is *skipped* when a dependency
   # fails leaves the pull request pending forever rather than going red.
+  # The one required status check, so it has to speak for every part of the
+  # product. The agent joined this list when it stopped being a workflow of its
+  # own: it used to report its own check on a pull request, and dropping it in
+  # here without saying so would have quietly stopped the macOS build from
+  # blocking a merge. `always()` plus an explicit comparison, rather than the
+  # default "succeeded or skipped", so a job that never ran counts as a failure.
   test:
     name: test
-    needs: [rust, dashboard]
+    needs: [rust, dashboard, agent]
     if: always()
     runs-on: [self-hosted, homelab]
     permissions: {}
@@ -183,8 +189,10 @@ jobs:
         run: |
           echo "rust:      ${{ needs.rust.result }}"
           echo "dashboard: ${{ needs.dashboard.result }}"
+          echo "agent:     ${{ needs.agent.result }}"
           [ "${{ needs.rust.result }}" = success ] || exit 1
           [ "${{ needs.dashboard.result }}" = success ] || exit 1
+          [ "${{ needs.agent.result }}" = success ] || exit 1
 
   # ── Version ───────────────────────────────────────────────────────────
   # Computed once and shared, so images, manifest tags, and the GitHub release
@@ -243,6 +251,26 @@ jobs:
             core.setOutput('version', version);
             core.info(`Gateway version: ${version}`);
 
+  # ── Agent app ─────────────────────────────────────────────────────────
+  # The macOS app. It needs the macOS 26 SDK, so it is the one thing here that
+  # builds on GitHub's runners rather than the homelab fleet.
+  #
+  # It is a node in this graph rather than a workflow of its own, which is what
+  # lets the images below wait for it. While it triggered itself it kept
+  # publishing straight through failures here: a run where the Rust job could
+  # not find a C linker still shipped an app, which is how gateway-v1.0.3 came
+  # to sit beside agent-v1.0.5. It now builds and signs only, and both
+  # components are released together at the end of the run.
+  agent:
+    needs: [rust, dashboard, version]
+    uses: ./.github/workflows/agent-app.yml
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      version: ${{ needs.version.outputs.version }}
+      release: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
   # ── Build ─────────────────────────────────────────────────────────────
   # One build per component, producing both architectures and pushing a single
   # multi-arch manifest. There is no separate merge step any more: the images
@@ -252,8 +280,12 @@ jobs:
   #
   # Pull requests build but do not push, so a broken cross-build is caught
   # before it reaches main.
+  #
+  # Waits on `agent` as well as the tests: an image pushed while the app build
+  # was still running, or had already failed, is a published version of half the
+  # product. Nothing leaves this run until everything in it has been built.
   build:
-    needs: [rust, dashboard, version]
+    needs: [rust, dashboard, version, agent]
     runs-on: [self-hosted, homelab]
     permissions:
       contents: read
@@ -471,3 +503,191 @@ jobs:
               body: fs.readFileSync('notes.md', 'utf8'),
               target_commitish: 'main',
             });
+
+  # The agent's half of the release, cut from the artifact the `agent` job
+  # built. Deliberately a sibling of release-gateway on the same `needs`, so
+  # the two release lines can only ever move together: either the whole run is
+  # green and both publish at the same version, or neither does and both stay
+  # parked at the last number they shared.
+  release-agent:
+    runs-on: [self-hosted, homelab]
+    needs: [version, agent, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    env:
+      TAP_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCHIVE: ${{ needs.agent.outputs.archive }}
+    steps:
+      - name: Download the app
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-app
+          path: dist
+
+      - name: Create the release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const version = process.env.VERSION;
+            const { owner, repo } = context.repo;
+
+            const body = [
+              `MCP Gateway Agent v${version} — universal (Apple Silicon and Intel), macOS 26 or later.`,
+              ``,
+              `## Installing`,
+              ``,
+              `The app is ad-hoc signed rather than notarized, so the first launch needs one extra step:`,
+              `**right-click the app and choose Open**, then confirm. macOS remembers the choice.`,
+              '(Or run `xattr -dr com.apple.quarantine "/Applications/MCP Gateway Agent.app"`.)',
+              ``,
+              `Updates after that install themselves — the quarantine flag is not applied to them.`,
+              ``,
+              `## Setting it up`,
+              ``,
+              `Open the app, enter your gateway address, and sign in through the browser.`,
+              `There is no API key to create or paste.`,
+            ].join('\n');
+
+            const release = await github.rest.repos.createRelease({
+              owner, repo,
+              tag_name: `agent-v${version}`,
+              name: `Agent v${version}`,
+              body,
+              target_commitish: 'main',
+            });
+
+            for (const name of [`MCP-Gateway-Agent-${version}.dmg`, process.env.ARCHIVE]) {
+              const file = path.join('dist', name);
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo,
+                release_id: release.data.id,
+                name,
+                data: fs.readFileSync(file),
+                headers: {
+                  'content-type': 'application/octet-stream',
+                  'content-length': fs.statSync(file).size,
+                },
+              });
+            }
+
+      # Deliberately NOT releases/latest/download/…: this repository interleaves
+      # gateway-v* and agent-v* tags, so "latest release" is regularly a gateway
+      # release with no app in it, and the updater would 404. `agent-latest` is a
+      # permanent, non-"latest" release whose only asset is this manifest.
+      - name: Publish the update manifest
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const version = process.env.VERSION;
+            const archive = process.env.ARCHIVE;
+            const { owner, repo } = context.repo;
+
+            const manifest = {
+              version,
+              url: `https://github.com/${owner}/${repo}/releases/download/agent-v${version}/${archive}`,
+              signature: fs.readFileSync('dist/signature.txt', 'utf8').trim(),
+              pub_date: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+              notes: `MCP Gateway Agent v${version}`,
+            };
+            if (!manifest.signature) {
+              core.warning('this release is unsigned, so the app will decline to install it');
+            }
+
+            let pointer;
+            try {
+              pointer = (await github.rest.repos.getReleaseByTag({
+                owner, repo, tag: 'agent-latest',
+              })).data;
+            } catch (e) {
+              if (e.status !== 404) throw e;
+              pointer = (await github.rest.repos.createRelease({
+                owner, repo,
+                tag_name: 'agent-latest',
+                name: 'Agent update manifest',
+                body: 'Machine-readable pointer to the newest agent release. Not a release itself.',
+                target_commitish: 'main',
+              })).data;
+            }
+
+            // An asset name is unique within a release, so the old one has to go
+            // before the new one can take its place.
+            for (const asset of pointer.assets.filter(a => a.name === 'appcast.json')) {
+              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: asset.id });
+            }
+
+            const data = JSON.stringify(manifest, null, 2);
+            await github.rest.repos.uploadReleaseAsset({
+              owner, repo,
+              release_id: pointer.id,
+              name: 'appcast.json',
+              data,
+              headers: {
+                'content-type': 'application/json',
+                'content-length': Buffer.byteLength(data),
+              },
+            });
+            core.info(`appcast now points at ${version}`);
+
+      # ── Homebrew tap ───────────────────────────────────────────────────
+      # Point the cask at the release that just published.
+      #
+      # Without this the tap goes stale the instant a version ships, and since
+      # the cask is what brew installs, `brew install` keeps handing out the
+      # previous build until somebody remembers to bump it by hand. That has
+      # already happened for three releases running.
+      #
+      # It needs a credential that can write to the *tap* repository, because the
+      # automatic GITHUB_TOKEN is scoped to this one. That credential is an SSH
+      # deploy key on SidPad03/homebrew-tap, with its private half stored here as
+      # HOMEBREW_TAP_SSH_KEY. A deploy key rather than a personal access token
+      # deliberately: it reaches exactly one repository, so the blast radius if
+      # this secret ever leaks is the tap and nothing else.
+      #
+      # Skipped when the secret is absent, so a fork still builds and releases.
+      - name: Update the Homebrew cask
+        if: env.TAP_KEY != ''
+        run: |
+          set -euo pipefail
+          DMG="dist/MCP-Gateway-Agent-${VERSION}.dmg"
+          SHA=$(sha256sum "$DMG" | awk '{print $1}')
+
+          # ssh will not read a key from stdin, so it goes to a file with tight
+          # permissions and is removed however this step exits.
+          KEYFILE="$(mktemp)"
+          trap 'rm -f "$KEYFILE"' EXIT
+          printf '%s\n' "$TAP_KEY" > "$KEYFILE"
+          chmod 600 "$KEYFILE"
+          export GIT_SSH_COMMAND="ssh -i $KEYFILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          rm -rf tap
+          git clone --depth 1 git@github.com:SidPad03/homebrew-tap.git tap
+          cd tap
+          CASK="Casks/mcp-gateway-agent.rb"
+
+          # Anchored to the start of the line so a version-shaped string
+          # anywhere else in the file, a comment or the livecheck regex, cannot
+          # be rewritten by accident.
+          sed -i -E "s|^  version \".*\"|  version \"${VERSION}\"|" "$CASK"
+          sed -i -E "s|^  sha256 \".*\"|  sha256 \"${SHA}\"|" "$CASK"
+
+          # A sed that matches nothing exits 0, so confirm rather than assume.
+          grep -q "^  version \"${VERSION}\"$" "$CASK" || {
+            echo "::error::the cask version was not rewritten"; exit 1; }
+          grep -q "^  sha256 \"${SHA}\"$" "$CASK" || {
+            echo "::error::the cask sha256 was not rewritten"; exit 1; }
+
+          if git diff --quiet; then
+            echo "cask already points at ${VERSION}"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "mcp-gateway-agent ${VERSION}"
+          git push -q
+          echo "cask bumped to ${VERSION}"
