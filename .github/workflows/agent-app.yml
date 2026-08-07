@@ -130,7 +130,7 @@ jobs:
           done
 
       - name: Notarize
-        if: env.APPLE_ID != '' && github.event_name == 'push'
+        if: env.APPLE_ID != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}

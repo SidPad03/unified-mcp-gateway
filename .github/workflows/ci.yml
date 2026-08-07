@@ -35,10 +35,16 @@ concurrency:
 
 jobs:
   # ── Gate ──────────────────────────────────────────────────────────────
-  # Everything below depends on this, so a red test never publishes an image.
-  # Runs on pull requests too, which is the point of requiring it for merge.
-  test:
-    name: test
+  # Everything below depends on these, so a red test never publishes an image.
+  # They run on pull requests too, which is the point of requiring them.
+  #
+  # Split by toolchain rather than kept as one job. The Rust and dashboard
+  # halves share no inputs, no cache and no services, but as a single job they
+  # ran back to back on one machine while the rest of the fleet sat idle through
+  # the longest step in the pipeline. `test` below folds them back into the one
+  # status check `main` requires.
+  rust:
+    name: rust
     runs-on: [self-hosted, homelab]
     permissions:
       contents: read
@@ -114,6 +120,15 @@ jobs:
           cargo test --manifest-path mcp-gateway-server/Cargo.toml
           cargo test --manifest-path mcp-gateway-agent/Cargo.toml --workspace
 
+  dashboard:
+    name: dashboard
+    runs-on: [self-hosted, homelab]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -121,23 +136,44 @@ jobs:
           cache: npm
           cache-dependency-path: mcp-gateway-dashboard/package-lock.json
 
-      - name: Dashboard install
+      - name: Install
         working-directory: mcp-gateway-dashboard
         run: npm ci
 
-      - name: Dashboard typecheck
+      - name: Typecheck
         working-directory: mcp-gateway-dashboard
         run: npx tsc --noEmit
 
-      - name: Dashboard build
+      - name: Build
         working-directory: mcp-gateway-dashboard
         run: npm run build
+
+  # `main` requires a status check named `test`, so the split keeps a job by
+  # that name instead of needing every protection rule and open PR repointed at
+  # two new ones. It is off the critical path: `version` and `build` gate on the
+  # halves directly, so this only has to report.
+  #
+  # `always()` because a required check that is *skipped* when a dependency
+  # fails leaves the pull request pending forever rather than going red.
+  test:
+    name: test
+    needs: [rust, dashboard]
+    if: always()
+    runs-on: [self-hosted, homelab]
+    permissions: {}
+    steps:
+      - name: Report
+        run: |
+          echo "rust:      ${{ needs.rust.result }}"
+          echo "dashboard: ${{ needs.dashboard.result }}"
+          [ "${{ needs.rust.result }}" = success ] || exit 1
+          [ "${{ needs.dashboard.result }}" = success ] || exit 1
 
   # ── Version ───────────────────────────────────────────────────────────
   # Computed once and shared, so images, manifest tags, and the GitHub release
   # can never drift from each other.
   version:
-    needs: test
+    needs: [rust, dashboard]
     runs-on: [self-hosted, homelab]
     permissions:
       contents: read
@@ -190,7 +226,7 @@ jobs:
   # Pull requests build but do not push, so a broken cross-build is caught
   # before it reaches main.
   build:
-    needs: [test, version]
+    needs: [rust, dashboard, version]
     runs-on: [self-hosted, homelab]
     permissions:
       contents: read
@@ -236,8 +272,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Publishing is main-only, and says so rather than relying on the `on:`
+      # block above listing main and nothing else. `event_name == 'push'` alone
+      # is true for a push to any branch the trigger is later widened to, and
+      # the steps it gates here overwrite `:latest` and delete Docker Hub tags.
       - name: Log in to Docker Hub
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -255,13 +295,13 @@ jobs:
             APP_VERSION=${{ needs.version.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.component.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:v${{ needs.version.outputs.version }}
 
       - name: Inspect manifest
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: docker buildx imagetools inspect "${IMAGE}:v${{ needs.version.outputs.version }}"
 
       # A self-hosted runner keeps whatever a job leaves behind, and a
@@ -288,7 +328,8 @@ jobs:
   # from before this policy — is deleted from Docker Hub.
   prune:
     needs: [build]
-    if: github.event_name == 'push'
+    # Deletes tags from Docker Hub, so it is pinned to main explicitly.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, homelab]
     # Talks only to the Docker Hub API; needs no GITHUB_TOKEN scope at all.
     permissions: {}
