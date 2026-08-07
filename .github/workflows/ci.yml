@@ -217,7 +217,15 @@ jobs:
         with:
           script: |
             const majorMinor = process.env.MAJOR_MINOR;
-            const prefix = `gateway-v${majorMinor}.`;
+            // One counter across both release lines, not one per line.
+            //
+            // Counting only `gateway-v*` here, and only `agent-v*` in the agent
+            // workflow, is what let the two drift: when one pipeline failed the
+            // other carried on, and the same number stopped describing the same
+            // build of the same product. Taking the highest patch across both
+            // prefixes holds both lines together, so a failure parks them at the
+            // same number and the next green run moves them as a pair.
+            const prefixes = [`gateway-v${majorMinor}.`, `agent-v${majorMinor}.`];
             const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -225,8 +233,10 @@ jobs:
             });
             const patches = releases
               .map(r => r.tag_name)
-              .filter(tag => tag.startsWith(prefix))
-              .map(tag => Number.parseInt(tag.slice(prefix.length), 10))
+              .flatMap(tag => {
+                const prefix = prefixes.find(p => tag.startsWith(p));
+                return prefix ? [Number.parseInt(tag.slice(prefix.length), 10)] : [];
+              })
               .filter(Number.isInteger);
             const patch = patches.length ? Math.max(...patches) + 1 : 0;
             const version = `${majorMinor}.${patch}`;

@@ -71,9 +71,14 @@ jobs:
           BASE=$(grep '^version' mcp-gateway-agent/ffi/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           MAJOR_MINOR=$(echo "$BASE" | cut -d. -f1-2)
 
+          # One counter across both release lines, matching ci.yml. Counting only
+          # `agent-v*` here, and only `gateway-v*` there, is what let the two
+          # drift: a failed pipeline stopped one line while the other carried on,
+          # so the same number stopped describing the same build of the same
+          # product.
           EXISTING=$(gh release list --limit 100 --json tagName -q '.[].tagName' \
-            | grep "^agent-v${MAJOR_MINOR}\." \
-            | sed "s/agent-v${MAJOR_MINOR}\.//" \
+            | grep -E "^(agent|gateway)-v${MAJOR_MINOR}\." \
+            | sed -E "s/^(agent|gateway)-v${MAJOR_MINOR}\.//" \
             | sort -n | tail -1 || true)
 
           if [ -z "$EXISTING" ]; then PATCH=0; else PATCH=$((EXISTING + 1)); fi
