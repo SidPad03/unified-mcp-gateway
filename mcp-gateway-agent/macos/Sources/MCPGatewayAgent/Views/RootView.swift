@@ -196,25 +196,34 @@ private struct UpdateChip: View {
             Button {
                 Task { await model.updater.install(release) }
             } label: {
-                Image(systemName: "arrow.down.circle")
-                    .font(.system(size: Typo.body, weight: .medium))
+                // Labelled, not icon-only. A lone glyph in the corner of a
+                // window reads as a status light rather than a control, and
+                // this is the one thing up here that does something: it is
+                // worth a word.
+                Label("Update", systemImage: "arrow.down.circle")
+                    .font(.system(size: Typo.caption, weight: .medium))
                     .foregroundStyle(Palette.beam)
             }
             .buttonStyle(.glass)
             .controlSize(.small)
-            .help("Version \(release.version) is available. Updating relaunches the app.")
+            .help("Version \(release.version) is available. Installing quits and reopens the app.")
 
         case let .downloading(progress):
-            ProgressView(value: progress)
-                .progressViewStyle(.circular)
-                .controlSize(.small)
-                .help("Downloading the update…")
+            HStack(spacing: 6) {
+                ProgressView(value: progress).progressViewStyle(.circular).controlSize(.small)
+                Text("Updating…")
+                    .font(.system(size: Typo.caption))
+                    .foregroundStyle(Palette.text3)
+            }
+            .help("Downloading and verifying the update…")
 
         case .readyToRelaunch:
-            ProgressView()
-                .progressViewStyle(.circular)
-                .controlSize(.small)
-                .help("Relaunching…")
+            HStack(spacing: 6) {
+                ProgressView().progressViewStyle(.circular).controlSize(.small)
+                Text("Relaunching…")
+                    .font(.system(size: Typo.caption))
+                    .foregroundStyle(Palette.text3)
+            }
 
         case let .failed(message):
             Image(systemName: "exclamationmark.triangle")
