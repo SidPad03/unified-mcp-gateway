@@ -46,7 +46,7 @@ jobs:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       SIGNING_KEY: ${{ secrets.MCPGA_UPDATE_PRIVATE_KEY }}
-      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      TAP_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -251,13 +251,16 @@ jobs:
       # previous build until somebody remembers to bump it by hand. That has
       # already happened for three releases running.
       #
-      # It needs a token that can write to the *tap* repository: the automatic
-      # GITHUB_TOKEN is scoped to this one. Create a fine-grained PAT with
-      # Contents: read and write on SidPad03/homebrew-tap and store it as
-      # HOMEBREW_TAP_TOKEN. Until that secret exists this step is skipped, so a
-      # fork or a repo without it still builds and releases normally.
+      # It needs a credential that can write to the *tap* repository, because the
+      # automatic GITHUB_TOKEN is scoped to this one. That credential is an SSH
+      # deploy key on SidPad03/homebrew-tap, with its private half stored here as
+      # HOMEBREW_TAP_SSH_KEY. A deploy key rather than a personal access token
+      # deliberately: it reaches exactly one repository, so the blast radius if
+      # this secret ever leaks is the tap and nothing else.
+      #
+      # Skipped when the secret is absent, so a fork still builds and releases.
       - name: Update the Homebrew cask
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.TAP_TOKEN != ''
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.TAP_KEY != ''
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -265,8 +268,15 @@ jobs:
           DMG="mcp-gateway-agent/build/MCP-Gateway-Agent-${VERSION}.dmg"
           SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
 
-          git clone --depth 1 \
-            "https://x-access-token:${TAP_TOKEN}@github.com/SidPad03/homebrew-tap.git" tap
+          # ssh will not read a key from stdin, so it goes to a file with tight
+          # permissions and is removed however this step exits.
+          KEYFILE="$(mktemp)"
+          trap 'rm -f "$KEYFILE"' EXIT
+          printf '%s\n' "$TAP_KEY" > "$KEYFILE"
+          chmod 600 "$KEYFILE"
+          export GIT_SSH_COMMAND="ssh -i $KEYFILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          git clone --depth 1 git@github.com:SidPad03/homebrew-tap.git tap
           cd tap
           CASK="Casks/mcp-gateway-agent.rb"
 
