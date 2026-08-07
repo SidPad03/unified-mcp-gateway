@@ -12,7 +12,7 @@ A self-hosted MCP-native aggregation, routing, and security layer for desktop AI
 
 ## Demo
 
-https://github.com/user-attachments/assets/59854d3a-515e-4686-b2fe-c870e4279e5d
+https://github.com/user-attachments/assets/d34467d1-8485-45d3-847f-7f9274142f7f
 
 ## Architecture
 
