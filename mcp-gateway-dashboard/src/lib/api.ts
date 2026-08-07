@@ -36,7 +36,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     // Carry the reason across the hard redirect so the Login page can explain WHY
     // the user landed there (e.g. an expired session after a password change),
     // instead of a silent bounce that reads like the app just logged them out.
-    sessionStorage.setItem('mcpgw_auth_message', err.error || 'Your session expired — please sign in again.');
+    sessionStorage.setItem('mcpgw_auth_message', err.error || 'Your session expired. Sign in again.');
     if (window.location.pathname !== '/login') {
       window.location.href = '/login';
     }
@@ -45,7 +45,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(err.error || `HTTP ${res.status}`);
+    throw new Error(err.error || `Request failed (HTTP ${res.status})`);
   }
 
   return res.json();
@@ -132,19 +132,6 @@ export const api = {
     request<UpdateStatus>(
       `/updates/check?current=${encodeURIComponent(current)}${force ? '&force=true' : ''}`,
     ),
-
-  // Configuration transfer (owner-only). The bundle is encrypted with a
-  // passphrase the operator supplies; the server never stores it.
-  exportConfig: (passphrase: string, includeAudit: boolean) =>
-    request<ConfigBundle>('/config/export', {
-      method: 'POST',
-      body: JSON.stringify({ passphrase, include_audit: includeAudit }),
-    }),
-  importConfig: (passphrase: string, bundle: ConfigBundle) =>
-    request<ImportSummary>('/config/import', {
-      method: 'POST',
-      body: JSON.stringify({ passphrase, bundle }),
-    }),
 
   // API Keys
   getApiKeys: () => request<ApiKey[]>('/api-keys'),
@@ -321,24 +308,6 @@ export interface UpdateStatus {
   source_repo: string;
   /** Set when the check could not be completed — distinct from "up to date". */
   error?: string;
-}
-
-/** Opaque to the client: everything meaningful is inside `ciphertext`. */
-export interface ConfigBundle {
-  format: string;
-  format_version: number;
-  created_at: string;
-  source_version: string;
-  includes_audit: boolean;
-  kdf: { algorithm: string; salt: string; m_cost: number; t_cost: number; p_cost: number };
-  nonce: string;
-  ciphertext: string;
-}
-
-export interface ImportSummary {
-  imported: { table: string; rows: number }[];
-  source_version: string;
-  created_at: string;
 }
 
 export interface SecurityPosture {

@@ -4,6 +4,12 @@ target/
 **/*.rs.bk
 *.pdb
 
+# Swift / the macOS app
+.build/
+mcp-gateway-agent/build/
+*.dmg
+*.xcuserstate
+
 # Node
 node_modules/
 dist/

@@ -1,147 +1,112 @@
 # MCP Gateway Agent
 
-> **Being replaced.** This page documents the terminal agent, which is what ships
-> today. It is being rewritten as a macOS application — see
-> [Agent Desktop App](agent-desktop-app.md). When that ships, the CLI, the TUI,
-> the `install.sh` / `install.ps1` installers and the published `agent-v*`
-> binaries all go away, replaced by a signed `.dmg`. Linux and Windows are not
-> covered by the first release.
+A macOS app that connects the MCP servers running on your Mac to the gateway
+over a single authenticated WebSocket. The gateway then treats those tools as if
+they ran on the server itself.
 
-The agent connects MCP servers running on a remote machine — a laptop, dev box,
-or home server — to the gateway over a single authenticated WebSocket. The
-gateway then treats those tools as if they ran on the server itself.
-
-Because the agent dials **out**, the machine needs no inbound ports, no firewall
+Because the agent dials **out**, your Mac needs no inbound ports, no firewall
 rules, and no port forwarding.
+
+Requires **macOS 26 or later** on Apple Silicon or Intel. For the design and the
+reasoning behind it, see [Agent Desktop App](agent-desktop-app.md).
 
 ---
 
 ## Install
 
-**macOS / Linux**
+Download `MCP-Gateway-Agent-<version>.dmg` from the
+[latest agent release](https://github.com/SidPad03/unified-mcp-gateway/releases),
+open it, and drag the app to Applications.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/SidPad03/unified-mcp-gateway/main/install.sh | bash
-```
-
-**Windows (PowerShell)**
-
-```powershell
-irm https://raw.githubusercontent.com/SidPad03/unified-mcp-gateway/main/install.ps1 | iex
-```
-
-The installer downloads the binary for your platform into
-`~/.mcp-gateway-agent/bin/` and adds it to your `PATH`. Binaries are also
-attached to each `agent-v*` [GitHub Release](https://github.com/SidPad03/unified-mcp-gateway/releases).
+> **First launch needs one extra step.** The app is ad-hoc signed rather than
+> notarized, so Gatekeeper will say it "cannot be opened". **Right-click the app
+> and choose Open**, then confirm — macOS remembers the choice and will not ask
+> again. From the command line the equivalent is:
+>
+> ```bash
+> xattr -dr com.apple.quarantine "/Applications/MCP Gateway Agent.app"
+> ```
+>
+> Updates installed from within the app are unaffected; quarantine only applies
+> to a fresh download.
 
 ---
 
 ## Set up
 
-### 1. Create the gateway-side backend
+Open the app, type your gateway address — `mcp-gateway.example.com` is enough;
+the scheme and path are worked out for you — and click **Sign in with your
+gateway**.
 
-In the dashboard, add a backend with transport `agent`. Its **name** is the
-identity the agent will claim — for example `my-macbook`.
+A browser window opens on the gateway's authorization page. Sign in with your
+normal gateway account and click Authorize. The app receives its credential
+directly and stores it in your Keychain.
 
-### 2. Create an API key
+That is the whole setup. There is no API key to create, copy, or paste, and
+nothing to configure in the dashboard first — the Mac registers itself under the
+machine name shown under **More options** (your computer's name, by default).
 
-From the dashboard's **Settings** page. Keys are shown once.
+### Adding your MCP servers
 
-### 3. Run the wizard
+**Backends → Add Backend.** For a local process choose *stdio* and give it the
+command and arguments you would type in a terminal; for a local HTTP MCP server
+choose *HTTP* and give it the URL.
 
-```bash
-mcp-gateway-agent setup
-```
+Use **Test connection** before saving. It starts the backend, completes the MCP
+handshake, lists the tools it found, and shuts it down again — so a mistyped
+command is caught immediately rather than becoming a mystery later.
 
-It asks for the gateway URL, the API key, and your local MCP backends, then
-writes `~/.mcp-gateway-agent/config.toml` with `0600` permissions.
-
-The `agent_id` must exactly match the backend name from step 1.
-
-For the full config-file schema, see
-[Configuration Reference](configuration.md#agent-configuration).
-
----
-
-## Run
-
-```bash
-# Start in the background, then stop it again
-mcp-gateway-agent run
-mcp-gateway-agent stop
-
-# Stay in the foreground with plain log output (for debugging)
-mcp-gateway-agent run --foreground
-
-# Or install it as a background service — this also starts it
-mcp-gateway-agent service install
-```
-
-The service uses launchd on macOS, systemd on Linux, and Task Scheduler on
-Windows.
-
-### The TUI
-
-`mcp-gateway-agent dashboard` opens a live view showing connection status,
-registered tools, recent tool calls, and logs. `run` does not — it daemonizes,
-and `run --foreground` prints plain logs.
-
-| Key | Action |
-|-----|--------|
-| `q` | Quit |
-| `s` | Re-run setup |
-| `u` | Check for updates |
-| `↑` / `↓` | Scroll the log pane |
+Backends can be added, edited, disabled and removed while the agent is
+connected. The gateway is told about the change within about half a second.
 
 ---
 
-## Commands
+## The app
 
-| Command | Description |
-|---------|-------------|
-| `mcp-gateway-agent setup` | Interactive setup wizard |
-| `mcp-gateway-agent run` | Start the agent in the background (`--foreground` to stay attached) |
-| `mcp-gateway-agent stop` | Stop the running agent |
-| `mcp-gateway-agent restart` | Stop and start again |
-| `mcp-gateway-agent dashboard` | Open the live TUI |
-| `mcp-gateway-agent update` | Check for and install a newer agent |
-| `mcp-gateway-agent service install` | Install as a background service, and start it |
-| `mcp-gateway-agent service uninstall` | Stop and remove the background service |
-| `mcp-gateway-agent service status` | Show service status |
-| `mcp-gateway-agent service logs` | Show service logs |
-| `mcp-gateway-agent logs` | Tail the agent log file |
-| `mcp-gateway-agent uninstall` | Remove the agent's config, binary, and service |
-| `mcp-gateway-agent version` | Print the version |
+| Page | What it shows |
+|------|---------------|
+| **Overview** | Connection state, tools registered, backends up, calls per hour, and whatever is currently broken |
+| **Backends** | Every local MCP server: status, PID, uptime, restarts, tools, last error |
+| **Activity** | Tool calls as they happen — time, tool, backend, duration, and the error if there was one |
+| **Logs** | The agent's own log and every backend's stderr, merged, filterable, exportable |
+| **Audit** | The gateway's audit trail for this machine, with 24-hour volume, error rate and latency |
+| **Usage** | Which applications call which tools through this Mac |
 
-Each of `run`, `restart`, and `dashboard` accepts `--config <path>` to use a
-config file other than `~/.mcp-gateway-agent/config.toml`.
+**Settings** is the standard ⌘, window, in the app menu and the menu-bar popover.
 
----
+### The menu bar
 
-## Self-update
+Closing the window does not quit the app — the Mac's MCP servers stay connected
+and the app moves to the menu bar. The popover shows status and the actions you
+are most likely to want; **Quit** stops the backends, and says so the first time.
 
-`mcp-gateway-agent update` asks the gateway for the latest agent release, and
-the gateway proxies that from the configured git forge. The downloaded binary is
-checksum-verified before it replaces the running one.
+### Start at login
 
-This requires `RELEASE_PROXY_URL` and `RELEASE_PROXY_REPO` to be set on the
-server — see [Configuration Reference](configuration.md#server-environment-variables).
-Without them the update endpoints are inactive.
+**Settings → General → Start at login.** Registered through macOS's own login
+item mechanism, so it also appears in System Settings → General → Login Items and
+can be turned off there. Started that way, the app comes up in the menu bar with
+no window and does not steal focus.
 
 ---
 
 ## How it works
 
-1. The agent connects to the gateway over WebSocket (`/agent/ws`) and
-   authenticates with its API key.
-2. It discovers tools from each configured local backend.
-3. It registers those tools with the gateway under the agent's name.
+1. The app connects to the gateway over WebSocket (`/agent/ws`) and
+   authenticates with the key it received when you signed in.
+2. It starts every configured local backend **concurrently** and discovers their
+   tools.
+3. It registers the tools of the backends that actually came up, namespaced
+   `backend__tool`, under this machine's name.
 4. When an AI client calls one, the gateway routes the request over the
-   WebSocket to the agent.
-5. The agent forwards it to the right local backend and returns the result.
+   WebSocket.
+5. The app forwards it to the right local backend and returns the result.
+
+Each backend has a supervisor watching it. If a process exits, its tools are
+withdrawn from the gateway immediately — so a client never sees a tool that
+cannot answer — and it is restarted with a backoff that caps at thirty seconds.
 
 Agent tool calls go through the gateway's policy engine and audit log exactly
-like any other tool call — the decision is made server-side, before the call is
+like any other tool call; the decision is made server-side, before the call is
 forwarded.
 
 For the wire protocol and connection lifecycle, see
@@ -149,14 +114,55 @@ For the wire protocol and connection lifecycle, see
 
 ---
 
+## Where things are kept
+
+| What | Where |
+|------|-------|
+| Configuration | `~/.mcp-gateway-agent/config.toml`, written atomically with `0600` permissions |
+| API key | Your login Keychain, as `com.mcpgateway.agent` |
+| Logs | In memory — the most recent 5 000 lines. Use **Export** on the Logs page to write them to a file |
+
+The API key is deliberately *not* in the config file. A config written by the old
+terminal agent still has one; the app moves it into the Keychain on first launch
+and rewrites the file without it.
+
+You should not need to edit the config by hand, but the schema is in
+[Configuration Reference](configuration.md#agent-configuration) and there is a
+worked example at `mcp-gateway-agent/mcp-gateway-agent.toml.example`.
+
+---
+
+## Updates
+
+The app checks on launch and every six hours. When a release is available a small
+download button appears in the window's top-right corner; the menu-bar popover
+and **Settings → Updates** say so too, and Settings has the release notes and a
+**Check now** button.
+
+Clicking it downloads the new version, verifies its Ed25519 signature, replaces
+the app, then quits and reopens it. That is one click — there is no separate
+relaunch step, and the usual "quitting stops this Mac's MCP servers"
+confirmation is skipped, because the app is coming straight back.
+
+If a build was made without an update signing key it will tell you an update
+exists and decline to install it — download the new version from GitHub instead.
+That is deliberate: it never installs something it cannot verify.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause |
 |---------|-------|
-| Backend stays `disconnected` | `agent_id` does not match the backend name, or the agent is not running |
-| Repeated auth failures | The API key was revoked or mistyped |
-| TLS errors against a self-signed cert | Set `tls_skip_verify = true` — development only |
-| Tools missing after adding a backend | Restart the agent, or click **Sync** on the backend in the dashboard |
+| "The application is damaged" on first launch | Gatekeeper quarantine. Right-click → Open, or `xattr -dr com.apple.quarantine` — see [Install](#install) |
+| A backend says **Failed** with "No such file or directory" | The command is not on your login shell's `PATH`. The app reads `PATH` from your login shell at launch, so a tool installed since then needs the app restarted |
+| A backend keeps crashing | Open **Logs** and filter to that backend — its stderr is there, which is usually enough to see why |
+| Backend stays `disconnected` in the dashboard | The machine name does not match the gateway-side backend name, or the app is not running |
+| Repeated auth failures | The API key was revoked in the dashboard. Sign out and sign in again |
+| TLS errors against a self-signed certificate | **Settings → Gateway → Skip TLS certificate verification.** Only on a network you trust |
 | Reconnect loop | The gateway is accepting then closing the socket; check the server logs and the reverse proxy's WebSocket configuration |
+| macOS asks about Keychain access after an update | Expected with ad-hoc signing — the signature changes with every build. Choose **Always Allow** |
 
-Agent logs: `mcp-gateway-agent logs`.
+Everything the agent logs, including each backend's stderr, is on the **Logs**
+page. Secrets are redacted there using the same rules as the server's audit
+redactor, so the export is safe to attach to an issue.

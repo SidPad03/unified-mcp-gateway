@@ -1,18 +1,33 @@
 <!--
-  MCP Gateway — "Converging Gate" mark.
-  Three traces converge on a single point and pass through a diamond threshold,
-  leaving as one beam: many MCP servers, one guarded endpoint.
+  MCP Gateway — the "Aperture" mark.
 
-  Drawn on lucide's 24 grid at stroke 2 with round caps so it sits correctly
-  beside the lucide icons used in the dashboard and the agent app. Uses
-  currentColor — set the colour on the parent.
+  Three traces converge on a single point and pass through a diamond aperture,
+  leaving as one beam. Many MCP servers, one guarded endpoint.
+
+  Read it left to right and it is the product: many in, one out, through a
+  threshold.
+
+  Drawn on lucide's 24 grid with round caps and joins so it sits correctly beside
+  the lucide icons used in the dashboard. Stroke is 2.2 rather than lucide's 2 —
+  this is a logo, not an icon in a row, and it needs the extra presence.
+
+  The three traces meet exactly at the aperture's left vertex, so the convergence
+  and the threshold are one event rather than two shapes near each other. That
+  matters more than it sounds: when they were separate, the two right-facing
+  wedges fused into a "»" at every size.
+
+  The aperture spans 8 of the 24 units. It has to be that large — a smaller one
+  fills in with antialiasing by 16 px, and 16 px is the floor.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2"
+     fill="none" stroke="currentColor" stroke-width="2.2"
      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-  <path d="M2.5 6.5h3L10 12"/>
-  <path d="M2.5 12h7.5"/>
-  <path d="M2.5 17.5h3L10 12"/>
-  <path d="M14 8 18 12l-4 4-4-4Z"/>
-  <path d="M18 12h3.5"/>
+  <!-- The many: three traces, converging on one point -->
+  <path d="M2 6.5H5L9 12"/>
+  <path d="M2 12H9"/>
+  <path d="M2 17.5H5L9 12"/>
+  <!-- The threshold -->
+  <path d="M9 12L13 8L17 12L13 16Z"/>
+  <!-- The one that leaves -->
+  <path d="M17 12H22"/>
 </svg>

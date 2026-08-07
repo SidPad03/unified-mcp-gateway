@@ -1,8 +1,22 @@
+# ~/.mcp-gateway-agent/config.toml
+#
+# You should not need to write this by hand. Install MCP Gateway Agent, sign in,
+# and add backends from the app — it writes this file for you, atomically and
+# owner-only.
+#
+# Note what is *not* here: the API key. It lives in the macOS Keychain. A config
+# written by the old terminal agent still has an `api_key` line; the app reads
+# it once on first launch, moves it into the Keychain, and rewrites this file
+# without it.
+
 [agent]
 agent_id = "my-machine"
+# The agent socket is at /agent/ws, top level — not under /api/v1.
 gateway_url = "wss://mcp-gateway.example.com/agent/ws"
-api_key = "mcpgw_YOUR_API_KEY_HERE"
+# Optional. Only needed when the dashboard is served from a different host to
+# the API; otherwise it is derived from gateway_url.
 dashboard_url = "https://mcp-gateway.example.com"
+# For a gateway with a self-signed certificate. Leave false unless you need it.
 tls_skip_verify = false
 
 [[backends]]
@@ -13,30 +27,24 @@ args = [
     "--from",
     "git+https://github.com/oraios/serena",
     "serena",
-    "start-mcp-server"
+    "start-mcp-server",
 ]
-
-[backends.env]
-
-[backends.headers]
+# A disabled backend stays configured but is never spawned and never registered.
+enabled = true
 
 [[backends]]
 name = "playwright"
 transport = "stdio"
 command = "npx"
-args = [
-    "@playwright/mcp@latest",
-]
-
-[backends.env]
-
-[backends.headers]
+args = ["@playwright/mcp@latest"]
+enabled = true
 
 [[backends]]
 name = "obsidian"
 transport = "stdio"
 command = "npx"
 args = ["obsidian-mcp-server"]
+enabled = true
 
 [backends.env]
 OBSIDIAN_API_KEY = "YOUR_OBSIDIAN_API_KEY_HERE"
@@ -44,4 +52,12 @@ OBSIDIAN_BASE_URL = "http://localhost:27123/"
 OBSIDIAN_VERIFY_SSL = "false"
 OBSIDIAN_ENABLE_CACHE = "true"
 
+# An MCP server that speaks HTTP rather than stdio.
+[[backends]]
+name = "local-http"
+transport = "http"
+url = "http://127.0.0.1:3010/mcp"
+enabled = false
+
 [backends.headers]
+Authorization = "Bearer YOUR_TOKEN_HERE"

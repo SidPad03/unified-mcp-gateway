@@ -1,4 +1,9 @@
-FROM node:20-alpine AS builder
+# The build stage is pinned to $BUILDPLATFORM: `npm run build` produces static
+# files that are identical whatever the target architecture, so there is no
+# reason to emulate it. Only the nginx runtime differs per platform, and it has
+# no RUN steps — so the arm64 image costs essentially nothing to produce on an
+# x86_64 runner.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS builder
 ARG APP_VERSION=0.0.0
 WORKDIR /app
 COPY package.json package-lock.json* ./

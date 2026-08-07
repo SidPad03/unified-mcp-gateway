@@ -333,55 +333,127 @@ async fn clear_audit(
     Ok(Json(serde_json::json!({ "status": "cleared" })))
 }
 
+#[derive(Deserialize)]
+pub struct AuditStatsQuery {
+    /// One backend only — the macOS agent passes its own `backend_id` so it can
+    /// show this machine's 24-hour volume, error rate and latency without
+    /// pulling every row down to count them itself.
+    pub backend: Option<String>,
+    pub user_id: Option<String>,
+}
+
 async fn audit_stats(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
+    Query(query): Query<AuditStatsQuery>,
 ) -> Result<Json<AuditStats>, AppError> {
-    let (total_events,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_events")
-        .fetch_one(&state.db)
-        .await?;
+    // Scope exactly as `/audit` does. Until now this endpoint returned global
+    // totals and the global top-tools list to any authenticated caller, which
+    // leaked both volume and tool names across accounts.
+    let user_filter: Option<Uuid> = if claims.roles.contains(&"owner".to_string()) {
+        query
+            .user_id
+            .as_deref()
+            .filter(|id| !id.is_empty() && *id != "all")
+            .map(|id| {
+                id.parse()
+                    .map_err(|_| AppError::BadRequest("Invalid user_id".into()))
+            })
+            .transpose()?
+    } else {
+        Some(
+            claims
+                .sub
+                .parse()
+                .map_err(|_| AppError::Internal("Invalid caller ID".into()))?,
+        )
+    };
 
-    let (events_24h,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours'",
-    )
+    let backend_filter: Option<String> = query
+        .backend
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty() && *b != "all")
+        .map(str::to_string);
+
+    // Every query below carries the same two binds, so the scope cannot drift
+    // between the headline number and the breakdown underneath it.
+    const SCOPE: &str =
+        "($1::uuid IS NULL OR user_id = $1) AND ($2::text IS NULL OR backend_name = $2)";
+
+    let (total_events,): (i64,) =
+        sqlx::query_as(&format!("SELECT COUNT(*) FROM audit_events WHERE {SCOPE}"))
+            .bind(user_filter)
+            .bind(&backend_filter)
+            .fetch_one(&state.db)
+            .await?;
+
+    let (events_24h,): (i64,) = sqlx::query_as(&format!(
+        "SELECT COUNT(*) FROM audit_events WHERE {SCOPE} AND timestamp > NOW() - INTERVAL '24 hours'"
+    ))
+    .bind(user_filter)
+    .bind(&backend_filter)
     .fetch_one(&state.db)
     .await?;
 
-    let (success_count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE status = 'success'")
-            .fetch_one(&state.db)
-            .await?;
+    let (success_count,): (i64,) = sqlx::query_as(&format!(
+        "SELECT COUNT(*) FROM audit_events WHERE {SCOPE} AND status = 'success'"
+    ))
+    .bind(user_filter)
+    .bind(&backend_filter)
+    .fetch_one(&state.db)
+    .await?;
 
     // `tool_error` counts as an error. A tool that returned isError=true failed,
     // and leaving it out made the error total read as zero while the timeline
     // showed failures.
-    let (error_count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE status IN ('error', 'tool_error')")
-            .fetch_one(&state.db)
-            .await?;
+    let (error_count,): (i64,) = sqlx::query_as(&format!(
+        "SELECT COUNT(*) FROM audit_events WHERE {SCOPE} AND status IN ('error', 'tool_error')"
+    ))
+    .bind(user_filter)
+    .bind(&backend_filter)
+    .fetch_one(&state.db)
+    .await?;
 
-    let (denied_count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM audit_events WHERE status = 'denied'")
-            .fetch_one(&state.db)
-            .await?;
+    let (denied_count,): (i64,) = sqlx::query_as(&format!(
+        "SELECT COUNT(*) FROM audit_events WHERE {SCOPE} AND status = 'denied'"
+    ))
+    .bind(user_filter)
+    .bind(&backend_filter)
+    .fetch_one(&state.db)
+    .await?;
 
-    let avg_duration: Option<(Option<f64>,)> =
-        sqlx::query_as("SELECT AVG(duration_ms) FROM audit_events WHERE duration_ms IS NOT NULL")
-            .fetch_optional(&state.db)
-            .await?;
+    let avg_duration: Option<(Option<f64>,)> = sqlx::query_as(&format!(
+        "SELECT AVG(duration_ms) FROM audit_events WHERE {SCOPE} AND duration_ms IS NOT NULL"
+    ))
+    .bind(user_filter)
+    .bind(&backend_filter)
+    .fetch_optional(&state.db)
+    .await?;
 
-    let top_tools: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT tool_name, COUNT(*) as cnt FROM audit_events GROUP BY tool_name ORDER BY cnt DESC LIMIT 10"
-    ).fetch_all(&state.db).await?;
+    let top_tools: Vec<(String, i64)> = sqlx::query_as(&format!(
+        "SELECT tool_name, COUNT(*) as cnt FROM audit_events WHERE {SCOPE} GROUP BY tool_name ORDER BY cnt DESC LIMIT 10"
+    ))
+    .bind(user_filter)
+    .bind(&backend_filter)
+    .fetch_all(&state.db)
+    .await?;
 
-    let status_breakdown: Vec<(String, i64)> =
-        sqlx::query_as("SELECT status, COUNT(*) FROM audit_events GROUP BY status")
-            .fetch_all(&state.db)
-            .await?;
+    let status_breakdown: Vec<(String, i64)> = sqlx::query_as(&format!(
+        "SELECT status, COUNT(*) FROM audit_events WHERE {SCOPE} GROUP BY status"
+    ))
+    .bind(user_filter)
+    .bind(&backend_filter)
+    .fetch_all(&state.db)
+    .await?;
 
-    let hourly_volume: Vec<(chrono::DateTime<chrono::Utc>, i64)> = sqlx::query_as(
-        "SELECT date_trunc('hour', timestamp) as hr, COUNT(*) FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours' GROUP BY hr ORDER BY hr"
-    ).fetch_all(&state.db).await?;
+    let hourly_volume: Vec<(chrono::DateTime<chrono::Utc>, i64)> = sqlx::query_as(&format!(
+        "SELECT date_trunc('hour', timestamp) as hr, COUNT(*) FROM audit_events WHERE {SCOPE} AND timestamp > NOW() - INTERVAL '24 hours' GROUP BY hr ORDER BY hr"
+    ))
+    .bind(user_filter)
+    .bind(&backend_filter)
+    .fetch_all(&state.db)
+    .await?;
 
     Ok(Json(AuditStats {
         total_events,

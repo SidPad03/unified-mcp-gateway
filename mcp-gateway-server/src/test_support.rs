@@ -2,13 +2,12 @@
 
 /// Serialises every test that reads or writes `JWT_SECRET`.
 ///
-/// The secret is process-global, and it keys the API-key cipher
-/// ([`crate::api::api_keys`]) as well as the configuration-transfer round trip
-/// ([`crate::api::config_transfer`]). Tests in *both* modules set it, and
-/// `cargo test` runs them concurrently, so without a single shared lock one
-/// test's `set_var` lands between another's encrypt and decrypt and fails it.
-/// A per-module lock is not enough — the lock has to be crate-wide, which is
-/// why this lives here rather than next to either test module.
+/// The secret is process-global and it keys the API-key cipher
+/// ([`crate::api::api_keys`]). `cargo test` runs tests concurrently, so without
+/// a shared lock one test's `set_var` lands between another's encrypt and
+/// decrypt and fails it. The lock is crate-wide rather than per-module because
+/// anything else that comes to depend on the secret has to serialise with it
+/// too.
 ///
 /// It is a tokio mutex because the database tests hold it across `.await`
 /// points; a blocking guard there would park a runtime worker thread.

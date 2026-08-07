@@ -14,18 +14,13 @@ Three things get configured: the **server** (environment variables), the
 | `MCPGW_ADMIN_PASSWORD` | `admin` | Initial `admin` password. If unset, defaults to `admin` and a password change is forced on first login. Setting it selects your own initial password with no forced change. |
 | `LISTEN_ADDR` | `0.0.0.0:3200` | Server listen address |
 | `RUST_LOG` | `mcp_gateway_server=info,tower_http=debug` | Log level filter |
-| `RELEASE_PROXY_URL` | — | Git forge base URL for the agent release proxy |
-| `RELEASE_PROXY_REPO` | — | Repository for agent releases, e.g. `owner/unified-mcp-gateway` |
-| `GITEA_TOKEN` | — | API token for the release proxy |
 | `UPDATE_CHECK_REPO` | `SidPad03/unified-mcp-gateway` | Repository the dashboard's update check queries |
 | `UPDATE_CHECK_DISABLED` | unset | Set to any value to disable the update check (air-gapped deployments) |
 | `GITHUB_TOKEN` | — | Optional; raises GitHub's rate limit for the update check |
 
-`RELEASE_PROXY_URL` and `RELEASE_PROXY_REPO` also fall back to the legacy
-`GITEA_URL` and `GITEA_AGENT_REPO` names. The token has no `RELEASE_PROXY_*`
-spelling — it is read only as `GITEA_TOKEN`. The agent release endpoints fail
-unless a URL is set, so leave them unset only if you are not using agent
-self-update.
+The agent release-proxy variables (`RELEASE_PROXY_*`, `GITEA_*`) were removed
+in 1.0.0. The agent is a macOS app now and updates itself from GitHub
+Releases without the gateway's involvement.
 
 Compose reads these from a `.env` file next to `docker-compose.yml`. See
 [.env.example](../.env.example).
@@ -146,15 +141,21 @@ remain until a sync succeeds. A failing backend never crashes the server.
 
 ## Agent configuration
 
-The agent reads `~/.mcp-gateway-agent/config.toml`. Run
-`mcp-gateway-agent setup` for an interactive wizard, or write it directly.
+The agent reads `~/.mcp-gateway-agent/config.toml`. **You should not need to
+write this by hand** — the app writes it for you, atomically and `0600`, as you
+sign in and add backends. It is documented here because it is useful to be able
+to read it, and because it can be moved between machines.
+
+Note what is *not* in it: the API key. That lives in the macOS Keychain
+(`com.mcpgateway.agent`). A config written by the old terminal agent still has
+an `api_key` line; the app moves it into the Keychain on first launch and
+rewrites the file without it.
 
 ```toml
 [agent]
 agent_id = "my-macbook"                                   # must match the backend name
 gateway_url = "wss://mcp-gateway.example.com/agent/ws"
-api_key = "mcpgw_YOUR_API_KEY_HERE"
-dashboard_url = "https://mcp-gateway.example.com"         # optional; used for self-update
+dashboard_url = "https://mcp-gateway.example.com"         # optional; for Audit and Usage
 tls_skip_verify = false                                   # only for self-signed certs in dev
 
 # A stdio backend — the agent spawns this and talks JSON-RPC over stdin/stdout
@@ -193,8 +194,7 @@ Authorization = "Bearer …"
 |-------|----------|-------------|
 | `agent_id` | yes | Identifies this agent; must match the gateway backend's name |
 | `gateway_url` | yes | WebSocket URL, normally `wss://<host>/agent/ws` |
-| `api_key` | yes | An `mcpgw_` API key |
-| `dashboard_url` | no | Base URL for self-update; derived from `gateway_url` if omitted |
+| `dashboard_url` | no | REST base for the Audit and Usage pages; derived from `gateway_url` if omitted |
 | `tls_skip_verify` | no | Skip TLS verification — self-signed certs only |
 
 **`[[backends]]`**
@@ -203,6 +203,7 @@ Authorization = "Bearer …"
 |-------|-----------|-------------|
 | `name` | all | Backend name; namespaces its tools |
 | `transport` | all | `stdio` or `http` |
+| `enabled` | all | Defaults to `true`. A disabled backend stays configured but is never spawned and never registered |
 | `command`, `args`, `env` | `stdio` | Process to spawn and its environment |
 | `url`, `headers` | `http` | Endpoint and request headers |
 

@@ -17,14 +17,20 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // Must come before '/api' — the first matching prefix wins, and the
+      // generic rule would otherwise forward this to :3200/api/prometheus/metrics.
+      // Mirrors nginx.conf, which serves the Prometheus endpoint here so it does
+      // not shadow the dashboard's own /metrics page. (A bare '/metrics' proxy
+      // made a hard refresh on that route 404 in dev.)
+      '/api/prometheus/metrics': {
+        target: 'http://localhost:3200',
+        changeOrigin: true,
+        rewrite: () => '/metrics',
+      },
       '/api': {
         target: 'http://localhost:3200',
         changeOrigin: true,
         ws: true,
-      },
-      '/metrics': {
-        target: 'http://localhost:3200',
-        changeOrigin: true,
       },
     },
   },

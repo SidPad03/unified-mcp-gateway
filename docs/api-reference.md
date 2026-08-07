@@ -124,8 +124,16 @@ takes no filter parameters and is not scoped to the caller.
 
 ### `GET /api/v1/audit/stats`
 
-Counts are deployment-wide for every caller — this endpoint is not scoped to
-the requesting user.
+| Parameter | Description |
+|-----------|-------------|
+| `backend` | One backend only. The macOS agent passes its own `backend_id` so it can show this machine's volume, error rate and latency without pulling rows |
+| `user_id` | Owners only; `all` aggregates across every user |
+
+Scoped exactly as `GET /audit` is: a non-owner sees only their own events.
+
+> **Changed in 1.0.0.** This endpoint previously returned deployment-wide counts
+> and the global top-tools list to any authenticated caller, leaking both volume
+> and tool names across accounts.
 
 ```json
 {
@@ -255,34 +263,13 @@ Prometheus text-format metrics, served at the **root**, not under `/api/v1`.
 | `GET /api/v1/usage/connections` | Connection-level usage records |
 
 Owners may pass `user_id=all` to aggregate across every user; other callers see
-only their own activity.
+only their own activity. `range` accepts `24h`, `7d` (default) or `30d`.
 
----
-
-## Configuration transfer
-
-Owner-only. See [Deployment](deployment.md#moving-a-deployment-configuration-transfer).
-
-### `POST /api/v1/config/export` — **owner**
-
-```json
-{ "passphrase": "at-least-12-chars", "include_audit": true }
-```
-
-Returns the encrypted bundle. `include_audit` defaults to `true`.
-
-### `POST /api/v1/config/import` — **owner**
-
-```json
-{ "passphrase": "at-least-12-chars", "bundle": { } }
-```
-
-Replaces every table's contents with the bundle, in one transaction, and returns
-per-table row counts. A wrong passphrase and a tampered file are both rejected as
-"could not decrypt" — the AEAD cannot distinguish them.
-
-These two routes carry a 512 MiB request-body limit rather than the 8 MiB that
-applies everywhere else, because a bundle contains a whole deployment.
+`GET /usage/graph` also takes an optional **`backend`** filter, added in 1.0.0
+for the macOS agent. It is applied inside the SQL rather than to the results,
+which matters: the tool query takes the top 100 by call count *across every
+backend*, so on a busy gateway one machine's tools can fall off the end and
+never reach the client to be filtered.
 
 ---
 
@@ -292,15 +279,15 @@ applies everywhere else, because a bundle contains a whole deployment.
 
 | Param | Description |
 |-------|-------------|
-| `current` | The version the caller is running, e.g. `1.1.6` |
+| `current` | The version the caller is running, e.g. `1.0.0` |
 | `force` | Skip the server's 30-minute cache |
 
 ```json
 {
-  "current_version": "1.1.5",
-  "latest_version": "1.1.6",
+  "current_version": "1.0.0",
+  "latest_version": "1.0.1",
   "update_available": true,
-  "release_url": "https://github.com/SidPad03/unified-mcp-gateway/releases/tag/gateway-v1.1.6",
+  "release_url": "https://github.com/SidPad03/unified-mcp-gateway/releases/tag/gateway-v1.0.1",
   "checked_at": "2026-08-06T10:00:00Z",
   "source_repo": "SidPad03/unified-mcp-gateway",
   "error": null
@@ -314,17 +301,33 @@ being up to date. Configured by `UPDATE_CHECK_REPO`, `UPDATE_CHECK_DISABLED`, an
 
 ---
 
-## Agent releases
+## Agent sign-in
 
-Used by the agent's self-update mechanism. The gateway proxies a git forge's
-release API — see `RELEASE_PROXY_URL` in the
-[Configuration Reference](configuration.md).
+How the macOS agent obtains its credential: OAuth 2.0 authorization code with
+PKCE (RFC 7636), shaped for a native app the way RFC 8252 recommends. See
+[Agent Desktop App §8a](agent-desktop-app.md#8a-sign-in) for the full flow and
+its security properties.
 
-| Endpoint | Returns |
-|----------|---------|
-| `GET /api/v1/agent/releases` | All agent releases (tags matching `agent-v*`) |
-| `GET /api/v1/agent/releases/latest` | Latest agent release metadata |
-| `GET /api/v1/agent/releases/{tag}/download?arch={target}` | Streams the binary for a target triple |
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `GET /api/v1/agent/authorize` | none | The approval page. Query: `agent_id`, `redirect_uri`, `state`, `code_challenge`, `code_challenge_method=S256` |
+| `POST /api/v1/agent/authorize/approve` | JWT | Mints an `mcpgw_` key for the caller and returns `{ redirect_uri }` carrying a one-time code |
+| `POST /api/v1/agent/token` | none | Exchanges `{ code, code_verifier }` for `{ api_key, agent_id, username, user_id, is_owner }` |
+
+`/agent/token` is unauthenticated by design: the PKCE verifier *is* the proof,
+and it is known only to the app instance that started the flow. Codes are
+single-use and expire after five minutes.
+
+`redirect_uri` is allow-listed to `mcp-gateway-agent://auth/callback` or an
+`http://127.0.0.1:<port>` loopback address. Anything else is rejected — an open
+redirector here would hand the authorization code to whoever asked for it.
+
+Any authenticated user may authorize an agent, but only for themselves.
+`POST /api-keys` stays owner-only because it can mint a key for any user.
+
+> **Removed in 1.0.0.** `GET /api/v1/agent/releases*` — the release proxy the
+> terminal agent used for self-update. The macOS app updates itself from GitHub
+> Releases without the gateway's involvement.
 
 ---
 

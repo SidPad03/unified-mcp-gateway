@@ -1,23 +1,35 @@
 import { useState, useEffect, useRef } from 'react';
 import { api, Policy, Role } from '@/lib/api';
-import { Plus, Trash2, Edit3, X, ShieldCheck, ShieldOff, GripVertical } from 'lucide-react';
+import { Edit3, GripVertical, Plus, Shield, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { SUPPORTED_APPS, APP_LABELS, type AppSlug } from '@/lib/connectors';
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  ConfirmModal,
+  EmptyState,
+  Field,
+  IconButton,
+  Input,
+  Label,
+  Loading,
+  Modal,
+  Mono,
+  PageHeader,
+  RISK_LEVELS,
+  RiskBadge,
+  Select,
+  Toggle,
+  Tone,
+} from '@/components/ui';
 
-const DECISION_CONFIG: Record<string, { icon: typeof ShieldCheck; color: string; bg: string; label: string }> = {
-  allow: { icon: ShieldCheck, color: 'text-success', bg: 'bg-success/10', label: 'Allow' },
-  deny: { icon: ShieldOff, color: 'text-danger', bg: 'bg-danger/10', label: 'Deny' },
-};
-
-const ALL_RISK_CATEGORIES = ['read', 'write', 'admin', 'destructive', 'execute', 'unclassified'];
-
-const RISK_COLORS: Record<string, string> = {
-  read: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  write: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  admin: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
-  destructive: 'bg-red-500/10 text-red-400 border-red-500/20',
-  execute: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  unclassified: 'bg-gray-500/10 text-gray-400 border-gray-500/20',
+const DECISION: Record<string, { tone: Tone; label: string }> = {
+  allow: { tone: 'ok', label: 'Allow' },
+  deny: { tone: 'deny', label: 'Deny' },
+  require_approval: { tone: 'warn', label: 'Require approval' },
+  conditional: { tone: 'warn', label: 'Conditional' },
 };
 
 export default function PolicyEditor() {
@@ -26,6 +38,7 @@ export default function PolicyEditor() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
+  const [deleting, setDeleting] = useState<Policy | null>(null);
   const [form, setForm] = useState({
     name: '',
     priority: 100,
@@ -49,10 +62,7 @@ export default function PolicyEditor() {
 
   const loadData = async () => {
     try {
-      const [policyData, roleData] = await Promise.all([
-        api.getPolicies(),
-        api.getRoles(),
-      ]);
+      const [policyData, roleData] = await Promise.all([api.getPolicies(), api.getRoles()]);
       setPolicies(policyData);
       setRoles(roleData);
       setPageError('');
@@ -65,7 +75,16 @@ export default function PolicyEditor() {
 
   const openCreate = () => {
     setEditingPolicy(null);
-    setForm({ name: '', priority: 0, decision: 'deny', reason: '', tool_pattern: '*', role_ids: [], risk_categories: [], application_match: '' });
+    setForm({
+      name: '',
+      priority: 0,
+      decision: 'deny',
+      reason: '',
+      tool_pattern: '*',
+      role_ids: [],
+      risk_categories: [],
+      application_match: '',
+    });
     setError('');
     setShowModal(true);
   };
@@ -122,12 +141,15 @@ export default function PolicyEditor() {
     }
   };
 
-  const deletePolicy = async (id: string) => {
+  const deletePolicy = async () => {
+    if (!deleting) return;
     try {
-      await api.deletePolicy(id);
+      await api.deletePolicy(deleting.policy_id);
+      setDeleting(null);
       loadData();
     } catch (e: any) {
       setPageError(e.message || 'Failed to delete policy');
+      setDeleting(null);
     }
   };
 
@@ -140,41 +162,32 @@ export default function PolicyEditor() {
     }
   };
 
-  const toggleRole = (roleId: string) => {
+  const toggleRole = (roleId: string) =>
     setForm(prev => ({
       ...prev,
       role_ids: prev.role_ids.includes(roleId)
         ? prev.role_ids.filter(id => id !== roleId)
         : [...prev.role_ids, roleId],
     }));
-  };
 
-  const toggleRisk = (cat: string) => {
+  const toggleRisk = (cat: string) =>
     setForm(prev => ({
       ...prev,
       risk_categories: prev.risk_categories.includes(cat)
         ? prev.risk_categories.filter(c => c !== cat)
         : [...prev.risk_categories, cat],
     }));
-  };
 
   const handleDrop = async (fromIdx: number, toIdx: number) => {
     if (fromIdx === toIdx) return;
     const reordered = [...policies];
     const [moved] = reordered.splice(fromIdx, 1);
     reordered.splice(toIdx, 0, moved);
-    // Reassign priorities sequentially
-    const updates: Promise<unknown>[] = [];
-    reordered.forEach((p, i) => {
-      const newPriority = i + 1;
-      if (p.priority !== newPriority) {
-        updates.push(api.updatePolicy(p.policy_id, { priority: newPriority }));
-      }
-    });
     // Optimistic update
     setPolicies(reordered.map((p, i) => ({ ...p, priority: i + 1 })));
     try {
-      // Update one at a time to avoid priority conflicts
+      // Two passes: priorities are unique, so park everything out of the way
+      // before assigning the final values, or the first write collides.
       for (const p of reordered) {
         const newPriority = reordered.indexOf(p) + 1;
         if (p.priority !== newPriority) {
@@ -193,41 +206,46 @@ export default function PolicyEditor() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-lg font-semibold text-white">Policy Rules</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            Policies are bound to roles. Lower priority = checked first. Filter by tool pattern and/or risk level.
-          </p>
-        </div>
-        <button
-          onClick={openCreate}
-          className="flex items-center gap-2 px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          Add Policy
-        </button>
-      </div>
+      <PageHeader
+        title="Policies"
+        description="Rules are evaluated in order and the first match wins, so the row above always beats the row below. Drag to reorder."
+        actions={
+          <Button variant="primary" icon={Plus} onClick={openCreate}>
+            Add policy
+          </Button>
+        }
+      />
 
       {pageError && (
-        <div className="mb-4 px-4 py-3 bg-danger/10 border border-danger/20 rounded-lg flex items-center justify-between">
-          <p className="text-sm text-danger">{pageError}</p>
-          <button onClick={() => setPageError('')} className="text-danger/60 hover:text-danger">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        <Banner tone="deny" onDismiss={() => setPageError('')} className="mb-4">
+          {pageError}
+        </Banner>
       )}
 
-      {/* Policy list */}
-      <div className="space-y-2">
-        {loading ? (
-          <div className="bg-surface border border-border rounded-xl p-12 text-center text-gray-500 text-sm">Loading policies...</div>
-        ) : policies.length === 0 ? (
-          <div className="bg-surface border border-border rounded-xl p-12 text-center text-gray-500 text-sm">No policies defined</div>
-        ) : (
-          policies.map((policy, idx) => {
-            const config = DECISION_CONFIG[policy.decision] || DECISION_CONFIG.allow;
-            const Icon = config.icon;
+      {loading ? (
+        <Card>
+          <Loading label="Loading policies..." />
+        </Card>
+      ) : policies.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={Shield}
+            title="No policies defined"
+            message="Without a policy, every role falls back to its default decision. Add a rule to constrain what the AI clients can reach."
+            action={
+              <Button variant="primary" icon={Plus} onClick={openCreate}>
+                Add policy
+              </Button>
+            }
+          />
+        </Card>
+      ) : (
+        <div className="bg-panel border border-line rounded-card shadow-[var(--shadow-card)] overflow-hidden">
+          {policies.map((policy, idx) => {
+            const decision = DECISION[policy.decision] || DECISION.allow;
+            // A disabled rule is not evaluated, so its rail goes dark rather
+            // than showing a decision it is not making.
+            const tone: Tone = policy.is_active ? decision.tone : 'neutral';
             return (
               <div
                 key={policy.policy_id}
@@ -264,276 +282,246 @@ export default function PolicyEditor() {
                   dragCounter.current = 0;
                 }}
                 className={clsx(
-                  'bg-surface border rounded-xl p-4 transition-all',
-                  policy.is_active ? 'border-border' : 'border-border/50 opacity-60',
-                  dragIdx === idx && 'opacity-40',
-                  dropIdx === idx && dragIdx !== idx && 'border-accent/50 ring-1 ring-accent/20'
+                  'grid grid-cols-[3px_1fr] border-b border-line-soft last:border-b-0',
+                  'transition-[opacity,background-color] duration-150',
+                  !policy.is_active && 'opacity-55',
+                  dragIdx === idx && 'opacity-35',
+                  dropIdx === idx && dragIdx !== idx && 'bg-beam-wash'
                 )}
               >
-                <div className="flex items-start gap-4">
-                  <div className="flex items-center gap-2 mt-0.5 cursor-grab active:cursor-grabbing">
-                    <GripVertical className="w-4 h-4 text-gray-600 hover:text-gray-400" />
-                    <span className="text-xs text-gray-500 font-mono w-8">#{policy.priority}</span>
-                  </div>
-
-                  <div className={clsx('w-8 h-8 rounded-lg flex items-center justify-center shrink-0', config.bg)}>
-                    <Icon className={clsx('w-4 h-4', config.color)} />
+                <div
+                  style={{
+                    background:
+                      tone === 'ok'
+                        ? 'var(--beam)'
+                        : tone === 'deny'
+                          ? 'var(--deny)'
+                          : tone === 'warn'
+                            ? 'var(--warn)'
+                            : 'var(--line-strong)',
+                  }}
+                />
+                <div className="flex items-start gap-3 px-3.5 py-3">
+                  <div className="flex items-center gap-2 pt-0.5 cursor-grab active:cursor-grabbing shrink-0">
+                    <GripVertical className="w-3.5 h-3.5 text-ink-4" />
+                    <Mono className="text-2xs text-ink-4 w-6">{policy.priority}</Mono>
                   </div>
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium text-white">{policy.name}</span>
-                      <span className={clsx('text-xs font-medium px-1.5 py-0.5 rounded', config.bg, config.color)}>
-                        {config.label}
-                      </span>
-                      {!policy.is_active && (
-                        <span className="text-xs text-gray-500 bg-surface-active px-1.5 py-0.5 rounded">disabled</span>
-                      )}
+                      <span className="text-xs font-medium text-ink">{policy.name}</span>
+                      <Badge tone={decision.tone} dot>
+                        {decision.label}
+                      </Badge>
+                      {!policy.is_active && <Badge>disabled</Badge>}
                     </div>
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <code className="text-xs text-accent bg-accent/10 px-1.5 py-0.5 rounded font-mono">
+
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                      <code className="text-micro font-mono text-ink-2 bg-inset border border-line px-1.5 py-0.5 rounded-[4px]">
                         {policy.tool_pattern}
                       </code>
-                      {policy.risk_categories && policy.risk_categories.length > 0 && (
-                        policy.risk_categories.map(cat => (
-                          <span key={cat} className={clsx('text-xs px-1.5 py-0.5 rounded-full border', RISK_COLORS[cat] || RISK_COLORS.unclassified)}>
-                            {cat}
-                          </span>
-                        ))
-                      )}
-                      {(!policy.risk_categories || policy.risk_categories.length === 0) && (
-                        <span className="text-xs text-gray-600 italic">all risks</span>
+                      {policy.risk_categories?.length > 0 ? (
+                        policy.risk_categories.map(cat => <RiskBadge key={cat} risk={cat} />)
+                      ) : (
+                        <span className="text-micro text-ink-4 italic">all risks</span>
                       )}
                       {policy.application_match && (
-                        <span className="text-xs text-violet-400 bg-violet-500/10 px-1.5 py-0.5 rounded-full border border-violet-500/20">
-                          app: {APP_LABELS[policy.application_match as AppSlug] || policy.application_match}
-                        </span>
+                        <Badge>
+                          {APP_LABELS[policy.application_match as AppSlug] ||
+                            policy.application_match}
+                        </Badge>
                       )}
                     </div>
+
                     {policy.reason && (
-                      <p className="text-xs text-gray-500 mt-1">{policy.reason}</p>
+                      <p className="text-2xs text-ink-3 mt-1.5">{policy.reason}</p>
                     )}
-                    {policy.role_names && policy.role_names.length > 0 && (
-                      <div className="flex gap-1 mt-2 flex-wrap">
+
+                    {policy.role_names?.length > 0 && (
+                      <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                        <Label>Roles</Label>
                         {policy.role_names.map(role => (
-                          <span key={role} className="text-xs text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">
-                            {role}
-                          </span>
+                          <Badge key={role}>{role}</Badge>
                         ))}
                       </div>
                     )}
                   </div>
 
                   <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      onClick={() => togglePolicy(policy)}
-                      className={clsx('text-xs px-2 py-1 rounded transition-colors',
-                        policy.is_active ? 'text-gray-400 hover:bg-surface-hover' : 'text-success hover:bg-success/10'
-                      )}
-                    >
-                      {policy.is_active ? 'Disable' : 'Enable'}
-                    </button>
-                    <button
-                      onClick={() => openEdit(policy)}
-                      className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-surface-hover rounded-md transition-colors"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => deletePolicy(policy.policy_id)}
-                      className="p-1.5 text-gray-500 hover:text-danger hover:bg-danger/10 rounded-md transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <Toggle
+                      checked={policy.is_active}
+                      onChange={() => togglePolicy(policy)}
+                      label={`${policy.is_active ? 'Disable' : 'Enable'} ${policy.name}`}
+                    />
+                    <IconButton icon={Edit3} label="Edit policy" onClick={() => openEdit(policy)} />
+                    <IconButton
+                      icon={Trash2}
+                      label="Delete policy"
+                      onClick={() => setDeleting(policy)}
+                      className="hover:text-deny"
+                    />
                   </div>
                 </div>
               </div>
             );
-          })
-        )}
-      </div>
-
-      {/* Create/Edit modal */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-surface border border-border rounded-2xl p-6 w-full max-w-lg">
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="text-base font-semibold text-white">
-                {editingPolicy ? 'Edit Policy' : 'Create Policy'}
-              </h3>
-              <button onClick={() => setShowModal(false)} className="text-gray-500 hover:text-gray-300">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              {editingPolicy ? (
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Name</label>
-                    <input
-                      type="text"
-                      value={form.name}
-                      onChange={e => setForm({ ...form, name: e.target.value })}
-                      className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white focus:outline-none focus:border-accent/50"
-                      placeholder="Policy name"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Priority</label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={form.priority}
-                      onChange={e => setForm({ ...form, priority: parseInt(e.target.value) || 1 })}
-                      className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white focus:outline-none focus:border-accent/50"
-                    />
-                    <p className="text-xs text-gray-600 mt-1">Must be unique across all policies</p>
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Name</label>
-                  <input
-                    type="text"
-                    value={form.name}
-                    onChange={e => setForm({ ...form, name: e.target.value })}
-                    className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white focus:outline-none focus:border-accent/50"
-                    placeholder="Policy name"
-                  />
-                  <p className="text-xs text-gray-600 mt-1">Priority is auto-assigned</p>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Tool Pattern</label>
-                <input
-                  type="text"
-                  value={form.tool_pattern}
-                  onChange={e => setForm({ ...form, tool_pattern: e.target.value })}
-                  className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white font-mono focus:outline-none focus:border-accent/50"
-                  placeholder="filesystem.*"
-                />
-                <p className="text-xs text-gray-600 mt-1">
-                  Glob syntax: <code className="text-gray-500">*</code> matches all, <code className="text-gray-500">backend.*</code> matches a backend, <code className="text-gray-500">*.read_*</code> matches pattern
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Application Match</label>
-                <select
-                  value={form.application_match}
-                  onChange={e => setForm({ ...form, application_match: e.target.value })}
-                  className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-gray-300 focus:outline-none focus:border-accent/50"
-                >
-                  <option value="">All applications</option>
-                  {SUPPORTED_APPS.map(app => (
-                    <option key={app} value={app}>{APP_LABELS[app]}</option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-600 mt-1">
-                  Restrict this policy to a specific AI client. Leave as "All" to match every app.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Risk Levels</label>
-                <p className="text-xs text-gray-600 mb-2">
-                  Select which risk levels this policy applies to. Leave empty to match all risk levels.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {ALL_RISK_CATEGORIES.map(cat => (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => toggleRisk(cat)}
-                      className={clsx(
-                        'px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
-                        form.risk_categories.includes(cat)
-                          ? RISK_COLORS[cat] + ' ring-1 ring-white/20'
-                          : 'bg-[#0a0a0f] border-border text-gray-600 hover:border-border-hover'
-                      )}
-                    >
-                      {cat}
-                    </button>
-                  ))}
-                </div>
-                {form.risk_categories.length === 0 && (
-                  <p className="text-xs text-gray-600 mt-1.5 italic">All risk levels (no filter)</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Decision</label>
-                <select
-                  value={form.decision}
-                  onChange={e => setForm({ ...form, decision: e.target.value })}
-                  className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-gray-300 focus:outline-none focus:border-accent/50"
-                >
-                  <option value="allow">Allow</option>
-                  <option value="deny">Deny</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Reason</label>
-                <input
-                  type="text"
-                  value={form.reason}
-                  onChange={e => setForm({ ...form, reason: e.target.value })}
-                  className="w-full px-3 py-2 bg-[#0a0a0f] border border-border rounded-lg text-sm text-white focus:outline-none focus:border-accent/50"
-                  placeholder="Human-readable reason for this policy"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Roles</label>
-                <div className="space-y-2 mt-1">
-                  {roles.map(role => (
-                    <label key={role.role_id} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={form.role_ids.includes(role.role_id)}
-                        onChange={() => toggleRole(role.role_id)}
-                        className="rounded border-border bg-[#0a0a0f]"
-                      />
-                      <span className="text-sm text-gray-300">{role.name}</span>
-                      {role.is_system && (
-                        <span className="text-xs text-gray-600">(system)</span>
-                      )}
-                    </label>
-                  ))}
-                  {roles.length === 0 && (
-                    <p className="text-xs text-gray-600">No roles available</p>
-                  )}
-                </div>
-              </div>
-
-              {error && (
-                <div className="px-3 py-2 bg-danger/10 border border-danger/20 rounded-lg">
-                  <p className="text-xs text-danger">{error}</p>
-                </div>
-              )}
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  onClick={() => setShowModal(false)}
-                  className="flex-1 py-2 bg-surface-hover border border-border text-gray-300 text-sm rounded-lg hover:bg-surface-active transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={savePolicy}
-                  disabled={isSubmitting}
-                  className="flex-1 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                >
-                  {isSubmitting ? 'Saving…' : `${editingPolicy ? 'Update' : 'Create'} Policy`}
-                </button>
-              </div>
-            </div>
-          </div>
+          })}
         </div>
       )}
+
+      <Modal
+        open={showModal}
+        onClose={() => setShowModal(false)}
+        title={editingPolicy ? 'Edit policy' : 'Create policy'}
+        description="A policy matches on tool pattern, risk level and application, then allows or denies."
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setShowModal(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={savePolicy} loading={isSubmitting}>
+              {editingPolicy ? 'Save changes' : 'Create policy'}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className={clsx('grid gap-3', editingPolicy ? 'grid-cols-[1fr_100px]' : 'grid-cols-1')}>
+            <Field label="Name" hint={editingPolicy ? undefined : 'Priority is assigned automatically.'}>
+              <Input
+                value={form.name}
+                onChange={e => setForm({ ...form, name: e.target.value })}
+                placeholder="Block destructive tools for viewers"
+                autoFocus
+              />
+            </Field>
+            {editingPolicy && (
+              <Field label="Priority" hint="Must be unique.">
+                <Input
+                  type="number"
+                  min={1}
+                  value={form.priority}
+                  onChange={e => setForm({ ...form, priority: parseInt(e.target.value) || 1 })}
+                />
+              </Field>
+            )}
+          </div>
+
+          <Field
+            label="Tool pattern"
+            hint={
+              <>
+                Glob syntax. <Mono>*</Mono> matches everything, <Mono>github__*</Mono> one backend,{' '}
+                <Mono>*__delete_*</Mono> a verb.
+              </>
+            }
+          >
+            <Input
+              value={form.tool_pattern}
+              onChange={e => setForm({ ...form, tool_pattern: e.target.value })}
+              placeholder="*"
+              className="font-mono"
+            />
+          </Field>
+
+          <Field
+            label="Application"
+            hint="Restrict this rule to one AI client, or leave it matching every app."
+          >
+            <Select
+              value={form.application_match}
+              onChange={e => setForm({ ...form, application_match: e.target.value })}
+              className="w-full"
+            >
+              <option value="">All applications</option>
+              {SUPPORTED_APPS.map(app => (
+                <option key={app} value={app}>
+                  {APP_LABELS[app]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Field
+            label="Risk levels"
+            hint={
+              form.risk_categories.length === 0
+                ? 'None selected. The rule matches every risk level.'
+                : undefined
+            }
+          >
+            <div className="flex flex-wrap gap-1.5">
+              {RISK_LEVELS.map(cat => (
+                <RiskBadge
+                  key={cat}
+                  risk={cat}
+                  active={form.risk_categories.includes(cat)}
+                  onClick={() => toggleRisk(cat)}
+                  className={clsx(!form.risk_categories.includes(cat) && 'opacity-50')}
+                />
+              ))}
+            </div>
+          </Field>
+
+          <Field label="Decision">
+            <Select
+              value={form.decision}
+              onChange={e => setForm({ ...form, decision: e.target.value })}
+              className="w-full"
+            >
+              <option value="allow">Allow</option>
+              <option value="deny">Deny</option>
+            </Select>
+          </Field>
+
+          <Field label="Reason" hint="Shown in the audit trail when this rule is what stopped a call.">
+            <Input
+              value={form.reason}
+              onChange={e => setForm({ ...form, reason: e.target.value })}
+              placeholder="Destructive tools require an approved client"
+            />
+          </Field>
+
+          <Field label="Roles" hint="Which roles this rule is bound to.">
+            <div className="space-y-1.5 mt-1">
+              {roles.map(role => (
+                <label
+                  key={role.role_id}
+                  className="flex items-center gap-2.5 cursor-pointer py-0.5 group"
+                >
+                  <input
+                    type="checkbox"
+                    checked={form.role_ids.includes(role.role_id)}
+                    onChange={() => toggleRole(role.role_id)}
+                  />
+                  <span className="text-xs text-ink-2 group-hover:text-ink transition-colors">
+                    {role.name}
+                  </span>
+                  {role.is_system && <Badge>system</Badge>}
+                </label>
+              ))}
+              {roles.length === 0 && <p className="text-2xs text-ink-4">No roles available.</p>}
+            </div>
+          </Field>
+
+          {error && <Banner tone="deny">{error}</Banner>}
+        </div>
+      </Modal>
+
+      <ConfirmModal
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        onConfirm={deletePolicy}
+        title="Delete this policy?"
+        description="Calls that matched it will fall through to the next rule, or to the role's default decision."
+        confirmLabel="Delete policy"
+      >
+        {deleting && (
+          <p className="text-xs text-ink-2">
+            <span className="text-ink font-medium">{deleting.name}</span> ·{' '}
+            <Mono className="text-ink-3">{deleting.tool_pattern}</Mono>
+          </p>
+        )}
+      </ConfirmModal>
     </div>
   );
 }

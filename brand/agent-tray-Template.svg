@@ -3,19 +3,21 @@
 
   This is a TEMPLATE image: pure black plus alpha, nothing else. macOS inverts it
   for light menu bars and highlights it on click. The `Template` suffix in the
-  filename is load-bearing — AppKit keys off it (or set `is_template` on the
-  Tauri tray icon). A coloured tray icon will look wrong on a light menu bar and
-  will not highlight when the menu opens.
+  filename is load-bearing — AppKit keys off it to decide both. A coloured tray
+  icon looks wrong on a light menu bar and does not highlight when the menu opens.
 
-  Stroke is 2.2 rather than 2 so the mark holds its weight at 22 pt.
+  Stroke is 2.4 rather than the mark's 2.2: the menu bar renders at 22 pt against
+  a busy background, and the standard cut goes weak there. The aperture still
+  clears — 4.6 units of counter at 2.4, about 4 px at 22 pt.
+
   Export at 22x22 (@1x) and 44x44 (@2x).
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
-     fill="none" stroke="#000000" stroke-width="2.2"
+     fill="none" stroke="#000000" stroke-width="2.4"
      stroke-linecap="round" stroke-linejoin="round">
-  <path d="M2.5 6.5h3L10 12"/>
-  <path d="M2.5 12h7.5"/>
-  <path d="M2.5 17.5h3L10 12"/>
-  <path d="M14 8 18 12l-4 4-4-4Z"/>
-  <path d="M18 12h3.5"/>
+  <path d="M2 6.5H5L9 12"/>
+  <path d="M2 12H9"/>
+  <path d="M2 17.5H5L9 12"/>
+  <path d="M9 12L13 8L17 12L13 16Z"/>
+  <path d="M17 12H22"/>
 </svg>

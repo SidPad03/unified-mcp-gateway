@@ -7,7 +7,7 @@ and other MCP clients) and your MCP tool servers, providing:
 - **Single endpoint** — one MCP URL for all your tools
 - **Security** — authentication, role-based access control, and policy enforcement
 - **Visibility** — a full audit trail of every tool call, with metrics and dashboards
-- **Remote access** — connect MCP servers on any machine via the Gateway Agent
+- **Remote access** — connect your Mac's MCP servers via the Gateway Agent app
 
 ## Contents
 
@@ -18,9 +18,9 @@ and other MCP clients) and your MCP tool servers, providing:
 | [Configuration Reference](configuration.md) | Environment variables, backend transports, and the agent config file |
 | [Authentication & Authorization](authentication.md) | JWTs, API keys, roles, and the policy engine |
 | [API Reference](api-reference.md) | Every REST endpoint under `/api/v1`, plus the MCP and WebSocket endpoints |
-| [MCP Gateway Agent](agent.md) | Installing, configuring, and running the remote agent |
-| [Agent Architecture](agent-architecture.md) | The agent↔server WebSocket protocol and connection lifecycle |
-| [Agent Desktop App](agent-desktop-app.md) | **Planned** — the macOS app that replaces the terminal agent |
+| [MCP Gateway Agent](agent.md) | Installing and using the macOS agent app |
+| [Agent Architecture](agent-architecture.md) | The agent↔server WebSocket protocol, supervision, and connection lifecycle |
+| [Agent Desktop App](agent-desktop-app.md) | The agent app's design, the defects it fixes, and the decisions behind it |
 
 For a condensed overview of the same system design, see
 [ARCHITECTURE.md](../ARCHITECTURE.md) at the repository root. For vulnerability

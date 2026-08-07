@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>MCPGatewayAgent</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.mcpgateway.agent</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>MCP Gateway Agent</string>
+	<key>CFBundleDisplayName</key>
+	<string>MCP Gateway Agent</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- build.sh rewrites both of these from the version it is given. -->
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.0</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+
+	<!-- Liquid Glass. There is no shim for pre-26, and the whole chrome depends
+	     on it, so this is a hard floor rather than a soft one. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+
+	<!-- The app owns the local MCP backends. It has to be able to stop them
+	     before it goes away, so it cannot be terminated abruptly. -->
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+
+	<!-- Where ASWebAuthenticationSession sends the authorization code back.
+	     Must match APP_REDIRECT_URI in
+	     mcp-gateway-server/src/api/agent_auth.rs. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.mcpgateway.agent.auth</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>mcp-gateway-agent</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- Updates. build.sh injects the public key when one is configured; with
+	     it empty the app reports updates and declines to install them. -->
+	<key>MCPGAUpdatePublicKey</key>
+	<string></string>
+	<key>MCPGAAppcastURL</key>
+	<string>https://github.com/SidPad03/unified-mcp-gateway/releases/download/agent-latest/appcast.json</string>
+
+	<key>NSHumanReadableCopyright</key>
+	<string>Apache-2.0</string>
+</dict>
+</plist>

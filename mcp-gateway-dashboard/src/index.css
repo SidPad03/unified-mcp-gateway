@@ -1,66 +1,520 @@
 @import "tailwindcss";
 
+/* ── Type ────────────────────────────────────────────────────────────────
+   IBM Plex, self-hosted. The gateway is meant to run air-gapped, so there is
+   never a font CDN link here — these are bundled into the image.
+
+   Plex Sans is loaded as one variable file (latin only, ~40 kB) rather than via
+   @fontsource's wght.css, which would bundle eight subsets we never serve. Plex
+   Mono has no variable cut, so it comes in as three static latin weights.
+
+   The pairing is the point: Plex Mono shares the sans's skeleton, so identifiers
+   set in mono sit inside a sentence without a seam. See brand/README.md — every
+   identifier in this product is mono, and that is a rule, not a flourish.
+   ─────────────────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: "IBM Plex Sans Variable";
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+  src: url("../node_modules/@fontsource-variable/ibm-plex-sans/files/ibm-plex-sans-latin-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+@import "@fontsource/ibm-plex-mono/latin-500.css";
+@import "@fontsource/ibm-plex-mono/latin-600.css";
+
+/* ── The room ────────────────────────────────────────────────────────────
+   "Signal Desk": a cold instrument you read, with one thing alive on it.
+
+   Every surface is the same hue (a cold blue-slate, ~217°); only lightness
+   moves, in steps of two or three percent. You should feel the stack rather
+   than see it. Inputs go *darker* than the surface they sit on in both themes —
+   an input receives content, so it is inset, not raised.
+
+   The accent is phosphor, and it is also the healthy state. In a gateway
+   "traffic is flowing and verified" and "the brand" are the same statement.
+   That makes green the resting state of the whole interface, which is what
+   gives amber and red their force. Colour is roughly 10% of any screen and it
+   always carries information — there is no decorative colour in here.
+
+   Themes are driven by data-theme on <html>, which index.html sets before first
+   paint. It is always an explicit "light" or "dark" — never absent — so this
+   file never has to duplicate a block inside a prefers-color-scheme query.
+   ─────────────────────────────────────────────────────────────────────── */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --void: #f1f4f9;
+  --panel: #ffffff;
+  --raised: #f6f8fc;
+  --high: #ffffff;
+  --inset: #edf1f7;
+
+  --line: rgba(15, 35, 70, 0.11);
+  --line-soft: rgba(15, 35, 70, 0.07);
+  --line-strong: rgba(15, 35, 70, 0.2);
+
+  --text: #0d131c;
+  --text-2: #46536b;
+  --text-3: #6b7a93;
+  --text-4: #98a4b8;
+
+  --beam: #0b8f63;
+  --warn: #a2670c;
+  --deny: #c8323f;
+
+  --beam-wash: rgba(11, 143, 99, 0.09);
+  --warn-wash: rgba(162, 103, 12, 0.09);
+  --deny-wash: rgba(200, 50, 63, 0.08);
+  --neutral-wash: rgba(15, 35, 70, 0.05);
+
+  --beam-edge: rgba(11, 143, 99, 0.22);
+  --warn-edge: rgba(162, 103, 12, 0.22);
+  --deny-edge: rgba(200, 50, 63, 0.2);
+
+  /* The primary action is a near-black fill on light, near-white on dark —
+     never the accent. That is what keeps the accent scarce enough to mean
+     "alive" rather than "clickable". */
+  --solid: #10151e;
+  --solid-hover: #000000;
+  --on-solid: #f7f9fc;
+
+  --scrim: rgba(15, 25, 45, 0.4);
+
+  /* Light carries elevation with shadow; dark carries it with a border. Same
+     hierarchy, different physics. */
+  --shadow-card: 0 0 0 1px rgba(15, 35, 70, 0.05), 0 1px 2px -1px rgba(15, 35, 70, 0.08),
+    0 2px 4px rgba(15, 35, 70, 0.04);
+  --shadow-overlay: 0 0 0 1px rgba(15, 35, 70, 0.08), 0 16px 40px -12px rgba(15, 35, 70, 0.24),
+    0 4px 10px rgba(15, 35, 70, 0.06);
+  --shadow-pop: 0 0 0 1px rgba(15, 35, 70, 0.07), 0 8px 20px -6px rgba(15, 35, 70, 0.18);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --void: #06080b;
+  --panel: #0b0e14;
+  --raised: #10141c;
+  --high: #161b25;
+  --inset: #04060a;
+
+  --line: rgba(148, 173, 214, 0.1);
+  --line-soft: rgba(148, 173, 214, 0.055);
+  --line-strong: rgba(148, 173, 214, 0.18);
+
+  --text: #e4e9f2;
+  --text-2: #9fadc4;
+  --text-3: #6b7a93;
+  --text-4: #47536a;
+
+  --beam: #3fd69b;
+  --warn: #e5a244;
+  --deny: #f25f6b;
+
+  --beam-wash: rgba(63, 214, 155, 0.1);
+  --warn-wash: rgba(229, 162, 68, 0.1);
+  --deny-wash: rgba(242, 95, 107, 0.1);
+  --neutral-wash: rgba(148, 173, 214, 0.07);
+
+  --beam-edge: rgba(63, 214, 155, 0.24);
+  --warn-edge: rgba(229, 162, 68, 0.24);
+  --deny-edge: rgba(242, 95, 107, 0.24);
+
+  --solid: #e4e9f2;
+  --solid-hover: #ffffff;
+  --on-solid: #06080b;
+
+  --scrim: rgba(2, 4, 7, 0.72);
+
+  /* Depth shadows do not read on near-black. Dark gets a ring instead. */
+  --shadow-card: none;
+  --shadow-overlay: 0 0 0 1px rgba(148, 173, 214, 0.13), 0 20px 50px -14px rgba(0, 0, 0, 0.8);
+  --shadow-pop: 0 0 0 1px rgba(148, 173, 214, 0.11), 0 10px 26px -8px rgba(0, 0, 0, 0.7);
+}
+
+@theme inline {
+  --color-void: var(--void);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-high: var(--high);
+  --color-inset: var(--inset);
+
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-line-strong: var(--line-strong);
+
+  --color-ink: var(--text);
+  --color-ink-2: var(--text-2);
+  --color-ink-3: var(--text-3);
+  --color-ink-4: var(--text-4);
+
+  --color-beam: var(--beam);
+  --color-warn: var(--warn);
+  --color-deny: var(--deny);
+
+  --color-beam-wash: var(--beam-wash);
+  --color-warn-wash: var(--warn-wash);
+  --color-deny-wash: var(--deny-wash);
+  --color-neutral-wash: var(--neutral-wash);
+
+  --color-beam-edge: var(--beam-edge);
+  --color-warn-edge: var(--warn-edge);
+  --color-deny-edge: var(--deny-edge);
+
+  --color-solid: var(--solid);
+  --color-solid-hover: var(--solid-hover);
+  --color-on-solid: var(--on-solid);
+  --color-scrim: var(--scrim);
+}
+
+/* The colour block above is `inline` so its utilities reference the flipping
+   variables rather than copying a value. Everything below is fixed regardless of
+   theme, so it goes in a plain `@theme` — which also emits the variables on
+   :root, where arbitrary values like `duration-[...]` and the keyframes can
+   reach them. `@theme inline` does not emit anything. */
 @theme {
-  --color-surface: #0f0f17;
-  --color-surface-hover: #16161f;
-  --color-surface-active: #1c1c28;
-  --color-border: #1e1e2e;
-  --color-border-hover: #2a2a3e;
-  --color-accent: #7c5cfc;
-  --color-accent-hover: #6a4de0;
-  --color-success: #22c55e;
-  --color-warning: #f59e0b;
-  --color-danger: #ef4444;
-  --color-info: #3b82f6;
+  --font-sans: "IBM Plex Sans Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* A minor third off a 13 px base — dense and calm. Whole pixels only; at
+     these sizes a fractional step is just blur. Weight and colour do most of
+     the hierarchy work, so the steps stay tight. */
+  --text-micro: 0.625rem; /* 10 */
+  --text-micro--line-height: 1.4;
+  --text-2xs: 0.6875rem; /* 11 */
+  --text-2xs--line-height: 1.45;
+  --text-xs: 0.75rem; /* 12 */
+  --text-xs--line-height: 1.45;
+  --text-sm: 0.8125rem; /* 13 — base */
+  --text-sm--line-height: 1.5;
+  --text-base: 0.8125rem;
+  --text-base--line-height: 1.5;
+  --text-md: 0.9375rem; /* 15 */
+  --text-md--line-height: 1.4;
+  --text-lg: 1.125rem; /* 18 */
+  --text-lg--line-height: 1.3;
+  --text-xl: 1.375rem; /* 22 */
+  --text-xl--line-height: 1.25;
+  --text-2xl: 1.625rem; /* 26 */
+  --text-2xl--line-height: 1.15;
+  --text-3xl: 2.125rem; /* 34 */
+  --text-3xl--line-height: 1.1;
+
+  /* Concentric: an inner radius is the outer minus the padding between them.
+     Nesting a 12 inside a 12 is the most visible tell of a UI nobody looked at. */
+  --radius-control: 6px;
+  --radius-row: 8px;
+  --radius-card: 12px;
+  --radius-panel: 16px;
+
+  --ease-out-quint: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-quint: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* Under 300ms, all of them. A 160ms dropdown feels more responsive than a
+     400ms one; exits stay faster and subtler than entrances. */
+  --animate-rise: rise 0.22s cubic-bezier(0.23, 1, 0.32, 1) both;
+  --animate-pop: pop 0.16s cubic-bezier(0.23, 1, 0.32, 1) both;
+  --animate-pulse-ring: pulse-ring 1.8s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+
+/* Tailwind's `dark:` normally follows prefers-color-scheme; here the theme is
+   an explicit attribute, so the variant has to follow it too. Most components
+   never need this — the tokens above already flip — but charts and a few
+   third-party surfaces do. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ── Base ───────────────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  border-color: var(--line);
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  /* cv05: the single-storey l with a tail. Plex's default l is a bare stem and
+     is easy to confuse with a 1 or an I in an identifier, which this product is
+     full of. */
+  font-feature-settings: "cv05" 1;
 }
 
-/* Smooth animated repositioning for ReactFlow nodes */
-.react-flow__node {
-  transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.react-flow__node.dragging {
-  transition: none;
-}
-
-/* New audit event slide-in */
-@keyframes fadeSlideIn {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: translateY(0); }
+h1,
+h2,
+h3,
+h4 {
+  text-wrap: balance;
+  letter-spacing: -0.02em;
 }
 
-/* Tool node staggered entry animation */
-@keyframes toolNodeEnter {
-  from { opacity: 0; transform: translateX(-24px) scale(0.92); }
-  to   { opacity: 1; transform: translateX(0) scale(1); }
-}
-.tool-node-enter {
-  animation: toolNodeEnter 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+p,
+li,
+figcaption {
+  text-wrap: pretty;
 }
 
-/* Animated edge drawing */
-@keyframes edgeDraw {
-  from { stroke-dashoffset: 200; opacity: 0; }
-  to   { stroke-dashoffset: 0; opacity: 1; }
+/* Any number that can change gets tabular figures, so the row does not jitter
+   when it updates. */
+.tnum,
+input[type="number"],
+td,
+th {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: var(--beam-wash);
+  color: var(--text);
+}
+
+/* One focus treatment everywhere, and it is never removed — only moved to
+   :focus-visible so a mouse click does not paint a ring. */
+:focus-visible {
+  outline: 2px solid var(--beam);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+
+/* …except on fields, which already answer focus with a lit border and a wash.
+   A third ring on top of those two is noise, not emphasis. */
+.field:focus-visible {
+  outline: none;
+}
+
+/* ── Scrollbars ─────────────────────────────────────────────────────────── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: #2a2a3e;
-  border-radius: 3px;
+  background: var(--line-strong);
+  border-radius: 999px;
+  /* An inset border keeps the thumb from touching the content edge. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-4);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #3a3a4e;
+/* ── Motion ─────────────────────────────────────────────────────────────
+   Under 300 ms, ease-out only, transform and opacity only. ease-in delays the
+   first frame — the one the user is watching — and reads as lag.
+   ─────────────────────────────────────────────────────────────────────── */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Nothing appears from nothing: overlays start at 0.96, never 0. */
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The one animation that carries meaning rather than polish: a live connection
+   pulses, so "connected" and a screenshot of connected are distinguishable.
+   Named pulse-ring, not ping — Tailwind ships a `ping` and redefining it here
+   would silently change every other use of it. */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  70%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+/* ── Dialog ─────────────────────────────────────────────────────────────
+   The backdrop is styled here rather than with a `backdrop:` utility. A
+   ::backdrop only inherits custom properties from its originating element in
+   recent browsers; a literal value degrades to "slightly wrong shade" instead
+   of "no scrim at all", and a modal with no scrim is a broken modal.
+   ─────────────────────────────────────────────────────────────────────── */
+
+dialog::backdrop {
+  background: rgba(15, 25, 45, 0.4);
+  backdrop-filter: blur(2px);
+  animation: scrim-in 0.16s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+:root[data-theme="dark"] dialog::backdrop {
+  background: rgba(2, 4, 7, 0.72);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Native controls ────────────────────────────────────────────────────
+   A <select> keeps its keyboard handling, its ARIA and its OS-drawn popup for
+   free; only the closed state is ours. That is worth more than a hand-rolled
+   listbox, so the field is styled and the chevron is drawn as a background
+   image rather than replacing the element.
+   ─────────────────────────────────────────────────────────────────────── */
+
+select.field {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B7A93' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  padding-right: 28px;
+}
+
+/* The OS draws the option list, and on dark it uses the page's colour-scheme.
+   Give the options explicit colours anyway — Linux/Chromium does not always. */
+select.field option {
+  background: var(--high);
+  color: var(--text);
+}
+
+input[type="search"]::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+/* A native checkbox already has the keyboard handling, the indeterminate state
+   and the ARIA. `accent-color` is the whole restyle. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--beam);
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+/* The date picker's indicator is near-black on a dark field by default. */
+:root[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+}
+
+/* Chrome paints a hard yellow over autofilled inputs. Repaint it with the
+   token colours via an inset shadow, which is the only property it does not
+   override. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text);
+  -webkit-box-shadow: 0 0 0 1000px var(--inset) inset;
+  caret-color: var(--text);
+}
+
+/* ── Third-party surfaces ───────────────────────────────────────────────
+   recharts and @xyflow/react ship their own chrome. Bind it to the tokens here
+   rather than passing colours through props at forty call sites.
+   ─────────────────────────────────────────────────────────────────────── */
+
+.recharts-cartesian-grid line {
+  stroke: var(--line-soft);
+}
+.recharts-cartesian-axis-line,
+.recharts-cartesian-axis-tick-line {
+  stroke: var(--line);
+}
+.recharts-text {
+  fill: var(--text-3);
+  font-size: 11px;
+}
+.recharts-surface:focus,
+.recharts-wrapper:focus {
+  outline: none;
+}
+.recharts-tooltip-cursor {
+  fill: var(--neutral-wash);
+}
+.recharts-legend-item-text {
+  color: var(--text-2) !important;
+  font-size: 11px;
+}
+
+.react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke-default: var(--line-strong);
+  --xy-edge-stroke-selected-default: var(--beam);
+  --xy-attribution-background-color: transparent;
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__handle {
+  border: none;
+  background: var(--line-strong);
+  width: 5px;
+  height: 5px;
+  min-width: 5px;
+  min-height: 5px;
+}
+.react-flow__controls-button {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  fill: var(--text-2);
+}
+.react-flow__controls-button:hover {
+  background: var(--raised);
+}
+.react-flow__node {
+  transition: transform 0.35s var(--ease-in-out-quint);
+}
+.react-flow__node.dragging {
+  transition: none;
 }

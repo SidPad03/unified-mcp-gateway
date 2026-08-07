@@ -1,31 +1,51 @@
 # Agent Architecture
 
-> **Partly superseded.** The wire protocol, keepalive, resync and reconnect
-> behaviour on this page survive unchanged into the macOS app. The *process*
-> model does not: the daemon, PID file and launchd/systemd service are replaced
-> by an application that owns the tunnel itself. See
-> [Agent Desktop App](agent-desktop-app.md).
+The gateway and each MCP Gateway Agent hold a persistent WebSocket between them.
+That lets local MCP backends on a user's machine — stdio processes, local HTTP
+servers — be exposed through the gateway without opening any inbound port on the
+device.
 
-The gateway and each `mcp-gateway-agent` hold a persistent WebSocket between
-them. That lets local MCP backends on a user's machine — stdio processes, local
-HTTP servers — be exposed through the gateway without opening any inbound port
-on the device.
+The agent is a macOS application (see [MCP Gateway Agent](agent.md)). It owns the
+tunnel itself: there is no daemon, no PID file, no launchd service and therefore
+no version skew between a background process and the window in front of you.
 
 ```
 ┌─────────────────────┐        WebSocket         ┌──────────────────────┐
-│   Gateway Server    │◀════════════════════════▶│    Gateway Agent     │
-│  (cloud / homelab)  │   wss://…/agent/ws        │  (macOS/Linux/Win)   │
+│   Gateway Server    │◀════════════════════════▶│  MCP Gateway Agent   │
+│  (cloud / homelab)  │   wss://…/agent/ws        │   (macOS 26 app)     │
 │                     │                           │                      │
 │  ┌───────────────┐  │                           │  ┌────────────────┐  │
 │  │ Agent Registry│  │                           │  │ Local Backends │  │
 │  │  (in-memory)  │  │                           │  │  stdio / http  │  │
-│  └───────────────┘  │                           │  └────────────────┘  │
-│  ┌───────────────┐  │                           │  ┌────────────────┐  │
-│  │  PostgreSQL   │  │                           │  │  config.toml   │  │
-│  │ (tools, etc.) │  │                           │  │ ~/.mcp-gatew…  │  │
-│  └───────────────┘  │                           │  └────────────────┘  │
-└─────────────────────┘                           └──────────────────────┘
+│  └───────────────┘  │                           │  │ + a supervisor │  │
+│  ┌───────────────┐  │                           │  └────────────────┘  │
+│  │  PostgreSQL   │  │                           │  ┌────────────────┐  │
+│  │ (tools, etc.) │  │                           │  │ config.toml +  │  │
+│  └───────────────┘  │                           │  │   Keychain     │  │
+└─────────────────────┘                           │  └────────────────┘  │
+                                                  └──────────────────────┘
 ```
+
+## Inside the app
+
+```
+   SwiftUI views  ──►  AgentModel  ──►  AgentBridge
+                          ▲                 │  mcpga_command(json) → json
+              tick, 10 Hz │                 ▼
+                    ┌─────┴─────────────────────────────┐
+                    │  mcp-gateway-agent-ffi (C ABI)    │
+                    ├───────────────────────────────────┤
+                    │  mcp-gateway-agent-core           │
+                    │  tunnel · supervisor · backends   │
+                    │  config · ring buffers            │
+                    └───────────────────────────────────┘
+```
+
+Everything the agent *does* is Rust, statically linked into the app. The C ABI
+is four functions: start, run a JSON command, free a string, shut down — plus one
+callback that delivers batched state on a ~100 ms tick. Commands block, so the
+Swift side calls them off the main thread; events arrive on a single background
+thread and are decoded there before the main actor sees them.
 
 ---
 
@@ -183,18 +203,62 @@ discards server-initiated requests (`sampling/createMessage`, `roots/list`),
 which carry ids of their own and would otherwise be mistaken for a tool result
 and desynchronise the pipe for every later call.
 
+### Supervision
+
+Every backend has a task watching it for as long as the app runs. Backends start
+**concurrently** — the tunnel connects in parallel with them, so a slow
+`tools/list` delays nothing else — and each one moves independently through
+`starting → ready`, or to `failed` if it never came up.
+
+When a process exits, the supervisor notices, withdraws that backend's tools from
+the registration, records the exit status, and restarts with a backoff of 1 s
+doubling to a cap of 30 s. A process that stayed up for a minute resets the
+backoff, so an occasional crash does not leave the next one waiting half a
+minute. Restart counts and PIDs are visible on the Backends page.
+
+Withdrawing the tools is the part that matters to callers: the gateway is
+re-registered without them, so a client is never offered a tool whose process is
+gone. Registration changes are debounced by ~500 ms, so ten backends coming up at
+launch produce one `register` frame rather than ten.
+
+Each backend's `stderr` is piped into a bounded ring buffer (5 000 lines) that
+feeds the Logs page, with secrets redacted on the way in using the same rules as
+the server's audit redactor.
+
+### PATH
+
+Backends are spawned with a `PATH` read from the user's login shell once at
+launch, falling back to a built-in list (`/opt/homebrew/bin`, `/usr/local/bin`,
+`~/.local/bin`, `~/.cargo/bin`, …).
+
+This is not incidental. An app launched from Finder inherits launchd's `PATH` —
+`/usr/bin:/bin:/usr/sbin:/sbin` — not the user's, and every MCP server people
+actually run (`uvx`, `npx`, `bun`, anything from Homebrew) lives somewhere else.
+Without it, backends that work perfectly in a terminal would fail to spawn.
+
 ---
 
 ## Security properties
 
-- **Authentication** — an `mcpgw_` API key, validated on WebSocket upgrade.
+- **Authentication** — an `mcpgw_` API key. Note that the server upgrades the
+  WebSocket *before* it validates the token and rejects a bad one with an `error`
+  frame on the open socket, so a successful handshake proves reachability and
+  nothing about the credential. Anything checking a gateway has to read the first
+  frame.
+- **Obtaining the credential** — OAuth 2.0 authorization code with PKCE, in the
+  system browser. Nobody copies a key into a config file. See
+  [Agent Desktop App §8a](agent-desktop-app.md#8a-sign-in).
 - **No inbound ports** — the agent always dials out, so the device needs no
   firewall changes or port forwarding.
 - **TLS** — connections use `wss://` via rustls. `tls_skip_verify` exists for
   self-signed certificates in development; leave it off anywhere else.
 - **Policy still applies** — agent-hosted tools are subject to the same RBAC and
   policy evaluation as any other backend, enforced before forwarding.
-- **Config at rest** — `~/.mcp-gateway-agent/config.toml` is written `0600`; it
-  holds the API key and often backend credentials.
-- **Verified updates** — self-update downloads are checksum-verified before
-  replacing the running binary.
+- **Credential at rest** — the API key is in the macOS Keychain, not on disk.
+  `~/.mcp-gateway-agent/config.toml` is written atomically with `0600`; it holds
+  backend configuration, which often includes backend credentials of its own.
+- **Arguments are never logged** — the agent logs a tool call's *argument count*,
+  never the arguments. The gateway stores hashes, not payloads.
+- **Verified updates** — the update archive carries an Ed25519 signature checked
+  against a public key embedded in the app. A build without one reports updates
+  and refuses to install them.

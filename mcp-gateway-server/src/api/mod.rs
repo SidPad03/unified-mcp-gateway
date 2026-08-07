@@ -1,9 +1,8 @@
-pub mod agent_releases;
+pub mod agent_auth;
 pub mod api_keys;
 pub mod audit;
 pub mod auth;
 pub mod backends;
-pub mod config_transfer;
 pub mod live;
 pub mod mcp;
 pub mod metrics;
@@ -28,8 +27,7 @@ pub fn router() -> Router<AppState> {
         .merge(policies::router())
         .merge(metrics::router())
         .merge(api_keys::router())
-        .merge(agent_releases::router())
+        .merge(agent_auth::router())
         .merge(usage::router())
-        .merge(config_transfer::router())
         .merge(updates::router())
 }
