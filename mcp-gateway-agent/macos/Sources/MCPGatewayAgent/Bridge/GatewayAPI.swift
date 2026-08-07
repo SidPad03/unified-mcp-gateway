@@ -9,8 +9,12 @@ import Foundation
 struct GatewayAPI: Sendable {
     let baseURL: URL
     let apiKey: String
-    /// The gateway's id for this machine, used as the `backend` filter.
-    let backendId: String
+    /// This machine's name on the gateway, which is what every `backend=`
+    /// filter is compared against: the server matches it to
+    /// `audit_events.backend_name`, not to the `backends` primary key. Named for
+    /// what it is, because holding the UUID here instead read as correct and
+    /// silently matched nothing.
+    let backendName: String
     let allowInsecureTLS: Bool
 
     enum Failure: LocalizedError {
@@ -38,7 +42,7 @@ struct GatewayAPI: Sendable {
     /// than fifty rows it already drew.
     func auditEvents(since: Date? = nil, limit: Int = 100) async throws -> AuditPage {
         var items = [
-            URLQueryItem(name: "backend", value: backendId),
+            URLQueryItem(name: "backend", value: backendName),
             URLQueryItem(name: "limit", value: String(limit)),
         ]
         if let since {
@@ -48,7 +52,7 @@ struct GatewayAPI: Sendable {
     }
 
     func auditStats() async throws -> AuditStats {
-        try await get("audit/stats", query: [URLQueryItem(name: "backend", value: backendId)])
+        try await get("audit/stats", query: [URLQueryItem(name: "backend", value: backendName)])
     }
 
     // ── Usage ───────────────────────────────────────────────────────────
@@ -57,7 +61,7 @@ struct GatewayAPI: Sendable {
         try await get(
             "usage/graph",
             query: [
-                URLQueryItem(name: "backend", value: backendId),
+                URLQueryItem(name: "backend", value: backendName),
                 URLQueryItem(name: "range", value: range),
                 // Owners default to "just me" on this endpoint; the app wants
                 // everything that reached this machine.

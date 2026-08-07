@@ -76,21 +76,27 @@ struct RootView: View {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(Palette.canvas)
-                // The window chrome sits opposite the traffic lights, which is
-                // where a Mac app's toolbar actions live and where people
-                // already look for one. Window-level state belongs here too,
-                // which is what the connection is: it describes the window, not
-                // the page, and not the Settings row it used to sit above.
-                .overlay(alignment: .topTrailing) {
-                    HStack(spacing: 10) {
-                        ConnectionChip()
-                        UpdateChip()
-                    }
-                    .padding(.top, 13)
-                    .padding(.trailing, 16)
-                }
         }
         .navigationSplitViewStyle(.balanced)
+        // On the window, not on the detail pane.
+        //
+        // Hung off the detail column these sat inside the page, level with
+        // whatever that page put in its own top-right — the Audit page's Refresh
+        // button lands exactly there — so the two crowded each other and the
+        // corner stopped reading as the window's. Out here it is the window's
+        // top-right corner and nothing else can claim it.
+        //
+        // This is the far side of the title bar from the traffic lights, which
+        // is where a Mac keeps window-level state, and that is what these are:
+        // the connection describes the window, not the page.
+        .overlay(alignment: .topTrailing) {
+            HStack(spacing: 10) {
+                ConnectionChip()
+                UpdateChip()
+            }
+            .padding(.top, 11)
+            .padding(.trailing, 14)
+        }
     }
 
     @ViewBuilder
@@ -162,10 +168,17 @@ private struct Sidebar: View {
     /// No subtitle. It carried this Mac's own hostname, which is the one fact a
     /// person running the app on their own machine already has, printed under
     /// the product name where the eye goes first.
+    ///
+    /// The top inset clears the traffic lights, which float over this column
+    /// because the title bar is hidden. They finish 33pt down, and the lockup
+    /// used to start at 38 — five points, with the mark sitting directly to
+    /// their right, so the two ran together and the corner read as a jumble.
+    /// The lockup is 20pt tall, so this leaves it clearly below them rather
+    /// than beside them.
     private var header: some View {
         BrandLockup(size: 20)
             .padding(.horizontal, 12)
-            .padding(.top, 38)
+            .padding(.top, 52)
             .padding(.bottom, 12)
     }
 

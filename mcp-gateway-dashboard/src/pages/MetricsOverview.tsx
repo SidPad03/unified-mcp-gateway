@@ -233,7 +233,7 @@ export default function MetricsOverview() {
                   />
                   <Tooltip
                     {...tooltipProps}
-                    labelFormatter={(v: any) => fmt.dateTime(v)}
+                    labelFormatter={(v: any) => fmt.hour(v)}
                     formatter={(value: any) => [fmt.count(Number(value)), 'calls']}
                   />
                   <Area

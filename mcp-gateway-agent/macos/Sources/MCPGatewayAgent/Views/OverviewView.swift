@@ -186,6 +186,12 @@ struct OverviewView: View {
                         .foregroundStyle(Palette.beam)
                         .cornerRadius(1.5)
                     }
+                    // The domain runs to the *end* of the last hour, not its
+                    // start. A bar is drawn across the hour it covers, so with
+                    // the scale stopping at the final bucket's start the newest
+                    // bar — the one you are most likely to be looking at — was
+                    // drawn half outside the plot and clipped against the edge.
+                    .chartXScale(domain: chartStart...chartEnd)
                     .chartYAxis {
                         AxisMarks(position: .leading) {
                             AxisGridLine().foregroundStyle(Palette.lineSoft)
@@ -194,7 +200,15 @@ struct OverviewView: View {
                     }
                     .chartXAxis {
                         AxisMarks(values: .stride(by: .hour, count: 6)) {
-                            AxisValueLabel().font(.system(size: Typo.micro))
+                            // Left to itself the axis reads "Aug 6 at 11 AM" on
+                            // every mark, because the window spans two dates and
+                            // Charts disambiguates by spelling both out. Across a
+                            // single day the hour is the only part that varies,
+                            // so the rest is four labels' worth of repetition.
+                            AxisGridLine().foregroundStyle(Palette.lineSoft)
+                            AxisTick().foregroundStyle(Palette.lineSoft)
+                            AxisValueLabel(format: .dateTime.hour())
+                                .font(.system(size: Typo.micro))
                         }
                     }
                     .frame(height: 150)
@@ -207,6 +221,13 @@ struct OverviewView: View {
         let hour: Date
         let count: Int
         var id: Date { hour }
+    }
+
+    private var chartStart: Date { buckets.first?.hour ?? Date() }
+
+    /// One hour past the last bucket, so the newest bar has room to be drawn.
+    private var chartEnd: Date {
+        (buckets.last?.hour ?? Date()).addingTimeInterval(3600)
     }
 
     /// Rebuilt when the calls change, not on every render — bucketing a thousand

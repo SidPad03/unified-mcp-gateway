@@ -64,6 +64,20 @@ export const fmt = {
     });
   },
 
+  /** An hourly bucket: `6 Aug 09:00`. Seconds on a figure that covers an hour
+   *  are three characters that can only ever read `00`. */
+  hour(value: string | number | Date): string {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  },
+
   /** "4m ago". Falls back to an absolute date past a week, where "9d ago" stops helping. */
   relative(value: string | number | Date): string {
     const d = new Date(value);

@@ -346,13 +346,24 @@ final class AgentModel {
     // ── Gateway REST ────────────────────────────────────────────────────
 
     /// Audit and Usage, scoped to this machine. `nil` until the agent has
-    /// registered and knows its own `backend_id`.
+    /// registered, which is what having a `backend_id` at all proves.
+    ///
+    /// The id proves registration; it is the *name* that does the filtering, and
+    /// sending the wrong one of the two is why both pages read zero.
+    /// `backend_id` is a UUID the gateway mints for the `backends` row, while
+    /// every `backend=` filter on the server compares against
+    /// `audit_events.backend_name`, which holds the agent's own name — the same
+    /// string that namespaces its tools as `sids-macbook-pro__blender__…`. A
+    /// UUID never equals a name, so the filter matched nothing and Audit and
+    /// Usage both reported "0 of 0" on a machine that was routing calls.
     func gatewayAPI() -> GatewayAPI? {
-        guard let base = apiBaseURL, let key = apiKey, let backendId else { return nil }
+        guard let base = apiBaseURL, let key = apiKey, backendId != nil,
+              let backendName = snapshot?.connection.agentId
+        else { return nil }
         return GatewayAPI(
             baseURL: base,
             apiKey: key,
-            backendId: backendId,
+            backendName: backendName,
             allowInsecureTLS: snapshot?.config.tlsSkipVerify ?? false
         )
     }

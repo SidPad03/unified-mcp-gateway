@@ -23,6 +23,13 @@ struct AuditView: View {
 
     private static let pollInterval = Duration.seconds(10)
 
+    private var volumeStart: Date { stats?.hourlyVolume.first?.hour ?? Date() }
+
+    /// One hour past the last point, so the newest bar is drawn in full.
+    private var volumeEnd: Date {
+        (stats?.hourlyVolume.last?.hour ?? Date()).addingTimeInterval(3600)
+    }
+
     private var filtered: [AuditEvent] {
         events.filter { event in
             switch statusFilter {
@@ -87,6 +94,19 @@ struct AuditView: View {
         }
     }
 
+    /// The row is pinned to its own height, and it has to be.
+    ///
+    /// `fillsHeight` asks each card for `maxHeight: .infinity` so that four
+    /// cards side by side match the tallest of them. That works where the row is
+    /// offered a height to divide up — every other page here is inside a
+    /// `ScrollView`, which proposes the content's own height. This page is not:
+    /// it is a plain `VStack` filling the window, so "as tall as you can be" was
+    /// answered literally and four cards a hundred points tall grew to six
+    /// hundred, pushing the table off the bottom of the window. Measured at
+    /// 630pt in an 800pt window; 107pt with this.
+    ///
+    /// `fixedSize` vertically makes the row take its ideal height, and the cards
+    /// still stretch to match each other inside it.
     @ViewBuilder
     private var summary: some View {
         if let stats {
@@ -104,6 +124,7 @@ struct AuditView: View {
                 }
                 Card(fillsHeight: true) { Stat(value: Format.count(stats.deniedCount), label: "Denied by policy") }
             }
+            .fixedSize(horizontal: false, vertical: true)
 
             if !stats.hourlyVolume.isEmpty {
                 Card {
@@ -118,6 +139,19 @@ struct AuditView: View {
                             .cornerRadius(2)
                         }
                         .chartYAxis { AxisMarks(position: .leading) }
+                        // Same as the Overview sparkline: the hour is the only
+                        // part that changes across a day's worth of marks, and
+                        // the bar covering the newest hour needs the scale to
+                        // run past it or it is drawn half outside the plot.
+                        .chartXScale(domain: volumeStart...volumeEnd)
+                        .chartXAxis {
+                            AxisMarks(values: .stride(by: .hour, count: 6)) {
+                                AxisGridLine().foregroundStyle(Palette.lineSoft)
+                                AxisTick().foregroundStyle(Palette.lineSoft)
+                                AxisValueLabel(format: .dateTime.hour())
+                                    .font(.system(size: Typo.micro))
+                            }
+                        }
                         .frame(height: 110)
                     }
                 }

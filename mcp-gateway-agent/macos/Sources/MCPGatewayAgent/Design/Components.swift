@@ -24,6 +24,15 @@ struct Card<Content: View>: View {
     /// broken. The height has to be applied here, inside the card and before
     /// `glassEffect`, or the material would still be drawn at the content's size
     /// while the frame around it stretched.
+    ///
+    /// "The full height offered" is the catch, and it is worth knowing before
+    /// reaching for this. Inside a `ScrollView` the offer is the content's own
+    /// height and these cards match each other, which is the intent. In a stack
+    /// that fills the window there is no such limit, and the row will take the
+    /// whole page: four cards of about a hundred points became six hundred on
+    /// the Audit page and pushed the table out of the window. Give the *row*
+    /// `.fixedSize(horizontal: false, vertical: true)` there — the cards go on
+    /// matching each other inside a row that is only as tall as it needs to be.
     var fillsHeight: Bool = false
     @ViewBuilder var content: Content
 
