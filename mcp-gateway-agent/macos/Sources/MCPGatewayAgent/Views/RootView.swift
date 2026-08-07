@@ -91,8 +91,18 @@ private struct Sidebar: View {
     @Environment(AgentModel.self) private var model
     @Binding var page: Page
 
+    /// `List` drives single selection through a `Binding<SelectionValue?>`.
+    /// Handing it the non-optional `Binding<Page>` compiles, and then selects
+    /// nothing, ever: every row in this sidebar was inert and the detail pane
+    /// only ever showed Overview. Project the page into an optional here, and
+    /// drop a nil write, which is what a click on empty sidebar space sends, so
+    /// the detail pane can never be left with nothing to render.
+    private var selection: Binding<Page?> {
+        Binding(get: { page }, set: { if let new = $0 { page = new } })
+    }
+
     var body: some View {
-        List(selection: $page) {
+        List(selection: selection) {
             Section {
                 ForEach(Page.allCases) { item in
                     Label(item.title, systemImage: item.icon)

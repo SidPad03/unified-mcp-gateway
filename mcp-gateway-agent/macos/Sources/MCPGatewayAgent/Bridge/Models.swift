@@ -81,6 +81,45 @@ struct ConnectionStatus: Codable, Sendable {
     var lastError: String?
     var retryInMs: Int?
     var registeredTools: Int
+
+    /// `lastError`, rewritten into something you can act on.
+    ///
+    /// The core hands the transport error through verbatim, which is right for
+    /// the log and wrong for the one line on Overview. "IO error: invalid peer
+    /// certificate: UnknownIssuer" names the library that raised it rather than
+    /// the thing that is wrong, and the fix is two clicks away in Settings. The
+    /// raw text stays in the log for anyone debugging; this is what the hero
+    /// shows. Anything unrecognised falls through unchanged, so a new failure
+    /// mode is never swallowed.
+    var readableError: String? {
+        guard let lastError else { return nil }
+        let text = lastError.lowercased()
+
+        if text.contains("unknownissuer") || text.contains("invalid peer certificate")
+            || text.contains("certificate verify failed")
+        {
+            return """
+                This Mac does not trust the gateway's TLS certificate. If it is self-signed, \
+                turn on Skip TLS certificate verification in Settings → Gateway, or add the \
+                issuing CA to your login keychain.
+                """
+        }
+        if text.contains("certificate") && text.contains("expired") {
+            return "The gateway's TLS certificate has expired. Renew it on the server."
+        }
+        if text.contains("connection refused") {
+            return "Nothing is listening at \(gatewayUrl). Check the address and that the gateway is running."
+        }
+        if text.contains("dns") || text.contains("nodename nor servname")
+            || text.contains("failed to lookup")
+        {
+            return "That host could not be resolved. Check the gateway address in Settings → Gateway."
+        }
+        if text.contains("401") || text.contains("unauthorized") {
+            return "The gateway rejected this Mac's API key. Sign out and sign in again."
+        }
+        return lastError
+    }
 }
 
 struct Stats: Codable, Sendable {

@@ -16,12 +16,25 @@ import SwiftUI
 /// about how many surfaces exist, not how expensive each one is.
 struct Card<Content: View>: View {
     var padding: CGFloat = Metrics.cardPadding
+    /// Take the full height offered instead of hugging the content.
+    ///
+    /// Set this on cards that sit beside each other. Without it each one is as
+    /// tall as whatever happens to be inside, so a column showing an empty state
+    /// and a column showing data come out different heights and the row looks
+    /// broken. The height has to be applied here, inside the card and before
+    /// `glassEffect`, or the material would still be drawn at the content's size
+    /// while the frame around it stretched.
+    var fillsHeight: Bool = false
     @ViewBuilder var content: Content
 
     var body: some View {
         content
             .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: fillsHeight ? .infinity : nil,
+                alignment: .topLeading
+            )
             .glassEffect(.regular, in: .rect(cornerRadius: Radius.card))
     }
 }

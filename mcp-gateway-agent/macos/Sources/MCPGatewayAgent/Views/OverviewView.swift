@@ -71,11 +71,13 @@ struct OverviewView: View {
                         actions
                     }
 
-                    if let error = connection.lastError, connection.state != .connected {
+                    if let error = connection.readableError, connection.state != .connected {
                         Text(error)
                             .font(.system(size: Typo.caption))
                             .foregroundStyle(Palette.deny)
-                            .lineLimit(2)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
 
                     Divider().overlay(Palette.lineSoft)
@@ -152,7 +154,7 @@ struct OverviewView: View {
     /// far as the app has been running, so this is honestly labelled rather
     /// than pretending to be a 24-hour history.
     private var sparkline: some View {
-        Card {
+        Card(fillsHeight: true) {
             VStack(alignment: .leading, spacing: 12) {
                 SectionHeader("Calls per hour")
                 if buckets.allSatisfy({ $0.count == 0 }) {
@@ -226,7 +228,7 @@ struct OverviewView: View {
         let trouble = model.backends.filter { $0.status == .failed || $0.status == .crashed }
         let shown = trouble.isEmpty ? model.backends : trouble
 
-        Card(padding: 0) {
+        Card(padding: 0, fillsHeight: true) {
             VStack(alignment: .leading, spacing: 0) {
                 SectionHeader(trouble.isEmpty ? "Backends" : "Needs attention") {
                     Button("Manage") { page = .backends }

@@ -77,7 +77,7 @@ struct UsageView: View {
     @ViewBuilder
     private func charts(_ graph: UsageGraph) -> some View {
         HStack(alignment: .top, spacing: Metrics.gutter) {
-            Card {
+            Card(fillsHeight: true) {
                 VStack(alignment: .leading, spacing: 10) {
                     SectionHeader("Busiest tools")
                     let top = graph.tools.filter { $0.callCount > 0 }
@@ -100,7 +100,7 @@ struct UsageView: View {
                 }
             }
 
-            Card {
+            Card(fillsHeight: true) {
                 VStack(alignment: .leading, spacing: 10) {
                     SectionHeader("Applications")
                     if graph.applications.isEmpty {

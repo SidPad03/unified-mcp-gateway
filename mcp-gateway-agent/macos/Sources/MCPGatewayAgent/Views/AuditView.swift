@@ -91,18 +91,18 @@ struct AuditView: View {
     private var summary: some View {
         if let stats {
             HStack(spacing: Metrics.gutter) {
-                Card { Stat(value: Format.count(stats.events24h), label: "Calls · 24h") }
-                Card {
+                Card(fillsHeight: true) { Stat(value: Format.count(stats.events24h), label: "Calls · 24h") }
+                Card(fillsHeight: true) {
                     Stat(
                         value: Format.percent(stats.errorRate),
                         label: "Error rate",
                         tint: stats.errorRate > 0.05 ? Palette.deny : Palette.text
                     )
                 }
-                Card {
+                Card(fillsHeight: true) {
                     Stat(value: Format.duration(stats.avgDurationMs), label: "Average latency")
                 }
-                Card { Stat(value: Format.count(stats.deniedCount), label: "Denied by policy") }
+                Card(fillsHeight: true) { Stat(value: Format.count(stats.deniedCount), label: "Denied by policy") }
             }
 
             if !stats.hourlyVolume.isEmpty {
