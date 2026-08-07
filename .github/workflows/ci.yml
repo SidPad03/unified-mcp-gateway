@@ -90,6 +90,23 @@ jobs:
 
       # `actions/checkout` cleans ignored files, so `target/` does not survive
       # between runs even on a persistent runner. The cache still earns its keep.
+      # rustup installs the Rust compiler and nothing else. Linking still needs a
+      # system C toolchain, and the first crate with a build script dies with a
+      # bare "linker `cc` not found" several minutes into the job, naming
+      # neither the host nor the package. `runs-on: [self-hosted, homelab]`
+      # matches any runner with those labels, so one unprovisioned machine in
+      # the fleet fails every other run and looks like flakiness.
+      - name: Preflight - a C toolchain must be present
+        run: |
+          if ! command -v cc >/dev/null 2>&1; then
+            echo "::error::Runner $(hostname) has no C linker, so nothing that needs one can build."
+            echo "On that host:"
+            echo "  sudo apt-get update && sudo apt-get install -y build-essential"
+            echo "  sudo systemctl restart 'actions.runner.*'"
+            exit 1
+          fi
+          cc --version | head -1
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
