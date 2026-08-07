@@ -67,10 +67,14 @@
     <ellipse cx="512" cy="512" rx="440" ry="330" fill="url(#phosphor)"/>
   </g>
 
-  <!-- Machined rim -->
-  <rect x="100.5" y="100.5" width="823" height="823" rx="184.5" ry="184.5"
-        fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="3"/>
-
+  <!-- The machined rim that used to sit here is gone. A 3-unit white stroke at
+       16% is a hairline on the 1024 master, but the Dock draws this at 64 to
+       128, where 3 units fall below a pixel and antialias into the tile's edge
+       row: measured at 256, the first tile pixel came out (41,48,57) against an
+       interior of (25,33,41). A uniform ring 60% brighter than the plate around
+       a dark icon does not read as a machined edge, it reads as a white border,
+       which is what it was reported as. The sheen gradient above still lights
+       the plate from the top, so the tile keeps its depth without an outline. -->
   <!-- Mark: 24-unit grid at scale 26, centred (512 - 12*26 = 200) -->
   <g filter="url(#glyphGlow)">
     <g transform="translate(200 200) scale(26)"
