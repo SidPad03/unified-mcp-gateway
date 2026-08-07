@@ -46,6 +46,7 @@ jobs:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       SIGNING_KEY: ${{ secrets.MCPGA_UPDATE_PRIVATE_KEY }}
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -241,6 +242,56 @@ jobs:
               --target main
 
           gh release upload agent-latest appcast.json --clobber
+
+      # ── Homebrew tap ───────────────────────────────────────────────────
+      # Point the cask at the release that just published.
+      #
+      # Without this the tap goes stale the instant a version ships, and since
+      # the cask is what brew installs, `brew install` keeps handing out the
+      # previous build until somebody remembers to bump it by hand. That has
+      # already happened for three releases running.
+      #
+      # It needs a token that can write to the *tap* repository: the automatic
+      # GITHUB_TOKEN is scoped to this one. Create a fine-grained PAT with
+      # Contents: read and write on SidPad03/homebrew-tap and store it as
+      # HOMEBREW_TAP_TOKEN. Until that secret exists this step is skipped, so a
+      # fork or a repo without it still builds and releases normally.
+      - name: Update the Homebrew cask
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.TAP_TOKEN != ''
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          DMG="mcp-gateway-agent/build/MCP-Gateway-Agent-${VERSION}.dmg"
+          SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
+
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/SidPad03/homebrew-tap.git" tap
+          cd tap
+          CASK="Casks/mcp-gateway-agent.rb"
+
+          # Anchored to the start of the line so a version-shaped string
+          # anywhere else in the file, a comment or the livecheck regex, cannot
+          # be rewritten by accident.
+          sed -i '' -E "s|^  version \".*\"|  version \"${VERSION}\"|" "$CASK"
+          sed -i '' -E "s|^  sha256 \".*\"|  sha256 \"${SHA}\"|" "$CASK"
+
+          # A sed that matches nothing exits 0, so confirm rather than assume.
+          grep -q "^  version \"${VERSION}\"$" "$CASK" || {
+            echo "::error::the cask version was not rewritten"; exit 1; }
+          grep -q "^  sha256 \"${SHA}\"$" "$CASK" || {
+            echo "::error::the cask sha256 was not rewritten"; exit 1; }
+
+          if git diff --quiet; then
+            echo "cask already points at ${VERSION}"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "mcp-gateway-agent ${VERSION}"
+          git push -q
+          echo "cask bumped to ${VERSION}"
 
       - name: Upload the build
         if: github.event_name == 'pull_request'
