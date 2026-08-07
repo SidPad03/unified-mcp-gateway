@@ -171,9 +171,13 @@ final class Updater {
     /// script.
     ///
     /// A process cannot reliably replace its own bundle while running, so the
-    /// script waits for this PID to exit, `ditto`s the new bundle over the old
-    /// one, and opens it. `ditto` rather than `mv` because it preserves the
-    /// signature and extended attributes that make the bundle launchable.
+    /// script waits for this PID to exit, puts the new bundle in place, and
+    /// opens it.
+    ///
+    /// Nothing outside the bundle is touched. Settings live in
+    /// `~/.mcp-gateway-agent/config.toml`, the signed-in account in
+    /// `UserDefaults`, and the gateway key in the login keychain — all of them
+    /// outside `.app`, so an update cannot take them with it.
     private static func swapBundle(archive: Data) async throws {
         let installed = Bundle.main.bundleURL
         let staging = FileManager.default.temporaryDirectory
@@ -192,12 +196,38 @@ final class Updater {
             throw Updater.InstallError.noAppInArchive
         }
 
+        // Staged beside the installed bundle rather than in the temporary
+        // directory, so the swap below is a rename within one volume instead of
+        // a copy across two.
+        let incoming = installed.path + ".incoming"
+        let outgoing = installed.path + ".outgoing"
+
         let script = """
             #!/bin/sh
             # Wait for the running app to exit, then swap the bundle and relaunch.
             while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done
-            /usr/bin/ditto "\(unpacked.path)" "\(installed.path)" || exit 1
-            /usr/bin/xattr -dr com.apple.quarantine "\(installed.path)" 2>/dev/null
+
+            rm -rf "\(incoming)" "\(outgoing)"
+            # `ditto` rather than `cp` or `mv`: it preserves the signature and the
+            # extended attributes that make the bundle launchable.
+            /usr/bin/ditto "\(unpacked.path)" "\(incoming)" || exit 1
+            /usr/bin/xattr -dr com.apple.quarantine "\(incoming)" 2>/dev/null
+
+            # Replace, rather than merge. This used to `ditto` the new bundle
+            # straight over the old one, which copies in but never deletes: any
+            # file the new version had dropped stayed behind in Contents, so an
+            # updated app was a union of every version ever installed over it and
+            # not a bundle a clean install would ever produce.
+            #
+            # The old bundle is kept until the new one is in place, so a failure
+            # midway puts back a working app instead of leaving none.
+            mv "\(installed.path)" "\(outgoing)" || exit 1
+            if ! mv "\(incoming)" "\(installed.path)"; then
+                mv "\(outgoing)" "\(installed.path)"
+                exit 1
+            fi
+            rm -rf "\(outgoing)"
+
             /usr/bin/open "\(installed.path)"
             /bin/rm -rf "\(staging.path)"
             """

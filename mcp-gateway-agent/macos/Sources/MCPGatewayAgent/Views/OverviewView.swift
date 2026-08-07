@@ -82,28 +82,26 @@ struct OverviewView: View {
 
                     Divider().overlay(Palette.lineSoft)
 
-                    HStack(alignment: .bottom, spacing: 24) {
+                    HStack(alignment: .top, spacing: 24) {
                         Stat(
                             value: Format.count(model.stats?.callsTotal ?? 0),
                             label: "Calls routed",
                             detail: "since launch"
                         )
-                        .frame(width: 140)
 
-                        MiniStat(value: "\(model.stats?.toolsRegistered ?? 0)", label: "Tools")
-                        MiniStat(
+                        Stat(value: "\(model.stats?.toolsRegistered ?? 0)", label: "Tools")
+                        Stat(
                             value:
                                 "\(model.stats?.backendsReady ?? 0)/\(model.stats?.backendsTotal ?? 0)",
                             label: "Backends up",
                             tint: backendTone.color
                         )
-                        MiniStat(
+                        Stat(
                             value: Format.count(model.stats?.callsErrors ?? 0),
                             label: "Errors",
                             tint: (model.stats?.callsErrors ?? 0) > 0 ? Palette.deny : Palette.text
                         )
-                        MiniStat(value: Format.uptime(model.snapshot?.uptimeSecs), label: "Uptime")
-                        Spacer(minLength: 0)
+                        Stat(value: Format.uptime(model.snapshot?.uptimeSecs), label: "Uptime")
                     }
                 } else {
                     ProgressView().controlSize(.small)

@@ -362,10 +362,15 @@ extension View {
 
 // ── Numbers ─────────────────────────────────────────────────────────────
 
-/// The figure you came for. One of these per view, at most.
+/// One figure and its label. Every number in the app is one of these, at one
+/// size.
 ///
-/// Three levers at once — 26pt, semibold, primary text — against a 10pt
-/// semibold tertiary label. Size alone would not separate them.
+/// There were two: a 26pt headline `Stat` and a 15pt `MiniStat` meant to read as
+/// a supporting tier. Standing side by side in a summary bar they did not read
+/// as a hierarchy, they read as two bars that happened to share a row, and since
+/// each page nominated its own headline the size jumped to a different column on
+/// every tab. Rank is carried by order here, which is free; size is spent on
+/// telling a figure from its label.
 struct Stat: View {
     let value: String
     let label: String
@@ -373,12 +378,12 @@ struct Stat: View {
     var detail: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             FieldLabel(label)
             Text(value)
-                .font(.system(size: Typo.hero, weight: .semibold))
+                .font(.system(size: Typo.title, weight: .semibold))
                 .monospacedDigit()
-                .tracking(-0.5)
+                .tracking(-0.3)
                 .foregroundStyle(tint)
                 .contentTransition(.numericText())
             if let detail {
@@ -388,29 +393,6 @@ struct Stat: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label): \(value)")
-    }
-}
-
-/// The supporting tier under a Stat — deliberately a little over half its size.
-struct MiniStat: View {
-    let value: String
-    let label: String
-    var tint: Color = Palette.text
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label.uppercased())
-                .font(.system(size: Typo.micro, weight: .semibold))
-                .tracking(1.4)
-                .foregroundStyle(Palette.text4)
-            Text(value)
-                .font(.system(size: Typo.medium, weight: .semibold))
-                .monospacedDigit()
-                .foregroundStyle(tint)
-                .contentTransition(.numericText())
-        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label): \(value)")
     }

@@ -36,7 +36,23 @@ enum Page: String, CaseIterable, Identifiable, Hashable {
 
 struct RootView: View {
     @Environment(AgentModel.self) private var model
-    @State private var page: Page = .overview
+
+    /// Optional, because that is the type `List` selection actually has.
+    ///
+    /// This was a non-optional `Page` projected into a `Binding<Page?>` at the
+    /// sidebar. That compiled, shipped, and still selected nothing: the rows
+    /// were plain tagged labels, so the list had a selection binding but no
+    /// selectable controls to drive it, and the projection quietly papered over
+    /// the type mismatch that would have pointed at it. Holding the real type
+    /// here lets the sidebar bind straight to it.
+    @State private var page: Page? = .overview
+
+    /// The detail pane always has something to draw, and the pages that
+    /// navigate — Overview's "Manage" and "Add backend" — get a plain `Page` to
+    /// write back to.
+    private var current: Binding<Page> {
+        Binding(get: { page ?? .overview }, set: { page = $0 })
+    }
 
     var body: some View {
         Group {
@@ -62,11 +78,16 @@ struct RootView: View {
                 .background(Palette.canvas)
                 // The window chrome sits opposite the traffic lights, which is
                 // where a Mac app's toolbar actions live and where people
-                // already look for one.
+                // already look for one. Window-level state belongs here too,
+                // which is what the connection is: it describes the window, not
+                // the page, and not the Settings row it used to sit above.
                 .overlay(alignment: .topTrailing) {
-                    UpdateChip()
-                        .padding(.top, 13)
-                        .padding(.trailing, 16)
+                    HStack(spacing: 10) {
+                        ConnectionChip()
+                        UpdateChip()
+                    }
+                    .padding(.top, 13)
+                    .padding(.trailing, 16)
                 }
         }
         .navigationSplitViewStyle(.balanced)
@@ -74,8 +95,8 @@ struct RootView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch page {
-        case .overview: OverviewView(page: $page)
+        switch page ?? .overview {
+        case .overview: OverviewView(page: current)
         case .backends: BackendsView()
         case .activity: ActivityView()
         case .logs: LogsView()
@@ -89,28 +110,43 @@ struct RootView: View {
 
 private struct Sidebar: View {
     @Environment(AgentModel.self) private var model
-    @Binding var page: Page
+    @Binding var page: Page?
 
-    /// `List` drives single selection through a `Binding<SelectionValue?>`.
-    /// Handing it the non-optional `Binding<Page>` compiles, and then selects
-    /// nothing, ever: every row in this sidebar was inert and the detail pane
-    /// only ever showed Overview. Project the page into an optional here, and
-    /// drop a nil write, which is what a click on empty sidebar space sends, so
-    /// the detail pane can never be left with nothing to render.
-    private var selection: Binding<Page?> {
-        Binding(get: { page }, set: { if let new = $0 { page = new } })
-    }
-
+    /// The failed-backend count is drawn in the row, not attached with
+    /// `.badge()`, and that is load-bearing rather than cosmetic.
+    ///
+    /// `.badge()` on a row in a `.sidebar`-styled `List` destroys the list's
+    /// selection: the backing table reports no selected row at all, so nothing
+    /// highlights, nothing takes hover, and clicking does nothing. Every form of
+    /// it does this — `Int`, a non-zero `Int`, an optional `Text` that is nil
+    /// when there is nothing to show — and it happens whether the row is a
+    /// `NavigationLink` or a `Label` carrying a `.tag`. That is the whole reason
+    /// this sidebar was inert; the earlier suspect, the shape of the selection
+    /// binding, was never it, which is why correcting the binding changed
+    /// nothing. Drawing the count as ordinary content leaves selection alone.
+    ///
+    /// `NavigationLink(value:)` is kept because it is what `NavigationSplitView`
+    /// documents for its sidebar column and it makes the row a real control,
+    /// but a tagged `Label` also works once the badge is gone.
     var body: some View {
-        List(selection: selection) {
-            Section {
+        List(selection: $page) {
+            Section("Agent") {
                 ForEach(Page.allCases) { item in
-                    Label(item.title, systemImage: item.icon)
-                        .tag(item)
-                        .badge(badge(for: item))
+                    NavigationLink(value: item) {
+                        HStack(spacing: 0) {
+                            Label(item.title, systemImage: item.icon)
+                            let trouble = badge(for: item)
+                            if trouble > 0 {
+                                Spacer(minLength: 8)
+                                Text("\(trouble)")
+                                    .font(.system(size: Typo.micro, weight: .semibold))
+                                    .monospacedDigit()
+                                    .foregroundStyle(Palette.deny)
+                                    .accessibilityLabel("\(trouble) not running")
+                            }
+                        }
+                    }
                 }
-            } header: {
-                Text("Agent")
             }
         }
         .listStyle(.sidebar)
@@ -123,33 +159,22 @@ private struct Sidebar: View {
     /// selection is an OS-drawn glass capsule, and replacing it with a web-style
     /// rail would fight the platform for no gain. The gate rail earns its keep
     /// on the *data* here: backends, activity, logs and audit rows all carry it.
+    /// No subtitle. It carried this Mac's own hostname, which is the one fact a
+    /// person running the app on their own machine already has, printed under
+    /// the product name where the eye goes first.
     private var header: some View {
-        BrandLockup(size: 20, subtitle: model.connection?.agentId ?? "—")
+        BrandLockup(size: 20)
             .padding(.horizontal, 12)
             .padding(.top, 38)
             .padding(.bottom, 12)
     }
 
+    /// The account, beside the way to change it. Connection state moved to the
+    /// window corner: down here it was the boldest thing in the column and read
+    /// as a heading for the Settings row under it.
     private var footer: some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider()
-            if let connection = model.connection {
-                HStack(spacing: 7) {
-                    StatusLabel(
-                        tone: connection.state.tone,
-                        text: connection.state.label,
-                        pulsing: connection.state == .connecting || connection.state == .reconnecting
-                    )
-                    Spacer(minLength: 0)
-                    if let account = model.account {
-                        Text(account.username)
-                            .font(.system(size: Typo.micro))
-                            .foregroundStyle(Palette.text4)
-                            .lineLimit(1)
-                    }
-                }
-                .padding(.horizontal, 14)
-            }
             HStack {
                 SettingsLink {
                     Label("Settings", systemImage: "gearshape")
@@ -157,7 +182,14 @@ private struct Sidebar: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Palette.text3)
-                Spacer()
+                Spacer(minLength: 8)
+                if let account = model.account {
+                    Text(account.username)
+                        .font(.system(size: Typo.micro))
+                        .foregroundStyle(Palette.text4)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 10)
@@ -176,6 +208,36 @@ private struct Sidebar: View {
 }
 
 // ── Window chrome ───────────────────────────────────────────────────────
+
+/// Whether the gateway is reachable, in the corner of the window.
+///
+/// Deliberately the quietest thing on screen while it says "Connected": that is
+/// the state it is in nearly all the time, and a status light you have learned
+/// to ignore is worse than none. The dot keeps its tone so the colour is still
+/// there to be found, and the word takes the tone only when the news is not
+/// good, which is the only time it should pull the eye.
+private struct ConnectionChip: View {
+    @Environment(AgentModel.self) private var model
+
+    var body: some View {
+        if let connection = model.connection {
+            let state = connection.state
+            let settled = state == .connected
+            HStack(spacing: 5) {
+                StatusDot(
+                    tone: state.tone,
+                    pulsing: state == .connecting || state == .reconnecting
+                )
+                Text(state.label)
+                    .font(.system(size: Typo.micro, weight: .medium))
+                    .foregroundStyle(settled ? Palette.text4 : state.tone.color)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Gateway \(state.label)")
+            .help(connection.readableError ?? "Gateway \(state.label.lowercased()) as \(connection.agentId).")
+        }
+    }
+}
 
 /// The update affordance, and the only thing in the top-right chrome.
 ///

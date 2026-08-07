@@ -119,19 +119,19 @@ struct BackendsView: View {
         }
     }
 
-    /// One figure leads; the rest are a supporting tier at a little over half
-    /// its size.
+    /// Equal columns at one size. Which figure matters most is a judgement that
+    /// changes with what you came to the page for, so it is carried by order
+    /// rather than by making one of them larger.
     private var summary: some View {
         Card {
-            HStack(alignment: .bottom, spacing: 24) {
+            HStack(alignment: .top, spacing: 24) {
                 Stat(
                     value: Format.count(model.backends.reduce(0) { $0 + $1.toolCount }),
                     label: "Tools exposed"
                 )
-                .frame(width: 140)
 
-                MiniStat(value: "\(model.backends.count)", label: "Backends")
-                MiniStat(
+                Stat(value: "\(model.backends.count)", label: "Backends")
+                Stat(
                     value: "\(model.backends.filter { $0.status == .ready }.count)",
                     label: "Running",
                     tint: Palette.beam
@@ -140,13 +140,12 @@ struct BackendsView: View {
                     $0.status == .failed || $0.status == .crashed
                 }
                 if !trouble.isEmpty {
-                    MiniStat(value: "\(trouble.count)", label: "Failed", tint: Palette.deny)
+                    Stat(value: "\(trouble.count)", label: "Failed", tint: Palette.deny)
                 }
-                MiniStat(
+                Stat(
                     value: "\(model.backends.filter { !$0.enabled }.count)",
                     label: "Disabled"
                 )
-                Spacer(minLength: 0)
             }
         }
     }
