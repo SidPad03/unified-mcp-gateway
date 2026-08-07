@@ -369,6 +369,59 @@ extension View {
     }
 }
 
+// ── Fields ──────────────────────────────────────────────────────────────
+
+/// The filter box on Activity, Logs and Audit.
+///
+/// **Inset, not raised.** A field receives content, so it reads as a well cut
+/// into the surface rather than a plate sitting on it — the same rule as the
+/// dashboard's `.field`. This was a `.quaternary` fill, which is a *lighter*
+/// hierarchical fill, so the one control on the page that you type into was the
+/// one that looked like it was floating above everything else.
+struct SearchField: View {
+    @Binding var text: String
+    var prompt: String
+
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: Typo.micro))
+                .foregroundStyle(Palette.text3)
+            TextField(prompt, text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: Typo.small))
+                .focused($focused)
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: Typo.micro))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Palette.text3)
+                .accessibilityLabel("Clear the filter")
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(Palette.inset, in: .rect(cornerRadius: Radius.control))
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.control)
+                .stroke(focused ? Palette.beam.opacity(0.55) : Palette.line, lineWidth: 1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.control)
+                .stroke(Palette.beam.opacity(focused ? 0.14 : 0), lineWidth: 3)
+                .padding(-2)
+        )
+        .animation(.easeOut(duration: 0.12), value: focused)
+        .contentShape(.rect)
+        .onTapGesture { focused = true }
+    }
+}
+
 // ── Numbers ─────────────────────────────────────────────────────────────
 
 /// One figure and its label. Every number in the app is one of these, at one
@@ -511,8 +564,13 @@ enum Format {
         return String(format: "%.2f s", Double(milliseconds) / 1_000)
     }
 
+    /// `Int(_:)` on a Double traps on a value outside `Int`'s range and on a
+    /// non-number, and this one comes off the wire as `AVG(duration_ms)` from a
+    /// database this app does not own. A latency is not worth a crash.
     static func duration(_ milliseconds: Double?) -> String {
-        guard let milliseconds else { return "—" }
+        guard let milliseconds, milliseconds.isFinite,
+            milliseconds.magnitude < Double(Int.max)
+        else { return "—" }
         return duration(Int(milliseconds.rounded()))
     }
 

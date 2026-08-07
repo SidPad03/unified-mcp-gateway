@@ -199,33 +199,3 @@ private struct CallRow: View {
         return ms > 5_000 ? Palette.warn : Palette.text2
     }
 }
-
-// ── Shared control ──────────────────────────────────────────────────────
-
-struct SearchField: View {
-    @Binding var text: String
-    var prompt: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: Typo.micro))
-                .foregroundStyle(Palette.text3)
-            TextField(prompt, text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(size: Typo.small))
-            if !text.isEmpty {
-                Button {
-                    text = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: Typo.micro))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Palette.text3)
-            }
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 6)
-        .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: Radius.control))
-    }
-}

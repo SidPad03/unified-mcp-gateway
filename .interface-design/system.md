@@ -161,6 +161,24 @@ Web: `src/components/ui.tsx` · Mac: `Design/Components.swift`. Same names.
 | `RailRow` | grid `[3px 1fr auto]` · 36px min · `--line-soft` divider |
 | `Table` | `Th` 36px, 10px uppercase · `Td` 12px · rail via `railStyle(tone)` on the first cell |
 | `Modal` | native `<dialog>` + `showModal()` |
+| `UsageFlowBoard` (Mac) | four columns, widths `1 : 1.1 : 1 : 1.4` of the space offered · 16pt gutter · nodes centred vertically (top-aligned once expanded) · links drawn behind, one per hop |
+| `AuditHeaderRow` / `AuditRow` (Mac) | 32pt header · time 86 · tool flexible · application 120 · risk 84 · duration 70 · status 74 · rail inset 11, matched by the header's leading padding |
+
+### The names in this product are namespaced twice
+
+A local server called `obsidian` publishing `obsidian_patch_note` reaches the
+gateway as `sids-macbook-pro__obsidian__obsidian_patch_note`: the agent prefixes
+the backend, the gateway prefixes the agent, and the server repeats itself in the
+tool. Splitting on the first `__` therefore yields the *agent's* name — which is
+how the Mac's Usage page came to draw a Backends column that was an exact copy of
+the This Mac column beside it.
+
+`ToolName.split(_:agent:known:)` strips the agent, then matches the remainder
+against the machine's *actual* backends (longest name wins) rather than guessing
+at the delimiter, and `ToolName.shorten(_:backend:)` drops a backend name the
+tool repeats. Anything that draws a tool name in a context that already says
+which machine and which server it came from should use them: the prefix is the
+part carrying no information and the part that survives truncation.
 
 ### Two decisions worth keeping
 
@@ -223,6 +241,24 @@ Two things that are easy to get wrong here:
   the *whole* string. Give the cell's inner element a definite width —
   `w-[min(150px,34vw)] sm:w-[190px] …` — so it can actually shrink.
 
+**The Mac app has the same problem in miniature, and the same answer.** The
+window's floor is 900×560, so the detail pane is 668 points wide — and four
+168-point columns with three 46-point gutters is 810, which is how the Usage
+page came to be clipped at the right edge *and* have its range picker pushed out
+of the window, since the page header shares the scroll view's width with
+whatever is widest below it. Nothing in a fixed-size layout says what it adds up
+to; the numbers have to be added up.
+
+- Columns that hold data take **fractions of the width they are offered**, never
+  a fixed size. Measure with a `GeometryReader` inside `.background`, never one
+  wrapped around the content — a reader takes the whole height it is offered and
+  reports it as its own, so inside a scroll view the card grows without bound.
+- A table **ranks its columns and drops one** rather than squeezing all of them:
+  `AuditColumn.wideEnoughForApplication`. Anything dropped stays in the row's
+  detail sheet and in its accessibility label.
+- A column that can run out of room puts the **word that carries the state
+  first** — `crashed · 44 tools`, not `44 tools · crashed`.
+
 **Watch the `lg` boundary.** The sidebar appears at `lg`, which shrinks the
 content box by 232px at the exact moment `lg:` columns would reveal. Heavy
 columns therefore wait for `xl`. Budget at 1024 with the sidebar is ~736px;
@@ -248,6 +284,31 @@ its container — the second is the one that catches this, since a table inside
 - States are not optional: default, hover, active, focus, disabled; loading,
   empty, error.
 
+## Rules the two server-backed pages earned
+
+Audit and Usage are the only pages that talk to the gateway, and every one of
+these is something that read as a broken layout before it read as a broken
+request.
+
+- **A first load that fails is the page, not a banner.** A spinner with the
+  reason exiled to a strip above it never resolves and never explains itself.
+  Once there is something on screen, the same failure is a banner: the numbers
+  are stale, not gone.
+- **"Not configured" is a different state from "loading".** Every path that can
+  return without data — no credentials, not registered — says which.
+- **A count is only honest about what it searched.** "12 of 4,213" while the
+  filter has only seen the hundred rows in memory is a lie in both directions;
+  it now reads "12 of 200 loaded · 4.2K total", and there is a way to load more.
+- **Page backwards by timestamp, never by offset.** Rows arrive at the top the
+  whole time the page is open, and each one shifts an offset-based window by a
+  row.
+- **Discard a response whose request is stale.** Three range buttons mean three
+  requests in flight, and they do not return in order.
+- **Derive once, not per frame.** `body` reruns on every core tick — ten times a
+  second — so a filter over two thousand events or a grouping over a hundred
+  tools is memoised in `@State` and rebuilt on the things that actually change
+  it, not recomputed in a `var`.
+
 ## Verifying
 
 `scratchpad/shoot.mjs`-style sweep: every page × light/dark at 1440, plus a
@@ -255,3 +316,19 @@ narrow pass at 820. It asserts **no horizontal document overflow** and collects
 console errors — the two cheapest signals that a layout is broken. Charts should
 be checked by reading tick labels out of the DOM, not by eye: `domain={[0,
 'auto']}` silently let recharts draw a `-45` tick on a count series.
+
+**The Mac app renders offscreen with `ImageRenderer`.** `screencapture` needs a
+screen-recording grant a build script does not have; `ImageRenderer` needs
+nothing, and a throwaway SwiftPM target that symlinks `Theme.swift`,
+`Components.swift` and the view under test will render it to a PNG at any width
+you like. Three things do not survive the trip and are worth knowing before you
+conclude a view is broken: `glassEffect` renders as nothing *and takes the card's
+contents with it* (stand a flat panel in for `Card`), `List` and `ScrollView`
+render empty (draw the rows in a clipped `VStack` instead), and AppKit-backed
+controls — `Picker`, `TextField` — come out as yellow blocks.
+
+This is why the views worth checking take plain values: `UsageFlowBoard` knows
+nothing about `AgentModel`, `UsageGraph` or the network, and `AuditRow` needs
+only an `AuditEvent`, so both can be rendered and looked at without a gateway.
+Keep it that way — a view that can only be seen by signing in is a view nobody
+checks.
