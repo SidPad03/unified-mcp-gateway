@@ -372,9 +372,9 @@ fn authorized_request(
     let mut request = url
         .into_client_request()
         .map_err(|e| describe_connect_error(&e))?;
-    let value = format!("Bearer {api_key}")
-        .parse()
-        .map_err(|_| "The API key contains characters that cannot travel in a header".to_string())?;
+    let value = format!("Bearer {api_key}").parse().map_err(|_| {
+        "The API key contains characters that cannot travel in a header".to_string()
+    })?;
     request.headers_mut().insert("authorization", value);
     Ok(request)
 }
@@ -591,16 +591,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_token_is_appended_as_a_query_parameter() {
-        assert_eq!(
-            with_token("wss://gw/agent/ws", "k"),
-            "wss://gw/agent/ws?token=k"
-        );
-        // A URL that already carries a query keeps it.
-        assert_eq!(
-            with_token("wss://gw/connect?v=2", "k"),
-            "wss://gw/connect?v=2&token=k"
-        );
+    fn the_key_travels_as_a_header_and_never_in_the_url() {
+        let request = authorized_request("wss://gw/connect?v=2", "k").unwrap();
+        assert_eq!(request.headers().get("authorization").unwrap(), "Bearer k");
+        // The URL is the part of a request that everything logs, so the key
+        // must not appear in it — and what was already there must survive.
+        assert_eq!(request.uri().to_string(), "wss://gw/connect?v=2");
+    }
+
+    #[test]
+    fn a_key_that_cannot_travel_in_a_header_is_refused() {
+        // A CR/LF here would otherwise be a header-injection primitive.
+        assert!(authorized_request("wss://gw/agent/ws", "k\r\nx: y").is_err());
     }
 
     #[tokio::test]
