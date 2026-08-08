@@ -141,7 +141,19 @@ async fn main() -> anyhow::Result<()> {
         // whole deployment and does exactly that. A route-level limit is applied
         // closer to the handler, so it wins over this default.
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
-        .layer(TraceLayer::new_for_http())
+        // The span records the path, never the full URI. The default MakeSpan
+        // logs the query string, and `/agent/ws?token=mcpgw_…` — which older
+        // agents send on every connect and every retry — was writing live API
+        // keys into the log at debug level.
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |request: &axum::http::Request<axum::body::Body>| {
+                tracing::debug_span!(
+                    "request",
+                    method = %request.method(),
+                    path = %request.uri().path(),
+                )
+            },
+        ))
         .layer(cors)
         .with_state(state);
 

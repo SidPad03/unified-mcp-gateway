@@ -59,6 +59,18 @@ pub struct UsageGraph {
     pub user_to_app: Vec<GraphEdge>,
     pub app_to_backend: Vec<GraphEdge>,
     pub backend_to_tool: Vec<GraphEdge>,
+    /// Which application called which *tool*, which is the only place the join
+    /// between an application and a sub-backend actually exists.
+    ///
+    /// `app_to_backend` groups by `backend_name`, and for an agent that is the
+    /// machine — `sids-macbook-pro` — not the MCP server behind it. So it can
+    /// say "Claude made 92 calls to this Mac" and never "Claude made 21 of them
+    /// to playwright". The tool name carries the missing part
+    /// (`sids-macbook-pro__playwright__browser_navigate`), but only the agent
+    /// knows how to split it, because only the agent knows which of those
+    /// segments are its own servers. So the pairs are reported here and the
+    /// splitting is left to the client.
+    pub app_to_tool: Vec<GraphEdge>,
 }
 
 #[derive(Deserialize)]
@@ -356,6 +368,37 @@ async fn usage_graph(
         })
         .collect();
 
+    // Edges: app → tool. Bounded, because this is the one edge set whose size is
+    // a product rather than a sum: applications × tools. A thousand rows is far
+    // more than any board draws and still a single small response.
+    let app_tool_edges: Vec<(Option<String>, String, i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        &format!(
+            "SELECT application, tool_name, COUNT(*) as cnt, MAX(timestamp) as last_call
+             FROM audit_events
+             WHERE ($1::uuid IS NULL OR user_id = $1) AND ($2::text IS NULL OR backend_name = $2) AND timestamp > NOW() - INTERVAL '{}' AND application IS NOT NULL
+             GROUP BY application, tool_name
+             ORDER BY cnt DESC
+             LIMIT 1000",
+            interval
+        )
+    )
+    .bind(target_user)
+    .bind(&backend_filter)
+    .fetch_all(&state.db)
+    .await?;
+
+    let app_to_tool: Vec<GraphEdge> = app_tool_edges
+        .into_iter()
+        .filter_map(|(app, tool, cnt, last)| {
+            Some(GraphEdge {
+                source: app?,
+                target: tool,
+                call_count: cnt,
+                last_call: last.map(|t| t.to_rfc3339()),
+            })
+        })
+        .collect();
+
     // Edges: backend → tool (from registry + audit counts)
     let backend_tool_edges: Vec<(String, String, i64, Option<chrono::DateTime<chrono::Utc>>)> =
         sqlx::query_as(&format!(
@@ -400,6 +443,7 @@ async fn usage_graph(
         user_to_app,
         app_to_backend,
         backend_to_tool,
+        app_to_tool,
     }))
 }
 
