@@ -1,4 +1,3 @@
-import Charts
 import SwiftUI
 
 /// What you want to know in the first second: is it connected, how much is
@@ -11,7 +10,16 @@ struct OverviewView: View {
     @Environment(\.controlActiveState) private var activeState
     @Binding var page: Page
 
-    @State private var buckets: [Bucket] = []
+    /// The most recent calls, newest first. Memoised rather than derived in
+    /// `body`: the snapshot ticks ten times a second and `body` reads it, so
+    /// reversing and slicing a thousand records in there is work nobody sees.
+    @State private var recent: [ToolCall] = []
+    /// Which errored call is showing its message.
+    @State private var expanded: String?
+
+    /// Enough to answer "is anything happening", not so many that the card
+    /// becomes a second Audit page. The full history is one click away.
+    private static let recentLimit = 8
 
     /// Uptime is a clock, and this page had nothing driving it.
     ///
@@ -41,18 +49,19 @@ struct OverviewView: View {
                 }
 
                 hero
-                HStack(alignment: .top, spacing: Metrics.gutter) {
-                    sparkline
-                    troubleOrTools
-                }
+                activity
             }
             .padding(Metrics.pagePadding)
-            .padding(.top, 22)  // clears the floating traffic lights
+            .padding(.top, 16)  // clears the traffic lights and sidebar toggle when the sidebar is hidden
         }
         .scrollBounceBehavior(.basedOnSize)
-        .onAppear(perform: rebuildBuckets)
-        .onChange(of: model.callRevision) { _, _ in rebuildBuckets() }
+        .onAppear(perform: rebuildRecent)
+        .onChange(of: model.callRevision) { _, _ in rebuildRecent() }
         .task { await keepCurrent() }
+    }
+
+    private func rebuildRecent() {
+        recent = Array(model.toolCalls.reversed().prefix(Self.recentLimit))
     }
 
     // ── Hero ────────────────────────────────────────────────────────────
@@ -162,77 +171,6 @@ struct OverviewView: View {
         return stats.backendsReady == 0 ? .deny : .warn
     }
 
-    // ── Sparkline ───────────────────────────────────────────────────────
-
-    /// Local calls, bucketed by hour. The core's ring buffer only goes back as
-    /// far as the app has been running, so this is honestly labelled rather
-    /// than pretending to be a 24-hour history.
-    private var sparkline: some View {
-        Card(fillsHeight: true) {
-            VStack(alignment: .leading, spacing: 12) {
-                SectionHeader("Calls per hour")
-                if buckets.allSatisfy({ $0.count == 0 }) {
-                    EmptyState(
-                        icon: "chart.bar",
-                        title: "No tool calls yet",
-                        message: "Calls routed through this Mac show up here."
-                    )
-                } else {
-                    Chart(buckets) { bucket in
-                        BarMark(
-                            x: .value("Hour", bucket.hour, unit: .hour),
-                            y: .value("Calls", bucket.count)
-                        )
-                        .foregroundStyle(Palette.beam)
-                        .cornerRadius(1.5)
-                    }
-                    // The domain runs to the *end* of the last hour, not its
-                    // start. A bar is drawn across the hour it covers, so with
-                    // the scale stopping at the final bucket's start the newest
-                    // bar — the one you are most likely to be looking at — was
-                    // drawn half outside the plot and clipped against the edge.
-                    .chartXScale(domain: chartStart...chartEnd)
-                    .chartYAxis {
-                        AxisMarks(position: .leading) {
-                            AxisGridLine().foregroundStyle(Palette.lineSoft)
-                            AxisValueLabel().font(.system(size: Typo.micro))
-                        }
-                    }
-                    .chartXAxis {
-                        AxisMarks(values: .stride(by: .hour, count: 6)) {
-                            // Left to itself the axis reads "Aug 6 at 11 AM" on
-                            // every mark, because the window spans two dates and
-                            // Charts disambiguates by spelling both out. Across a
-                            // single day the hour is the only part that varies,
-                            // so the rest is four labels' worth of repetition.
-                            AxisGridLine().foregroundStyle(Palette.lineSoft)
-                            AxisTick().foregroundStyle(Palette.lineSoft)
-                            AxisValueLabel(format: .dateTime.hour())
-                                .font(.system(size: Typo.micro))
-                        }
-                    }
-                    .frame(height: 150)
-                }
-            }
-        }
-    }
-
-    struct Bucket: Identifiable {
-        let hour: Date
-        let count: Int
-        var id: Date { hour }
-    }
-
-    private var chartStart: Date { buckets.first?.hour ?? Date() }
-
-    /// One hour past the last bucket, so the newest bar has room to be drawn.
-    private var chartEnd: Date {
-        (buckets.last?.hour ?? Date()).addingTimeInterval(3600)
-    }
-
-    /// Rebuilt when the calls change, not on every render — bucketing a thousand
-    /// records ten times a second to redraw twenty-four bars is work nobody
-    /// sees.
     /// Cancelled with the view, and idle while the window is in the background:
     /// a Mac that is not being looked at has no reason to be counting.
     private func keepCurrent() async {
@@ -244,40 +182,20 @@ struct OverviewView: View {
         }
     }
 
-    private func rebuildBuckets() {
-        let calendar = Calendar.current
-        guard let start = calendar.date(byAdding: .hour, value: -23, to: Date()) else {
-            buckets = []
-            return
-        }
-        let startOfHour = calendar.dateInterval(of: .hour, for: start)?.start ?? start
+    // ── Activity ────────────────────────────────────────────────────────
 
-        var counts: [Date: Int] = [:]
-        for call in model.toolCalls where call.startedAt >= startOfHour {
-            let hour = calendar.dateInterval(of: .hour, for: call.startedAt)?.start ?? call.startedAt
-            counts[hour, default: 0] += 1
-        }
-        buckets = (0..<24).compactMap { offset in
-            guard let hour = calendar.date(byAdding: .hour, value: offset, to: startOfHour) else {
-                return nil
-            }
-            return Bucket(hour: hour, count: counts[hour] ?? 0)
-        }
-    }
-
-    // ── Right column ────────────────────────────────────────────────────
-
-    /// Broken backends if there are any, the inventory if there are not. A panel
-    /// that always says "everything fine" trains people to stop reading it.
-    @ViewBuilder
-    private var troubleOrTools: some View {
-        let trouble = model.backends.filter { $0.status == .failed || $0.status == .crashed }
-        let shown = trouble.isEmpty ? model.backends : trouble
-
-        Card(padding: 0, fillsHeight: true) {
+    /// What the gateway is routing here, live.
+    ///
+    /// This was its own page in the sidebar, listing every call since launch.
+    /// It sat two rows above Audit — the same list, kept by the gateway and not
+    /// discarded at every restart — so the app had two pages of tool calls, the
+    /// shorter of which was empty most of the time. "Is anything happening right
+    /// now" is an Overview question; "what happened" is an Audit one.
+    private var activity: some View {
+        Card(padding: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                SectionHeader(trouble.isEmpty ? "Backends" : "Needs attention") {
-                    Button("Manage") { page = .backends }
+                SectionHeader("Recent activity") {
+                    Button("Audit trail") { page = .audit }
                         .buttonStyle(.plain)
                         .font(.system(size: Typo.caption, weight: .medium))
                         .foregroundStyle(Palette.beam)
@@ -286,43 +204,58 @@ struct OverviewView: View {
                 .padding(.top, Metrics.cardPadding)
                 .padding(.bottom, 10)
 
-                if model.backends.isEmpty {
+                if recent.isEmpty {
+                    // Not "no tool calls yet" — that read as "this machine has
+                    // never been used" on a machine with a full audit trail.
+                    // This list is an in-memory buffer that starts empty at
+                    // every launch, and the page has to say so.
                     EmptyState(
-                        icon: "server.rack",
-                        title: "No local MCP servers yet",
-                        message: "Add one to put this Mac's tools behind the gateway.",
-                        action: ("Add backend", { page = .backends })
+                        icon: "bolt.horizontal",
+                        title: "No calls since the app started",
+                        message: "Calls the gateway routes here appear as they run. "
+                            + "The gateway keeps the full history.",
+                        action: ("Open the audit trail", { page = .audit })
                     )
                 } else {
-                    // The gate rail: a column of green with a red notch in it is
-                    // readable before any of the words are.
+                    columnHeader
                     VStack(spacing: 0) {
-                        ForEach(Array(shown.enumerated()), id: \.element.id) { index, backend in
-                            RailRow(tone: backend.status.tone, isLast: index == shown.count - 1) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Mono(backend.name, size: Typo.small, weight: .medium)
-                                    Text(backend.error ?? "\(backend.toolCount) tools")
-                                        .font(.system(size: Typo.micro))
-                                        .foregroundStyle(
-                                            backend.error == nil ? Palette.text4 : Palette.deny
-                                        )
-                                        .lineLimit(1)
+                        ForEach(recent) { call in
+                            CallRow(call: call, expanded: expanded == call.requestId)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 3)
+                                .contentShape(.rect)
+                                .onTapGesture {
+                                    guard call.error != nil else { return }
+                                    withAnimation(.snappy(duration: 0.18)) {
+                                        expanded = expanded == call.requestId ? nil : call.requestId
+                                    }
                                 }
-                            } trailing: {
-                                Text(backend.status.label)
-                                    .font(.system(size: Typo.micro, weight: .medium))
-                                    .foregroundStyle(backend.status.tone.color)
-                            }
                         }
                     }
+                    .padding(.bottom, 8)
                 }
             }
         }
-        .frame(width: 320)
+    }
+
+    private var columnHeader: some View {
+        HStack(spacing: 10) {
+            Text("Time").frame(width: 74, alignment: .leading)
+            Text("Tool").frame(maxWidth: .infinity, alignment: .leading)
+            Text("Backend").frame(width: 110, alignment: .leading)
+            Text("Duration").frame(width: 74, alignment: .trailing)
+            Text("Status").frame(width: 68, alignment: .trailing)
+        }
+        .font(.system(size: Typo.micro, weight: .medium))
+        .tracking(0.8)
+        .foregroundStyle(Palette.text3)
+        .padding(.horizontal, 12 + Metrics.rail + 8)
+        .padding(.bottom, 6)
+        .accessibilityHidden(true)
     }
 }
 
-// The update notice used to be a card here. It now lives in the window's
-// top-right chrome (`UpdateChip` in RootView), so it is reachable from every
-// page rather than only this one, and it stops competing with the hero for the
-// one focal slot this view is allowed.
+// The update notice used to be a card here. It now lives in the sidebar's
+// footer (`UpdateRow` in RootView), so it is reachable from every page rather
+// than only this one, and it stops competing with the hero for the one focal
+// slot this view is allowed.

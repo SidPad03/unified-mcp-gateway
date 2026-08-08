@@ -100,7 +100,7 @@ struct GatewayAPI: Sendable {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 20
 
-        let session = URLSession.make(allowInsecureTLS: allowInsecureTLS)
+        let session = URLSession.gateway(allowInsecureTLS: allowInsecureTLS, host: baseURL.host)
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {

@@ -28,6 +28,9 @@ struct LogsView: View {
     @State private var lines: [LogLine] = []
     @State private var lastSeq = 0
     @State private var sources: [String] = [allSources]
+    /// What `sources` was built from, kept so a tick can test membership
+    /// instead of re-hashing the whole buffer — see `absorbSources`.
+    @State private var sourceNames: Set<String> = []
 
     private static let allSources = "All sources"
 
@@ -61,8 +64,10 @@ struct LogsView: View {
         // the whole result afterwards would cost more than the filtering this is
         // avoiding, so collect in reverse and flip the short tail instead.
         var fresh: [LogLine] = []
+        var newNames: [String] = []
         for line in model.logLines.reversed() {
             guard line.seq > lastSeq else { break }
+            if !sourceNames.contains(line.source) { newNames.append(line.source) }
             if matches(line) { fresh.append(line) }
         }
         lines.append(contentsOf: fresh.reversed())
@@ -72,21 +77,47 @@ struct LogsView: View {
             lines.removeFirst(lines.count - Self.maxVisible)
         }
         lastSeq = newest
-        refreshSources()
+        absorbSources(newNames)
     }
 
     /// Matches `MAX_LOG_LINES` in the core.
     private static let maxVisible = 5_000
 
+    /// The full recomputation, for when a snapshot replaces the buffer.
+    ///
+    /// A tick never comes through here. It used to — every batch re-hashed all
+    /// five thousand lines to rebuild a picker list that changes maybe twice a
+    /// session, which at the tick rate was tens of thousands of string hashes a
+    /// second spent proving the list had not changed. Ticks go through
+    /// `absorbSources`, which only ever looks at the lines that just arrived.
     private func refreshSources() {
         var names = Set(model.logLines.map(\.source))
         names.formUnion(model.backends.map(\.name))
         names.insert("agent")
-        let updated = [Self.allSources] + names.sorted()
-        if updated != sources { sources = updated }
+        guard names != sourceNames else { return }
+        sourceNames = names
+        sources = [Self.allSources] + names.sorted()
     }
 
+    private func absorbSources(_ newNames: [String]) {
+        guard !newNames.isEmpty else { return }
+        sourceNames.formUnion(newNames)
+        sources = [Self.allSources] + sourceNames.sorted()
+    }
+
+    /// Pinned to the space it is given — see the long note on `AuditView.body`.
     var body: some View {
+        GeometryReader { proxy in
+            page.frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+        }
+        .onAppear(perform: rebuild)
+        .onChange(of: model.logRevision) { _, _ in appendNew() }
+        .onChange(of: minimumLevel) { _, _ in rebuild() }
+        .onChange(of: source) { _, _ in rebuild() }
+        .onChange(of: query) { _, _ in rebuild() }
+    }
+
+    private var page: some View {
         VStack(alignment: .leading, spacing: Metrics.gutter) {
             header
             filters
@@ -101,20 +132,16 @@ struct LogsView: View {
             body(for: lines)
         }
         .padding(24)
-        .padding(.top, 22)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear(perform: rebuild)
-        .onChange(of: model.logRevision) { _, _ in appendNew() }
-        .onChange(of: minimumLevel) { _, _ in rebuild() }
-        .onChange(of: source) { _, _ in rebuild() }
-        .onChange(of: query) { _, _ in rebuild() }
+        .padding(.top, 16)  // clears the traffic lights and sidebar toggle when the sidebar is hidden
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             PageTitle(title: "Logs", subtitle: "\(lines.count) of \(model.logLines.count) lines")
             Spacer()
-            HStack(spacing: 7) {
+            // 10, not 7: glass buttons carry a halo past their layout bounds,
+            // and at 7 the four of them read as one smeared control.
+            HStack(spacing: 10) {
                 Button {
                     copy()
                 } label: {
@@ -183,22 +210,29 @@ struct LogsView: View {
                 )
             } else {
                 ScrollViewReader { proxy in
-                    // Lazy: five thousand lines cost a viewport of rows.
-                    List(lines) { line in
-                        LogRow(line: line)
-                            .id(line.seq)
-                            .listRowInsets(
-                                EdgeInsets(top: 1, leading: 12, bottom: 1, trailing: 12)
-                            )
-                            .listRowSeparator(.hidden)
+                    // Lazy: five thousand lines cost a viewport of rows. A
+                    // `ScrollView` rather than a `List` because a `List` will
+                    // not be squeezed below a few hundred points, and this is
+                    // the flexible child of a page that fills the window — see
+                    // the note on `AuditView.table`.
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(lines) { line in
+                                LogRow(line: line)
+                                    .id(line.seq)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 1)
+                            }
+                        }
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
+                    .scrollBounceBehavior(.basedOnSize)
+                    // No animation on the jump. Batches arrive up to ten times
+                    // a second, and an animated scroll per batch is a scroll
+                    // that never finishes — continuous animation work for a
+                    // tail that should simply be at the bottom.
                     .onChange(of: lines.last?.seq) { _, seq in
                         guard followTail, let seq else { return }
-                        withAnimation(.linear(duration: 0.12)) {
-                            proxy.scrollTo(seq, anchor: .bottom)
-                        }
+                        proxy.scrollTo(seq, anchor: .bottom)
                     }
                     .onAppear {
                         if let seq = lines.last?.seq { proxy.scrollTo(seq, anchor: .bottom) }
@@ -206,6 +240,7 @@ struct LogsView: View {
                 }
             }
         }
+        .frame(maxHeight: .infinity)
     }
 
     // ── Actions ─────────────────────────────────────────────────────────

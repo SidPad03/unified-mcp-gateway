@@ -13,6 +13,12 @@ import SwiftUI
 struct MCPGatewayAgentApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var model = AgentModel()
+    /// Shared with `RootView` through `UserDefaults`, so the View menu and the
+    /// sidebar's own button toggle one piece of state rather than two.
+    @AppStorage("sidebarHidden") private var sidebarHidden = false
+    /// Same arrangement for the selected page, so ⌘1–⌘5 land on the sidebar's
+    /// own selection.
+    @AppStorage("selectedPage") private var selectedPage = Page.overview.rawValue
 
     var body: some Scene {
         Window("MCP Gateway Agent", id: "main") {
@@ -26,6 +32,25 @@ struct MCPGatewayAgentApp: App {
         .defaultSize(width: 1_060, height: 720)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            // Not `SidebarCommands()`: that drives a `NavigationSplitView`'s
+            // columns, and there is no split view any more — see the note in
+            // `RootView.main`. This drives the same stored flag the sidebar's own
+            // button does, so the menu and the button stay in step.
+            CommandGroup(after: .toolbar) {
+                Button(sidebarHidden ? "Show Sidebar" : "Hide Sidebar") {
+                    sidebarHidden.toggle()
+                }
+                .keyboardShortcut("s", modifiers: [.control, .command])
+                Divider()
+                // ⌘1–⌘5, the way Mail and Xcode number their sidebars. The
+                // custom sidebar has no `List` to give arrow-key navigation, so
+                // the pages are reachable from the keyboard here instead.
+                ForEach(Array(Page.allCases.enumerated()), id: \.element) { index, page in
+                    Button(page.title) { selectedPage = page.rawValue }
+                        .keyboardShortcut(
+                            KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                }
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
                     Task { await model.updater.check() }
@@ -118,10 +143,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         for name in [NSWindow.willCloseNotification, NSWindow.didBecomeKeyNotification] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
-                // On willClose the window is still in `NSApp.windows`, so let
-                // the run loop turn over before counting.
-                Task { @MainActor in AppDelegate.shared?.syncActivationPolicy() }
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { note in
+                // `object: nil` fires for every window the process owns — the
+                // Settings scene, sheets, the menu-bar popover — and only
+                // main-capable windows say anything about whether the app
+                // should keep its Dock icon. Filtered here, so opening the
+                // menu-bar popover does not churn the activation policy.
+                // Delivered on the main queue; `assumeIsolated` states that
+                // for the compiler.
+                let window = note.object as? NSWindow
+                MainActor.assumeIsolated {
+                    guard let window, window.canBecomeMain, !(window is NSPanel) else { return }
+                    // On willClose the window is still in `NSApp.windows`, so
+                    // let the run loop turn over before counting.
+                    Task { @MainActor in AppDelegate.shared?.syncActivationPolicy() }
+                }
             }
         }
     }
@@ -133,7 +169,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func handleGetURL(event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
-            let url = URL(string: string)
+            let url = URL(string: string),
+            // Only the registered callback shape reaches the auth flow. The
+            // state and PKCE checks make a forged URL useless anyway, but
+            // arbitrary `mcp-gateway-agent://` links from anywhere on the
+            // system have no business being fed into it at all.
+            url.scheme == AgentAuth.callbackScheme,
+            url.host == "auth", url.path == "/callback"
         else { return }
         model?.handleCallbackURL(url)
     }
@@ -198,6 +240,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hasWindow = NSApp.windows.contains { window in
             window.isVisible && window.canBecomeMain && !(window is NSPanel)
         }
-        NSApp.setActivationPolicy(hasWindow ? .regular : .accessory)
+        let desired: NSApplication.ActivationPolicy = hasWindow ? .regular : .accessory
+        // Setting the policy is not idempotent chrome-wise — skip the no-op.
+        guard NSApp.activationPolicy() != desired else { return }
+        NSApp.setActivationPolicy(desired)
     }
 }

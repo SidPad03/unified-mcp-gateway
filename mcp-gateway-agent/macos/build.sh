@@ -22,12 +22,60 @@ UNIVERSAL=0
 MAKE_DMG=0
 CONFIGURATION="release"
 
+say() { printf '\033[1;35m▸\033[0m %s\n' "$*"; }
+
+# ── A stable signing identity ───────────────────────────────────────────
+#
+# Creates a self-signed code-signing certificate in the login keychain, once.
+# See the note above the signing step for why this matters: it is what stops
+# macOS re-asking for Keychain access after every single build.
+#
+# The certificate is not trusted by Gatekeeper — nothing self-signed is — so
+# this changes nothing about distribution. What it changes is that every build
+# from this machine is the *same application* as far as the Keychain is
+# concerned.
+make_dev_identity() {
+  local name="MCP Gateway Agent (local dev)"
+  if security find-certificate -c "$name" >/dev/null 2>&1; then
+    say "'$name' already exists; nothing to do."
+    return 0
+  fi
+
+  local work
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' RETURN
+
+  say "Creating '$name'"
+  openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+    -keyout "$work/key.pem" -out "$work/cert.pem" \
+    -subj "/CN=$name" \
+    -addext "extendedKeyUsage=critical,codeSigning" \
+    -addext "basicConstraints=critical,CA:false" \
+    -addext "keyUsage=critical,digitalSignature" >/dev/null 2>&1
+
+  # `-legacy` and the SHA-1 PBE algorithms are not optional: OpenSSL 3 defaults
+  # to AES-256-CBC with a SHA-256 MAC, and the Security framework's PKCS#12
+  # reader rejects that with "MAC verification failed (wrong password?)" — which
+  # is the wrong diagnosis and sends you looking for a typo that is not there.
+  openssl pkcs12 -export -out "$work/id.p12" \
+    -inkey "$work/key.pem" -in "$work/cert.pem" \
+    -name "$name" -passout pass:mcpga \
+    -legacy -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES >/dev/null 2>&1
+
+  security import "$work/id.p12" -k "$HOME/Library/Keychains/login.keychain-db" \
+    -P mcpga -T /usr/bin/codesign -A
+
+  say "Done. Rebuild, then click 'Always Allow' on the Keychain prompt once."
+  say "It will not ask again."
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) VERSION="$2"; shift 2 ;;
     --universal) UNIVERSAL=1; shift ;;
     --dmg) MAKE_DMG=1; shift ;;
     --debug) CONFIGURATION="debug"; shift ;;
+    --make-dev-identity) make_dev_identity; exit 0 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
@@ -41,8 +89,6 @@ fi
 APP_NAME="MCP Gateway Agent"
 BUILD_DIR="$AGENT_ROOT/build"
 APP="$BUILD_DIR/$APP_NAME.app"
-
-say() { printf '\033[1;35m▸\033[0m %s\n' "$*"; }
 
 # ── 1. The Rust core ────────────────────────────────────────────────────
 
@@ -183,11 +229,36 @@ fi
 
 # ── 5. Signing ──────────────────────────────────────────────────────────
 
-# Ad-hoc unless a Developer ID identity is configured (decision D1). An ad-hoc
-# signature is enough for the app to run and for `SMAppService` to register it;
-# what it does not do is clear Gatekeeper's quarantine on a fresh download, which
-# is why the README says right-click → Open the first time.
-IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
+# The signing identity is what the Keychain remembers, and that is why this is
+# not just a Gatekeeper question.
+#
+# An ad-hoc signature (`-`) has no identity: the app is identified by the hash of
+# its own binary, which changes on **every build**. The Keychain grants access to
+# an application by its designated requirement, so with ad-hoc signing every
+# build is a different application as far as the Keychain is concerned, and every
+# build re-asks "MCP Gateway Agent wants to use your confidential information".
+# That is not a one-off after an update — it is once per rebuild, for ever, and
+# denying it looks exactly like being signed out.
+#
+# Signing with any *stable* identity fixes it, because then the designated
+# requirement is "this bundle id, signed by this certificate" and it holds across
+# rebuilds. A Developer ID certificate is the right one (it also clears
+# Gatekeeper), but a self-signed certificate costs nothing and fixes the Keychain
+# half on its own. Create one with `./build.sh --make-dev-identity`.
+#
+# Order: an explicit APPLE_SIGNING_IDENTITY wins, then the local dev identity if
+# it exists, then ad-hoc.
+DEV_IDENTITY="MCP Gateway Agent (local dev)"
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+  IDENTITY="$APPLE_SIGNING_IDENTITY"
+elif security find-certificate -c "$DEV_IDENTITY" >/dev/null 2>&1; then
+  IDENTITY="$DEV_IDENTITY"
+else
+  IDENTITY="-"
+  say "No stable signing identity; using ad-hoc."
+  say "  macOS will re-ask for Keychain access after every build."
+  say "  Run './build.sh --make-dev-identity' once to stop that."
+fi
 say "Signing with identity: $IDENTITY"
 codesign --force --deep --options runtime \
   --sign "$IDENTITY" \

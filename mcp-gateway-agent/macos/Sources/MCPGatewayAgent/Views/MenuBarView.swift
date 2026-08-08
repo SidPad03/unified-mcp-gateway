@@ -18,6 +18,10 @@ struct MenuBarView: View {
         .frame(width: 268)
     }
 
+    /// No agent id under the status line. It carried this Mac's own hostname —
+    /// the one fact the person looking at their own menu bar already has — and
+    /// it was the widest thing in the popover. The same call the sidebar made
+    /// about its subtitle.
     private var status: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -29,28 +33,31 @@ struct MenuBarView: View {
                     .font(.system(size: Typo.small, weight: .semibold))
                 Spacer(minLength: 0)
             }
-            Text(model.connection?.agentId ?? "—")
-                .font(.system(size: Typo.caption, design: .monospaced))
-                .foregroundStyle(Palette.text3)
-                .lineLimit(1)
-                .truncationMode(.middle)
 
             if model.isSignedIn {
-                HStack(spacing: 14) {
+                // Space-between, not equal thirds. Equal columns left every
+                // metric hugging its column's left edge, which read as three
+                // figures drifting toward the left of the popover with a dead
+                // right margin; spacers between them spread the row edge to
+                // edge with even gaps.
+                HStack(alignment: .top, spacing: 0) {
                     Metric(
                         value: "\(model.stats?.toolsRegistered ?? 0)",
                         label: "tools"
                     )
+                    Spacer(minLength: 16)
                     Metric(
                         value: "\(model.stats?.backendsReady ?? 0)/\(model.stats?.backendsTotal ?? 0)",
                         label: "backends"
                     )
+                    Spacer(minLength: 16)
                     Metric(
                         value: Format.count(model.stats?.callsTotal ?? 0),
                         label: "calls"
                     )
                 }
                 .padding(.top, 2)
+                .padding(.trailing, 6)
             }
         }
     }
@@ -77,17 +84,7 @@ struct MenuBarView: View {
 
     private var footer: some View {
         VStack(spacing: 2) {
-            if case let .available(release) = model.updater.state {
-                HStack(spacing: 6) {
-                    Image(systemName: "sparkles").font(.system(size: Typo.micro))
-                    Text("Version \(release.version) is available")
-                        .font(.system(size: Typo.caption))
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(Palette.beam)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 5)
-            }
+            updateRow
             SettingsLink {
                 HStack(spacing: 8) {
                     Image(systemName: "gearshape").frame(width: 15)
@@ -105,6 +102,54 @@ struct MenuBarView: View {
             }
         }
     }
+
+    /// The update affordance, mirroring the sidebar's footer row: a green
+    /// action while there is something to do, a progress line while it
+    /// downloads, and "Update now" once a staged bundle is waiting on a
+    /// restart the user declined.
+    @ViewBuilder
+    private var updateRow: some View {
+        switch model.updater.state {
+        case let .available(release):
+            MenuRow(
+                title: "Update to version \(release.version)",
+                icon: "arrow.down.circle.fill",
+                tint: Palette.beam
+            ) {
+                Task { await model.updater.requestUpdate(release) }
+            }
+
+        case .downloading:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Downloading update…")
+                    .font(.system(size: Typo.small))
+                    .foregroundStyle(Palette.text3)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+
+        case let .readyToInstall(release):
+            MenuRow(title: "Update now", icon: "arrow.down.circle.fill", tint: Palette.beam) {
+                Task { await model.updater.requestUpdate(release) }
+            }
+
+        case .readyToRelaunch:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Relaunching…")
+                    .font(.system(size: Typo.small))
+                    .foregroundStyle(Palette.text3)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+
+        case .idle, .checking, .upToDate, .failed:
+            EmptyView()
+        }
+    }
 }
 
 private struct Metric: View {
@@ -112,9 +157,10 @@ private struct Metric: View {
     let label: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 1) {
             Text(value)
                 .font(.system(size: Typo.body, weight: .semibold, design: .rounded))
+                .monospacedDigit()
             Text(label)
                 .font(.system(size: Typo.micro))
                 .foregroundStyle(Palette.text3)
@@ -125,6 +171,7 @@ private struct Metric: View {
 private struct MenuRow: View {
     let title: String
     let icon: String
+    var tint: Color?
     let action: () -> Void
 
     @State private var hovering = false
@@ -136,6 +183,7 @@ private struct MenuRow: View {
                 Text(title).font(.system(size: Typo.small))
                 Spacer(minLength: 0)
             }
+            .foregroundStyle(tint ?? Color.primary)
             .padding(.horizontal, 7)
             .padding(.vertical, 5)
             .background(

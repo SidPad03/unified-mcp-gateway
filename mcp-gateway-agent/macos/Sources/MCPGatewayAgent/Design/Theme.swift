@@ -52,11 +52,6 @@ enum Palette {
     static let warn = dynamic("mcpgw.warn", dark: 0xE5A2_44, light: 0xA267_0C)
     static let deny = dynamic("mcpgw.deny", dark: 0xF25F_6B, light: 0xC832_3F)
 
-    // Kept as aliases so the status extensions below read in the product's
-    // vocabulary rather than the palette's.
-    static let primaryText = text
-    static let secondaryText = text3
-
     // ── Helpers ─────────────────────────────────────────────────────────
 
     private static func dynamic(_ name: String, dark: UInt32, light: UInt32) -> Color {
@@ -134,8 +129,6 @@ extension BackendStatus {
         case .disabled, .stopped: .neutral
         }
     }
-
-    var tint: Color { tone.color }
 }
 
 extension ConnState {
@@ -187,8 +180,6 @@ enum Radius {
     static let control: CGFloat = 6
     static let row: CGFloat = 8
     static let card: CGFloat = 12
-    static let panel: CGFloat = 16
-    static let window: CGFloat = 12
 }
 
 /// The type scale — a minor third off a 13pt base, whole points only. The same
@@ -205,7 +196,6 @@ enum Typo {
     static let medium: CGFloat = 15
     static let large: CGFloat = 18
     static let title: CGFloat = 22
-    static let hero: CGFloat = 26
     static let display: CGFloat = 34
 
     /// Identifiers — tool names, agent ids, hosts, timestamps, durations — are

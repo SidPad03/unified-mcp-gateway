@@ -31,23 +31,40 @@ struct UsageView: View {
         Self.ranges.first { $0.0 == range }?.1 ?? range
     }
 
+    /// The page is pinned to the width it is given, for the same reason the
+    /// Audit page is pinned to its height.
+    ///
+    /// The flow board sized its columns from a measurement of itself, and asked
+    /// for those widths as a hard minimum. That made the board's width a demand
+    /// rather than a response: the card could not be narrower, so the page could
+    /// not, so the window could not — and the measurement that would have let it
+    /// shrink could never happen, because the thing being measured was the thing
+    /// refusing to shrink. Dragging the window out and back in left the content
+    /// at its old width with the window smaller around it, which pushed the
+    /// sidebar off the left edge and the range picker off the right.
+    ///
+    /// The board itself now asks for its widths as maximums (see
+    /// `UsageFlowBoard`); this is the belt to that pair of braces.
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Metrics.gutter) {
-                header
-                if let failure, flow != nil {
-                    // A refresh that failed while there is still a graph on
-                    // screen is a banner, not a page: the numbers are stale, not
-                    // gone. With nothing drawn yet it becomes the page itself,
-                    // below.
-                    InlineBanner(text: failure) { self.failure = nil }
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: Metrics.gutter) {
+                    header
+                    if let failure, flow != nil {
+                        // A refresh that failed while there is still a graph on
+                        // screen is a banner, not a page: the numbers are stale,
+                        // not gone. With nothing drawn yet it becomes the page
+                        // itself, below.
+                        InlineBanner(text: failure) { self.failure = nil }
+                    }
+                    content
                 }
-                content
+                .padding(Metrics.pagePadding)
+                .padding(.top, 16)  // clears the traffic lights and sidebar toggle when the sidebar is hidden
+                .frame(width: proxy.size.width, alignment: .topLeading)
             }
-            .padding(Metrics.pagePadding)
-            .padding(.top, 22)  // clears the floating traffic lights
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .scrollBounceBehavior(.basedOnSize)
         .task(id: model.backendId) { await poll() }
         .onChange(of: expanded) { _, _ in rebuild() }
         // The local servers are half the input — they are what turns a namespace
@@ -68,7 +85,7 @@ struct UsageView: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             PageTitle(
                 title: "Usage",
-                subtitle: model.account?.scopeDescription ?? "Calls to this machine"
+                subtitle: model.account?.scopeDescription ?? "Routed calls"
             )
             Spacer(minLength: 12)
             // A fixed slot, so the picker does not step sideways every time a
@@ -178,6 +195,9 @@ struct UsageView: View {
                 },
                 known: model.backends.map {
                     .init(name: $0.name, tone: $0.status.tone, status: $0.status.label.lowercased())
+                },
+                appTools: graph.appToTool.map {
+                    .init(app: $0.source, tool: $0.target, callCount: $0.callCount)
                 }
             ),
             toolLimit: expanded ? Int.max : FlowModel.defaultToolLimit

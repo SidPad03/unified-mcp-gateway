@@ -230,8 +230,8 @@ private struct UpdatesPane: View {
                             .frame(maxHeight: 120)
                         }
                         if model.updater.canInstall {
-                            Button("Update and relaunch") {
-                                Task { await model.updater.install(release) }
+                            Button("Download and install") {
+                                Task { await model.updater.requestUpdate(release) }
                             }
                             .buttonStyle(.glassProminent)
                         } else {
@@ -245,6 +245,15 @@ private struct UpdatesPane: View {
                     }
                 case let .downloading(progress):
                     ProgressView(value: progress) { Text("Downloading…") }
+                case let .readyToInstall(release):
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Version \(release.version) is downloaded and ready")
+                            .font(.system(size: Typo.small, weight: .medium))
+                        Button("Restart and update") {
+                            Task { await model.updater.requestUpdate(release) }
+                        }
+                        .buttonStyle(.glassProminent)
+                    }
                 case .readyToRelaunch:
                     // Installing quits and reopens the app on its own, so this
                     // is a state you see in passing rather than one to act on.

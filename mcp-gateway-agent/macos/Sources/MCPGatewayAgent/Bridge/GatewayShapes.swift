@@ -31,7 +31,6 @@ struct AuditEvent: Decodable, Sendable, Identifiable, Equatable {
     var eventId: String
     var timestamp: Date
     var traceId: String
-    var userId: String?
     var toolName: String
     var backendName: String
     var riskCategory: String?
@@ -42,7 +41,7 @@ struct AuditEvent: Decodable, Sendable, Identifiable, Equatable {
     var application: String?
 
     private enum CodingKeys: String, CodingKey {
-        case eventId, timestamp, traceId, userId, toolName, backendName
+        case eventId, timestamp, traceId, toolName, backendName
         case riskCategory, durationMs, status, errorMessage, policyDecision, application
     }
 
@@ -54,41 +53,11 @@ struct AuditEvent: Decodable, Sendable, Identifiable, Equatable {
         status = try c.decode(String.self, forKey: .status)
         traceId = try c.decodeIfPresent(String.self, forKey: .traceId) ?? ""
         backendName = try c.decodeIfPresent(String.self, forKey: .backendName) ?? ""
-        userId = try c.decodeIfPresent(String.self, forKey: .userId)
         riskCategory = try c.decodeIfPresent(String.self, forKey: .riskCategory)
         durationMs = try c.decodeIfPresent(Double.self, forKey: .durationMs)
         errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
         policyDecision = try c.decodeIfPresent(String.self, forKey: .policyDecision)
         application = try c.decodeIfPresent(String.self, forKey: .application)
-    }
-
-    /// For fixtures and previews; the wire always goes through `init(from:)`.
-    init(
-        eventId: String,
-        timestamp: Date,
-        toolName: String,
-        status: String,
-        traceId: String = "",
-        backendName: String = "",
-        userId: String? = nil,
-        riskCategory: String? = nil,
-        durationMs: Double? = nil,
-        errorMessage: String? = nil,
-        policyDecision: String? = nil,
-        application: String? = nil
-    ) {
-        self.eventId = eventId
-        self.timestamp = timestamp
-        self.toolName = toolName
-        self.status = status
-        self.traceId = traceId
-        self.backendName = backendName
-        self.userId = userId
-        self.riskCategory = riskCategory
-        self.durationMs = durationMs
-        self.errorMessage = errorMessage
-        self.policyDecision = policyDecision
-        self.application = application
     }
 
     var id: String { eventId }
@@ -110,67 +79,28 @@ struct AuditEvent: Decodable, Sendable, Identifiable, Equatable {
 ///
 /// A summary is worth showing with a hole in it. It is not worth taking the rest
 /// of the page down for.
+/// Only the four figures the summary band draws. The endpoint also sends
+/// `events_24h`, `top_tools`, `status_breakdown` and `hourly_volume`; the cards
+/// that showed them were removed from the Audit page (see the notes there), and
+/// the decoder skips what nothing reads.
 struct AuditStats: Decodable, Sendable {
     var totalEvents: Int
-    var events24h: Int
     var successCount: Int
     var errorCount: Int
     var deniedCount: Int
     var avgDurationMs: Double
-    var topTools: [ToolStat]
-    var statusBreakdown: [StatusStat]
-    var hourlyVolume: [HourlyStat]
 
     private enum CodingKeys: String, CodingKey {
-        // `events24H`, with the capital H, is not a typo and is the whole reason
-        // this page failed.
-        //
-        // `.convertFromSnakeCase` splits on underscores and capitalises each
-        // following component, and `24h` capitalises to `24H` — the digits are
-        // skipped and the first *letter* is raised. So the gateway's
-        // `events_24h` arrives as `events24H`, the synthesised key for a
-        // property named `events24h` did not match it, and the decode failed
-        // with `keyNotFound`. Foundation renders that as "The data couldn't be
-        // read because it is missing.", which is what the Audit page showed
-        // instead of a summary — against every gateway, healthy or not, since
-        // this was written.
-        //
-        // Spelled out rather than left to the strategy, because the strategy is
-        // the thing that got it wrong.
-        case events24h = "events24H"
-        case totalEvents, successCount, errorCount, deniedCount
-        case avgDurationMs, topTools, statusBreakdown, hourlyVolume
+        case totalEvents, successCount, errorCount, deniedCount, avgDurationMs
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         totalEvents = try c.decodeIfPresent(Int.self, forKey: .totalEvents) ?? 0
-        events24h = try c.decodeIfPresent(Int.self, forKey: .events24h) ?? 0
         successCount = try c.decodeIfPresent(Int.self, forKey: .successCount) ?? 0
         errorCount = try c.decodeIfPresent(Int.self, forKey: .errorCount) ?? 0
         deniedCount = try c.decodeIfPresent(Int.self, forKey: .deniedCount) ?? 0
         avgDurationMs = try c.decodeIfPresent(Double.self, forKey: .avgDurationMs) ?? 0
-        topTools = try c.decodeIfPresent([ToolStat].self, forKey: .topTools) ?? []
-        statusBreakdown = try c.decodeIfPresent([StatusStat].self, forKey: .statusBreakdown) ?? []
-        hourlyVolume = try c.decodeIfPresent([HourlyStat].self, forKey: .hourlyVolume) ?? []
-    }
-
-    struct ToolStat: Decodable, Sendable, Identifiable, Equatable {
-        var toolName: String
-        var count: Int
-        var id: String { toolName }
-    }
-
-    struct StatusStat: Decodable, Sendable, Identifiable, Equatable {
-        var status: String
-        var count: Int
-        var id: String { status }
-    }
-
-    struct HourlyStat: Decodable, Sendable, Identifiable, Equatable {
-        var hour: Date
-        var count: Int
-        var id: Date { hour }
     }
 
     var errorRate: Double {
@@ -181,45 +111,44 @@ struct AuditStats: Decodable, Sendable {
 
 // ── Usage shapes ────────────────────────────────────────────────────────
 
+/// The three collections the flow board actually draws. The endpoint also
+/// sends `users`, `backends` and three other edge lists; the board derives its
+/// backend column by splitting tool namespaces (see `ToolName.split`), so
+/// decoding the rest was work done to be thrown away on every poll.
 struct UsageGraph: Decodable, Sendable {
-    var users: [UserNode]
     var applications: [AppNode]
-    var backends: [BackendNode]
     var tools: [ToolNode]
-    var userToApp: [GraphEdge]
-    var appToBackend: [GraphEdge]
-    var backendToTool: [GraphEdge]
+    /// application → *tool*, which is what the flow board turns into
+    /// application → backend once it has split the namespace.
+    ///
+    /// Optional on the wire on purpose: a gateway older than this app does not
+    /// send it, and the right answer there is a board without those lines rather
+    /// than a page that fails to load. Everything else on Usage works without
+    /// it.
+    var appToTool: [GraphEdge] = []
 
-    struct UserNode: Decodable, Sendable, Identifiable, Equatable {
-        var userId: String
-        var username: String
-        var callCount: Int
-        var lastSeen: Date?
-        var id: String { userId }
+    private enum CodingKeys: String, CodingKey {
+        case applications, tools, appToTool
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        applications = try c.decodeIfPresent([AppNode].self, forKey: .applications) ?? []
+        tools = try c.decodeIfPresent([ToolNode].self, forKey: .tools) ?? []
+        appToTool = try c.decodeIfPresent([GraphEdge].self, forKey: .appToTool) ?? []
     }
 
     struct AppNode: Decodable, Sendable, Identifiable, Equatable {
         var application: String
         var isConnected: Bool
-        var lastSeen: Date?
         var callCount: Int
         var id: String { application }
     }
 
-    struct BackendNode: Decodable, Sendable, Identifiable, Equatable {
-        var backendName: String
-        var transport: String
-        var healthStatus: String
-        var toolCount: Int
-        var id: String { backendName }
-    }
-
     struct ToolNode: Decodable, Sendable, Identifiable, Equatable {
         var toolName: String
-        var backendName: String
         var riskCategory: String?
         var callCount: Int
-        var lastCall: Date?
         var id: String { toolName }
     }
 
@@ -227,6 +156,5 @@ struct UsageGraph: Decodable, Sendable {
         var source: String
         var target: String
         var callCount: Int
-        var lastCall: Date?
     }
 }

@@ -1,4 +1,3 @@
-import Charts
 import SwiftUI
 
 /// The gateway's audit trail for this machine.
@@ -24,6 +23,8 @@ struct AuditView: View {
     /// rows that did not change.
     @State private var filtered: [AuditEvent] = []
     @State private var stats: AuditStats?
+    /// When the summary band was last fetched — see the note in `refresh`.
+    @State private var statsFetched: Date?
     @State private var total = 0
     @State private var failure: String?
     @State private var loading = false
@@ -41,17 +42,39 @@ struct AuditView: View {
     /// export is the right one.
     private static let maxEvents = 2_000
 
+    /// The page is handed exactly the space the window has, and is never allowed
+    /// to ask for more.
+    ///
+    /// This is the fix for the page that broke the window, and it is deliberately
+    /// a structural guarantee rather than another attempt to find the one child
+    /// that was demanding too much. This page is the only one with a summary
+    /// band *and* a filter bar *and* a ledger stacked in a single non-scrolling
+    /// column, so it is the only one where the children's minimum heights add up
+    /// to more than a small window has. SwiftUI's answer to "your minimum is
+    /// bigger than the offer" is to lay out at the minimum and overflow — and
+    /// because `.windowResizability(.contentSize)` derives the window's minimum
+    /// from that same number, the overflow was drawn *outside* the window: the
+    /// sidebar's brand lockup, the page title and the Refresh button were all
+    /// above the top edge, and dragging the window bigger or smaller never
+    /// changed it, because the demand was a constant.
+    ///
+    /// `GeometryReader` accepts any proposal and reports it, so the page's own
+    /// minimum becomes zero; the explicit `frame(width:height:)` then forces the
+    /// column into that space. The children can all absorb it — the ledger is a
+    /// `ScrollView` and everything above it is a fixed-height band.
     var body: some View {
-        VStack(alignment: .leading, spacing: Metrics.gutter) {
-            header
-            if let failure, !events.isEmpty {
-                InlineBanner(text: failure) { self.failure = nil }
+        GeometryReader { proxy in
+            VStack(alignment: .leading, spacing: Metrics.gutter) {
+                header
+                if let failure, !events.isEmpty {
+                    InlineBanner(text: failure) { self.failure = nil }
+                }
+                content
             }
-            content
+            .padding(Metrics.pagePadding)
+            .padding(.top, 16)  // clears the traffic lights and sidebar toggle when the sidebar is hidden
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
-        .padding(Metrics.pagePadding)
-        .padding(.top, 22)  // clears the floating traffic lights
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: model.backendId) { await poll() }
         .onChange(of: query) { _, _ in refilter() }
         .onChange(of: statusFilter) { _, _ in refilter() }
@@ -62,7 +85,7 @@ struct AuditView: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             PageTitle(
                 title: "Audit",
-                subtitle: model.account?.scopeDescription ?? "Calls to this machine"
+                subtitle: model.account?.scopeDescription ?? "Routed calls"
             )
             Spacer(minLength: 12)
             ProgressView()
@@ -111,86 +134,59 @@ struct AuditView: View {
 
     // ── Summary ─────────────────────────────────────────────────────────
 
-    /// Four figures and the shape of the last day, in one band.
+    /// Four figures in one band, all describing **the same events the table
+    /// below describes**.
     ///
-    /// `fixedSize` vertically is what keeps it a band. The cards inside a row
-    /// ask for `maxHeight: .infinity` so they match each other, and this page —
-    /// unlike every other one here — is a plain `VStack` filling the window
-    /// rather than a `ScrollView`, so "as tall as you can be" is answered
-    /// literally and a hundred-point row grows to six hundred.
+    /// The headline used to be `events_24h` while the error rate, the latency
+    /// and the denial count were all-time — figures in one row across two
+    /// different windows. On a machine that had been quiet for a day it read
+    /// "Calls · 24h: 0" directly above a ledger listing hundreds of events, and
+    /// on a busy one it read 15 above a ledger that said 147. Either way the
+    /// band contradicted the thing it was summarising.
+    ///
+    /// `fixedSize` vertically is what keeps it a band rather than a panel: the
+    /// `Card` inside would otherwise answer "as tall as you can be" literally,
+    /// because this page fills the window rather than scrolling.
     @ViewBuilder
     private var summary: some View {
         if let stats {
             Card {
-                HStack(alignment: .top, spacing: 20) {
-                    Stat(value: Format.count(stats.events24h), label: "Calls · 24h")
+                // 24, and no trailing spacer — the same row as Overview's,
+                // Backends' and Usage's. Each `Stat` already asks for
+                // `maxWidth: .infinity`, so four of them divide the card into
+                // even columns; a `Spacer` on the end takes that width back and
+                // bunches them against the left, which is what made this one
+                // band look unlike every other page.
+                HStack(alignment: .top, spacing: 24) {
+                    Stat(value: Format.count(stats.totalEvents), label: "Calls")
                     Stat(
                         value: Format.percent(stats.errorRate),
                         label: "Error rate",
                         tint: stats.errorRate > 0.05 ? Palette.deny : Palette.text
                     )
-                    Stat(value: Format.duration(stats.avgDurationMs), label: "Latency")
+                    // `avg_duration_ms` is `AVG(duration_ms)`, and the gateway
+                    // sends 0 when there is nothing to average. "0 ms" is a
+                    // measurement; this is the absence of one.
+                    Stat(
+                        value: stats.totalEvents == 0
+                            ? "—" : Format.duration(stats.avgDurationMs),
+                        label: "Latency"
+                    )
                     Stat(
                         value: Format.count(stats.deniedCount),
                         label: "Denied",
                         tint: stats.deniedCount > 0 ? Palette.warn : Palette.text
                     )
-                    volume(stats)
+                    // A fifth slot held a 24-hour volume strip. It has been
+                    // removed: it answered one question — "was there a spike" —
+                    // that the ledger underneath answers directly, it was the
+                    // only thing in the band on a different time window from the
+                    // rest, and it was the one element that could not survive a
+                    // narrow window without truncating its own caption.
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    /// A strip, not a chart, and the fifth thing in the row rather than a band
-    /// of its own.
-    ///
-    /// A y-axis, gridlines and six-hourly tick labels cost a hundred and
-    /// seventy-five points of window to answer one question — "was there a
-    /// spike" — that thirty-six points of bar answers just as well. The scale it
-    /// loses with the axis comes back as the peak, in words, on the label. Its
-    /// label sits where the other four have theirs, so it reads as one more
-    /// figure and not as a chart that wandered in.
-    @ViewBuilder
-    private func volume(_ stats: AuditStats) -> some View {
-        if !stats.hourlyVolume.isEmpty {
-            let peak = stats.hourlyVolume.map(\.count).max() ?? 0
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    FieldLabel("Volume · 24h")
-                    Spacer(minLength: 4)
-                    Text("peak \(peak)/h")
-                        .font(.system(size: Typo.micro))
-                        .monospacedDigit()
-                        .foregroundStyle(Palette.text4)
-                }
-                Chart(stats.hourlyVolume) { point in
-                    BarMark(
-                        x: .value("Hour", point.hour, unit: .hour),
-                        y: .value("Calls", point.count)
-                    )
-                    .foregroundStyle(Palette.beam)
-                    .cornerRadius(1.5)
-                }
-                // The bar covering the newest hour needs the scale to run past
-                // it, or it is drawn half outside the plot and clipped.
-                .chartXScale(domain: volumeStart...volumeEnd)
-                .chartXAxis(.hidden)
-                .chartYAxis(.hidden)
-                .chartPlotStyle { $0.padding(.zero) }
-                .frame(height: 36)
-            }
-            .frame(width: 200)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Calls per hour over the last day, peaking at \(peak) an hour")
-        }
-    }
-
-    private var volumeStart: Date { stats?.hourlyVolume.first?.hour ?? Date() }
-
-    /// One hour past the last point, so the newest bar is drawn in full.
-    private var volumeEnd: Date {
-        (stats?.hourlyVolume.last?.hour ?? Date()).addingTimeInterval(3600)
     }
 
     // ── Filters ─────────────────────────────────────────────────────────
@@ -239,6 +235,27 @@ struct AuditView: View {
 
     // ── Table ───────────────────────────────────────────────────────────
 
+    /// The ledger.
+    ///
+    /// `ScrollView` + `LazyVStack`, not `List`, and that is the whole reason
+    /// this page used to break the window.
+    ///
+    /// A macOS `List` reports a **minimum** height of several hundred points —
+    /// it is an `NSTableView` underneath and it will not be squeezed. This page
+    /// is the one page whose ledger is a sibling of a summary band and a filter
+    /// bar rather than the only thing under the title, so those minimums add up:
+    /// the page asked for about 950 points no matter what it was offered. That
+    /// number then became the window's minimum content height, by way of
+    /// `.windowResizability(.contentSize)` — and because the window had already
+    /// been opened at the size it was last left at, the content simply
+    /// overflowed it, top and bottom, taking the sidebar and the page header off
+    /// the screen with it. Resizing did nothing, because the demand was a
+    /// constant.
+    ///
+    /// A `ScrollView` has a minimum height of zero: it scrolls instead of
+    /// insisting. Nothing is lost by the swap — the rows already draw their own
+    /// separators and their own rail, and selection is a sheet rather than a
+    /// list selection, so `List` was providing nothing this page used.
     private var table: some View {
         Card(padding: 0) {
             VStack(spacing: 0) {
@@ -252,27 +269,31 @@ struct AuditView: View {
                             ? "Calls the gateway routes to this Mac are recorded here."
                             : nil
                     )
-                    .frame(maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    List(filtered) { event in
-                        AuditRow(event: event, compact: compact)
-                            .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
-                            .listRowSeparator(.hidden)
-                            .contentShape(.rect)
-                            .onTapGesture { selected = event }
+                    ScrollView {
+                        // Lazy, so two thousand events cost a viewport of rows.
+                        // One subview per element — no `if` inside the row — or
+                        // the stack has to keep the off-screen ones alive.
+                        LazyVStack(spacing: 0) {
+                            ForEach(filtered) { event in
+                                AuditRow(event: event, compact: compact)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 3)
+                                    .contentShape(.rect)
+                                    .onTapGesture { selected = event }
+                            }
+                        }
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
+                    .scrollBounceBehavior(.basedOnSize)
                 }
                 olderFooter
             }
         }
-        // The one flexible child of the page, so it takes whatever the header,
-        // the summary and the filters leave. The floor is well under what is
-        // left at the window's minimum height (about 250 points), so it never
-        // forces the page to overflow — it only stops the table collapsing to
-        // nothing if something above it ever grows.
-        .frame(minHeight: 160, maxHeight: .infinity)
+        // The one flexible child of the page: it takes whatever the header, the
+        // summary and the filters leave, and it can be given nothing at all
+        // without the page overflowing.
+        .frame(maxHeight: .infinity)
         // Measured in the background so the reader cannot claim the height —
         // see the same note on `UsageFlowBoard`.
         .background {
@@ -376,6 +397,11 @@ struct AuditView: View {
                 events = page.events
                 exhausted = page.events.count < Self.pageSize
                 refilter()
+            } else if page.events.count == 1, page.events[0].eventId == events.first?.eventId {
+                // The inclusive `since` bound hands the newest row back on
+                // every poll, so "one event, and it is already the top of the
+                // ledger" is the quiet-gateway case — not worth the id-set and
+                // re-sort that `merge` does.
             } else if !page.events.isEmpty {
                 merge(page.events)
             }
@@ -384,7 +410,15 @@ struct AuditView: View {
             // context. A stats call that fails should not take the ledger with
             // it, which is what happened when the two were fetched together and
             // the whole `do` block unwound.
-            stats = try await api.auditStats()
+            //
+            // Once a minute, not once a poll. The events request is
+            // incremental; this one is a COUNT and an AVG over the whole audit
+            // table, and issuing it six times a minute to redraw four numbers
+            // that barely move was the most expensive query the app sent.
+            if reset || statsFetched.map({ Date.now.timeIntervalSince($0) > 60 }) ?? true {
+                stats = try await api.auditStats()
+                statsFetched = .now
+            }
             failure = nil
         } catch is CancellationError {
             return

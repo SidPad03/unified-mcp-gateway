@@ -8,7 +8,11 @@ enum AuditColumn {
     /// `11:22:25 AM` is eleven mono characters. At 74 it fitted on some rows and
     /// wrapped to two lines on others, so the rows were different heights down
     /// the column depending on the hour.
-    static let time: CGFloat = 86
+    ///
+    /// Wide enough for `Aug 7 10:55 AM` too: rows older than today carry their
+    /// date — see `AuditRow.stamp` — and that is thirteen mono characters where
+    /// a bare `10:55:40 AM` is eleven.
+    static let time: CGFloat = 100
     static let application: CGFloat = 120
     static let risk: CGFloat = 84
     static let duration: CGFloat = 70
@@ -84,13 +88,27 @@ struct AuditRow: View {
         return (parts.backend, ToolName.shorten(parts.tool, backend: parts.backend))
     }
 
+    /// Time of day for today's events; date *and* time for anything older.
+    ///
+    /// The column showed `10:55:40 AM` on every row whatever day it happened,
+    /// so a ledger that reached back past midnight — which this one does, since
+    /// it holds everything the gateway has for the machine — read as though it
+    /// were out of order: `10:55 AM` sat directly above `4:40 PM`, newest first,
+    /// with nothing on screen to say they were different days.
+    private var stamp: String {
+        Calendar.current.isDateInToday(event.timestamp)
+            ? Format.time(event.timestamp)
+            : Format.dayTime(event.timestamp)
+    }
+
     var body: some View {
         HStack(spacing: AuditColumn.spacing) {
-            Text(Format.time(event.timestamp))
+            Text(stamp)
                 .font(Typo.mono(Typo.caption))
                 .foregroundStyle(Palette.text3)
                 .lineLimit(1)
                 .frame(width: AuditColumn.time, alignment: .leading)
+                .help(Format.dateTime(event.timestamp))
 
             // Two texts rather than one concatenation, so the part that
             // identifies the row can outrank the part that qualifies it: the

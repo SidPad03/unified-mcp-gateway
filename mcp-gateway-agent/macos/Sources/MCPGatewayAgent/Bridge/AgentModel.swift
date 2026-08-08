@@ -56,6 +56,14 @@ final class AgentModel {
     /// this only stops the array growing past what it would ever send.
     private let maxLogLines = 5_000
     private let maxCalls = 1_000
+    /// How far past the cap a buffer may drift before it is trimmed.
+    ///
+    /// `removeFirst` shifts the whole remaining array, so trimming to the cap
+    /// on every tick meant a chatty backend paid a five-thousand-element
+    /// memmove ten times a second once the buffer was full — and the calls
+    /// buffer rebuilt its whole index with it. Letting the buffer run a few
+    /// hundred over and trimming in one stroke makes the cost per tick O(new).
+    private let trimSlack = 500
 
     // ── Derived ─────────────────────────────────────────────────────────
 
@@ -98,7 +106,10 @@ final class AgentModel {
 
         if let key, !key.isEmpty {
             apiKey = key
-            try? await bridge.send(.setApiKey(key))
+            // One-time: re-write the item so it stops asking for a password
+            // after every update. See `Keychain`.
+            Keychain.relaxAccessIfNeeded(key)
+            _ = try? await bridge.send(.setApiKey(key))
         }
 
         await refresh()
@@ -165,7 +176,7 @@ final class AgentModel {
         }
         if let lines = tick.logs, !lines.isEmpty {
             logLines.append(contentsOf: lines)
-            if logLines.count > maxLogLines {
+            if logLines.count > maxLogLines + trimSlack {
                 logLines.removeFirst(logLines.count - maxLogLines)
             }
             logRevision &+= 1
@@ -187,7 +198,7 @@ final class AgentModel {
                 toolCalls.append(call)
             }
         }
-        if toolCalls.count > maxCalls {
+        if toolCalls.count > maxCalls + trimSlack {
             toolCalls.removeFirst(toolCalls.count - maxCalls)
             reindexCalls()
         }
@@ -251,7 +262,7 @@ final class AgentModel {
         SignedInAccount.clear()
         account = nil
         apiKey = nil
-        try? await bridge.send(.setApiKey(""))
+        _ = try? await bridge.send(.setApiKey(""))
         await refreshSnapshot()
     }
 

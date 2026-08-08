@@ -16,52 +16,13 @@ import SwiftUI
 /// about how many surfaces exist, not how expensive each one is.
 struct Card<Content: View>: View {
     var padding: CGFloat = Metrics.cardPadding
-    /// Take the full height offered instead of hugging the content.
-    ///
-    /// Set this on cards that sit beside each other. Without it each one is as
-    /// tall as whatever happens to be inside, so a column showing an empty state
-    /// and a column showing data come out different heights and the row looks
-    /// broken. The height has to be applied here, inside the card and before
-    /// `glassEffect`, or the material would still be drawn at the content's size
-    /// while the frame around it stretched.
-    ///
-    /// "The full height offered" is the catch, and it is worth knowing before
-    /// reaching for this. Inside a `ScrollView` the offer is the content's own
-    /// height and these cards match each other, which is the intent. In a stack
-    /// that fills the window there is no such limit, and the row will take the
-    /// whole page: four cards of about a hundred points became six hundred on
-    /// the Audit page and pushed the table out of the window. Give the *row*
-    /// `.fixedSize(horizontal: false, vertical: true)` there — the cards go on
-    /// matching each other inside a row that is only as tall as it needs to be.
-    var fillsHeight: Bool = false
     @ViewBuilder var content: Content
 
     var body: some View {
         content
             .padding(padding)
-            .frame(
-                maxWidth: .infinity,
-                maxHeight: fillsHeight ? .infinity : nil,
-                alignment: .topLeading
-            )
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .glassEffect(.regular, in: .rect(cornerRadius: Radius.card))
-    }
-}
-
-/// A flat panel, for the places glass would be wrong: long scrolling lists, and
-/// anything that needs a hairline rather than a material.
-struct Panel<Content: View>: View {
-    var padding: CGFloat = 0
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.panel, in: .rect(cornerRadius: Radius.card))
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.card).stroke(Palette.line, lineWidth: 1)
-            )
     }
 }
 
@@ -173,6 +134,11 @@ struct StatusDot: View {
         self.pulsing = pulsing
     }
 
+    /// The pulse follows `pulsing` for the dot's whole life, not just its first
+    /// appearance. This used to start the animation in `onAppear` alone, so a
+    /// dot that appeared connected and later went reconnecting sat frozen — and
+    /// one that stopped pulsing left a repeat-forever transaction running on a
+    /// layer that was no longer drawn.
     var body: some View {
         Circle()
             .fill(tint)
@@ -185,13 +151,24 @@ struct StatusDot: View {
                         .opacity(animating ? 0 : 0.6)
                 }
             }
-            .onAppear {
-                guard pulsing else { return }
-                withAnimation(.easeOut(duration: 1.8).repeatForever(autoreverses: false)) {
-                    animating = true
-                }
+            .onAppear { if pulsing { startPulse() } }
+            .onChange(of: pulsing) { _, now in
+                if now { startPulse() } else { stopPulse() }
             }
             .accessibilityHidden(true)
+    }
+
+    private func startPulse() {
+        animating = false
+        withAnimation(.easeOut(duration: 1.8).repeatForever(autoreverses: false)) {
+            animating = true
+        }
+    }
+
+    private func stopPulse() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { animating = false }
     }
 }
 
@@ -219,16 +196,6 @@ struct Badge: View {
     init(_ text: String, tone: Tone = .neutral) {
         self.text = text
         self.tone = tone
-    }
-
-    // Kept so existing call sites that pass a colour still compile. Colours
-    // that are not one of the three lamps collapse to neutral, which is the
-    // point — there are only ever three coloured states.
-    init(text: String, tint: Color = Palette.text3) {
-        self.text = text
-        self.tone =
-            tint == Palette.beam
-            ? .ok : tint == Palette.warn ? .warn : tint == Palette.deny ? .deny : .neutral
     }
 
     var body: some View {
@@ -339,15 +306,6 @@ struct RailRow<Content: View, Trailing: View>: View {
                 Rectangle().fill(Palette.lineSoft).frame(height: 1)
             }
         }
-    }
-}
-
-extension RailRow where Trailing == EmptyView {
-    init(tone: Tone = .neutral, isLast: Bool = false, @ViewBuilder content: () -> Content) {
-        self.tone = tone
-        self.isLast = isLast
-        self.content = content()
-        self.trailing = EmptyView()
     }
 }
 
@@ -506,13 +464,6 @@ struct InlineBanner: View {
         self.onDismiss = onDismiss
     }
 
-    // Kept so existing call sites that pass a colour still compile.
-    init(text: String, tint: Color, onDismiss: (() -> Void)? = nil) {
-        self.text = text
-        self.tone = tint == Palette.warn ? .warn : tint == Palette.beam ? .ok : .deny
-        self.onDismiss = onDismiss
-    }
-
     var body: some View {
         HStack(spacing: 9) {
             Image(systemName: tone == .deny ? "exclamationmark.triangle.fill" : "info.circle.fill")
@@ -556,6 +507,20 @@ enum Format {
 
     static func dateTime(_ date: Date) -> String {
         date.formatted(.dateTime.month(.abbreviated).day().hour().minute().second())
+    }
+
+    /// `Aug 7 4:40 PM` — a date column that has to fit beside a time one.
+    ///
+    /// Seconds are dropped: on a row that is not from today they are noise, and
+    /// they are the difference between fitting the column and truncating it.
+    /// Built from two parts rather than one format string because the single
+    /// format inserts "at" — `Aug 7 at 4:40 PM` — which is three characters of
+    /// grammar in a column that is counting them, and it is what turned this
+    /// into `Aug 7 at 10…`.
+    static func dayTime(_ date: Date) -> String {
+        let day = date.formatted(.dateTime.month(.abbreviated).day())
+        let time = date.formatted(.dateTime.hour().minute())
+        return "\(day) \(time)"
     }
 
     static func duration(_ milliseconds: Int?) -> String {

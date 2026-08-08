@@ -70,7 +70,7 @@ struct BackendsView: View {
                 }
             }
             .padding(Metrics.pagePadding)
-            .padding(.top, 22)
+            .padding(.top, 16)  // clears the traffic lights and sidebar toggle when the sidebar is hidden
         }
         .sheet(item: $editing) { target in
             switch target {
@@ -196,8 +196,13 @@ private struct BackendRow: View {
         }
     }
 
+    /// Quiet icon buttons, not `.glass`. Glass is chrome — see the rule on
+    /// `Card` — and three live materials per row meant thirty re-compositing
+    /// surfaces on a machine with ten servers, inside a scrolling list. A
+    /// hover fill is the same affordance the sidebar's rows use, at the cost
+    /// of a rectangle.
     private var controls: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             Toggle(
                 "Enabled",
                 isOn: .init(
@@ -211,30 +216,16 @@ private struct BackendRow: View {
             .labelsHidden()
             .controlSize(.mini)
             .help(backend.enabled ? "Disable this backend" : "Enable this backend")
+            .padding(.trailing, 4)
 
-            Button {
+            RowIconButton(icon: "arrow.clockwise", help: "Restart") {
                 Task { await model.restartBackend(backend.name) }
-            } label: {
-                Image(systemName: "arrow.clockwise")
             }
-            .buttonStyle(.glass)
-            .controlSize(.small)
             .disabled(!backend.enabled)
-            .help("Restart")
 
-            Button(action: onEdit) {
-                Image(systemName: "slider.horizontal.3")
-            }
-            .buttonStyle(.glass)
-            .controlSize(.small)
-            .help("Edit")
+            RowIconButton(icon: "slider.horizontal.3", help: "Edit", action: onEdit)
 
-            Button(role: .destructive, action: onRemove) {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.glass)
-            .controlSize(.small)
-            .help("Delete")
+            RowIconButton(icon: "trash", role: .destructive, help: "Delete", action: onRemove)
         }
     }
 
@@ -321,5 +312,34 @@ private struct Fact: View {
             Mono(value, size: Typo.caption, color: tint)
                 .lineLimit(1)
         }
+    }
+}
+
+private struct RowIconButton: View {
+    let icon: String
+    var role: ButtonRole?
+    let help: String
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(role: role, action: action) {
+            Image(systemName: icon)
+                .font(.system(size: Typo.small, weight: .medium))
+                .foregroundStyle(
+                    hovering ? (role == .destructive ? Palette.deny : Palette.text) : Palette.text3
+                )
+                .frame(width: 24, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: Radius.control)
+                        .fill(Color.primary.opacity(hovering ? 0.07 : 0))
+                )
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+        .accessibilityLabel(help)
     }
 }

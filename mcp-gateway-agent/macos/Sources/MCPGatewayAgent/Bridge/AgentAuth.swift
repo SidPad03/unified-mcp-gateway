@@ -13,10 +13,14 @@ struct SignedInAccount: Codable, Sendable, Equatable {
     var agentId: String
     var gatewayUrl: String
 
+    /// "to this machine" is left off on purpose.
+    ///
+    /// Both pages are already filtered by this agent's id, and both sit in an
+    /// app that runs on the machine in question — so the only part of the
+    /// sentence carrying information is *whose* calls these are. Saying the rest
+    /// spends the page's one subtitle restating the obvious.
     var scopeDescription: String {
-        isOwner
-            ? "Showing all users' calls to this machine"
-            : "Showing your calls to this machine"
+        isOwner ? "All users' calls" : "Your calls"
     }
 
     private static let key = "com.mcpgateway.agent.account"
@@ -159,7 +163,7 @@ final class AgentAuth: NSObject {
         let timeout = Task { [weak self] in
             try? await Task.sleep(for: Self.deadline)
             guard !Task.isCancelled else { return }
-            await self?.fail(.timedOut)
+            self?.fail(.timedOut)
         }
         defer { timeout.cancel() }
 
@@ -215,7 +219,7 @@ final class AgentAuth: NSObject {
             "code_verifier": verifier,
         ])
 
-        let session = URLSession.make(allowInsecureTLS: allowInsecureTLS)
+        let session = URLSession.gateway(allowInsecureTLS: allowInsecureTLS, host: apiBase.host)
         let (data, response) = try await session.data(for: request)
 
         guard let http = response as? HTTPURLResponse else {
@@ -247,8 +251,14 @@ final class AgentAuth: NSObject {
 
     static func randomURLSafeString(bytes count: Int) -> String {
         var bytes = [UInt8](repeating: 0, count: count)
-        // SecRandomCopyBytes is the CSPRNG; `Int.random` is not one.
-        _ = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
+        // SecRandomCopyBytes is the CSPRNG; `Int.random` is not one. Checked,
+        // not assumed: on failure the buffer stays zero-filled, and both the
+        // CSRF `state` and the PKCE verifier would become publicly derivable
+        // constants. There is no degraded mode for that — stop.
+        precondition(
+            SecRandomCopyBytes(kSecRandomDefault, count, &bytes) == errSecSuccess,
+            "The system CSPRNG is unavailable"
+        )
         return base64URL(Data(bytes))
     }
 
@@ -260,20 +270,56 @@ final class AgentAuth: NSObject {
 // ── TLS ─────────────────────────────────────────────────────────────────
 
 extension URLSession {
-    /// A session that optionally accepts a self-signed gateway certificate,
-    /// matching the tunnel's "Skip TLS verification" setting.
-    static func make(allowInsecureTLS: Bool) -> URLSession {
-        guard allowInsecureTLS else { return URLSession(configuration: .ephemeral) }
-        return URLSession(
-            configuration: .ephemeral,
-            delegate: InsecureTLSDelegate.shared,
-            delegateQueue: nil
-        )
+    /// A session for talking to the gateway, optionally accepting its
+    /// self-signed certificate — matching the tunnel's "Skip TLS verification"
+    /// setting.
+    ///
+    /// Cached and reused rather than made per request, for two reasons that
+    /// compound. A `URLSession` created with a delegate retains itself until it
+    /// is invalidated, so a fresh one per Audit poll leaked a session — and its
+    /// operation queue — every ten seconds for the life of a menu-bar app. And
+    /// even without a delegate, a per-request session has no connection pool to
+    /// reuse: every poll paid a full TCP and TLS handshake for one GET.
+    static func gateway(allowInsecureTLS: Bool, host: String?) -> URLSession {
+        guard allowInsecureTLS, let host, !host.isEmpty else { return GatewaySessions.secure }
+        return GatewaySessions.insecure(host: host)
     }
 }
 
-private final class InsecureTLSDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
-    static let shared = InsecureTLSDelegate()
+private enum GatewaySessions {
+    static let secure = URLSession(configuration: .ephemeral)
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var byHost: [String: URLSession] = [:]
+
+    static func insecure(host: String) -> URLSession {
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = byHost[host] { return existing }
+        let session = URLSession(
+            configuration: .ephemeral,
+            delegate: SelfSignedTrustDelegate(host: host),
+            delegateQueue: nil
+        )
+        byHost[host] = session
+        return session
+    }
+}
+
+/// Accepts any certificate — **from the configured gateway host, and nowhere
+/// else**.
+///
+/// The scope is the point. The old delegate overrode trust for every host the
+/// session happened to touch, so with "Skip TLS verification" on, a redirect —
+/// or a man in the middle bouncing the request anywhere it liked — was trusted
+/// as readily as the gateway itself, on requests that carry the API key. Any
+/// other host now gets the system's full certificate validation.
+private final class SelfSignedTrustDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
+    private let host: String
+
+    init(host: String) {
+        self.host = host
+    }
 
     func urlSession(
         _ session: URLSession,
@@ -281,6 +327,7 @@ private final class InsecureTLSDelegate: NSObject, URLSessionDelegate, @unchecke
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+            challenge.protectionSpace.host.caseInsensitiveCompare(host) == .orderedSame,
             let trust = challenge.protectionSpace.serverTrust
         else {
             completionHandler(.performDefaultHandling, nil)

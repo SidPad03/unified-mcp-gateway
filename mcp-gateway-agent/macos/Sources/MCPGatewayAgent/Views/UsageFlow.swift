@@ -103,10 +103,20 @@ struct FlowInput: Equatable {
         var status: String?
     }
 
+    /// One application's calls to one tool. Summed per backend, this is what
+    /// draws the Applications → Backends lines; without it those two columns
+    /// have nothing truthful to join them.
+    struct AppTool: Equatable {
+        var app: String
+        var tool: String
+        var callCount: Int
+    }
+
     var agent: String
     var apps: [App] = []
     var tools: [Tool] = []
     var known: [Backend] = []
+    var appTools: [AppTool] = []
 }
 
 // ── Model ───────────────────────────────────────────────────────────────
@@ -144,7 +154,6 @@ struct FlowLink: Identifiable, Equatable {
 
 /// Four columns and the traffic between them.
 struct FlowModel: Equatable {
-    static let agentID = "agent"
     static let ungrouped = "other"
     /// How many tools the column shows before it offers to show the rest.
     static let defaultToolLimit = 8
@@ -290,33 +299,42 @@ struct FlowModel: Equatable {
         let appTotal = appNodes.reduce(0) { $0 + $1.calls }
         let headline = appNodes.isEmpty ? totalCalls : appTotal
 
-        let agentNode = FlowNode(
-            id: agentID,
-            title: input.agent.isEmpty ? "this Mac" : input.agent,
-            detail: "\(input.tools.count) \(input.tools.count == 1 ? "tool" : "tools")",
-            tone: .ok,
-            calls: headline
-        )
-
         // 5. One link per hop, not one per tool. Every tool used to contribute
-        // its own `agent → backend` line, so a single backend with fifty-eight
+        // its own line into its backend, so a single backend with fifty-eight
         // tools was fifty-eight identical curves stroked over each other at 40%
         // — which composites to a solid bar, not a hairline.
-        var links: [FlowLink] = appNodes.map {
-            FlowLink(from: $0.id, to: agentID, weight: $0.calls)
-        }
-        links += backendNodes.map {
-            FlowLink(from: agentID, to: $0.id, weight: $0.calls)
-        }
-        links += zip(shown, toolNodes).map { tool, node in
+        //
+        var links: [FlowLink] = zip(shown, toolNodes).map { tool, node in
             FlowLink(from: "backend:" + tool.backend, to: node.id, weight: tool.calls)
+        }
+
+        // Applications → Backends, summed out of the per-tool pairs.
+        //
+        // These are real edges, not a fan. The gateway's `app_to_backend` cannot
+        // provide them — it groups by `backend_name`, which for an agent is the
+        // machine, so every application points at the same single node. The tool
+        // name is what carries the sub-backend, and splitting it needs the list
+        // of servers this Mac is actually running, which only this app has. So
+        // the pairs come down per-tool and are folded up here.
+        //
+        // Empty against a gateway that predates the field, in which case the two
+        // columns are simply not joined — which is the honest state, not a
+        // degraded one.
+        var appBackend: [String: Int] = [:]
+        for pair in input.appTools {
+            let parts = ToolName.split(pair.tool, agent: input.agent, known: knownNames)
+            appBackend["app:" + pair.app + "\u{1}" + parts.backend, default: 0] += pair.callCount
+        }
+        links += appBackend.compactMap { key, weight in
+            let halves = key.split(separator: "\u{1}", maxSplits: 1)
+            guard halves.count == 2 else { return nil }
+            return FlowLink(from: String(halves[0]), to: "backend:" + halves[1], weight: weight)
         }
 
         return FlowModel(
             columns: [
                 FlowColumn(
                     id: "apps", title: "Applications", nodes: appNodes, total: appNodes.count),
-                FlowColumn(id: "agent", title: "This Mac", nodes: [agentNode], total: 1),
                 FlowColumn(
                     id: "backends", title: "Backends", nodes: backendNodes,
                     total: backendNodes.count),
@@ -427,10 +445,14 @@ struct UsageFlowBoard: View {
     @State private var available: CGFloat = 0
 
     private static let gutter: CGFloat = 16
-    /// Applications · This Mac · Backends · Tools. The Tools column holds the
-    /// longest strings in the product by a wide margin; equal quarters spend the
-    /// same width on it as on the column that holds one node.
-    private static let weights: [CGFloat] = [1, 1.1, 1, 1.4]
+    /// Applications · Backends · Tools. The Tools column holds the longest
+    /// strings in the product by a wide margin; equal thirds spend the same
+    /// width on it as on the one holding application names.
+    ///
+    /// `nonisolated` because `Layout.width(_:)` reads it, and `Layout` is a
+    /// plain value type that the layout pass touches off the main actor. The
+    /// array is a `Sendable` constant, so there is nothing to race on.
+    nonisolated private static let weights: [CGFloat] = [1, 1.1, 1.4]
     /// One weight unit, at most. Past this the columns stop growing and the
     /// space goes into the gutters instead: a node is a label, and on a wide
     /// display a four-hundred-point plate around the word `patch_note` is not a
@@ -449,10 +471,26 @@ struct UsageFlowBoard: View {
 
         let layout = self.layout
 
+        // `maxWidth`, never `width`, and that is what stops the board taking the
+        // window with it.
+        //
+        // A hard `width` here is a *minimum* as well as a maximum: the row could
+        // not be laid out any narrower than the four numbers added up, so the
+        // card could not, so the page could not, so the window could not. And
+        // those numbers came from `available`, which is measured from the board
+        // itself — so once the window had been wide, the board demanded to stay
+        // wide, and the measurement it needed in order to shrink could never
+        // happen. That is the "make it bigger, then smaller again, and it
+        // breaks" loop exactly: drag out, drag back, and the content stayed at
+        // its old width while the window shrank around it, pushing the sidebar
+        // off the left edge and the range picker off the right.
+        //
+        // As a maximum the weights still do their job whenever there is room,
+        // and when there is not the columns simply give way.
         return HStack(alignment: .top, spacing: layout.gutter) {
             ForEach(Array(model.columns.enumerated()), id: \.element.id) { index, column in
                 columnView(column, isLast: index == model.columns.count - 1, lit: lit)
-                    .frame(width: layout.width(index))
+                    .frame(maxWidth: layout.width(index))
             }
         }
         .frame(maxWidth: .infinity, alignment: layout.isTight ? .leading : .center)

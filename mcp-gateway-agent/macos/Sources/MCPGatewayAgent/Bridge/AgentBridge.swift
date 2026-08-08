@@ -15,21 +15,22 @@ import MCPGatewayAgentFFI
 ///   is handed to the main actor.
 final class AgentBridge: @unchecked Sendable {
     enum Failure: LocalizedError {
-        case notRunning
         case startFailed(Int32)
         case command(String)
+        /// The detail stays in the associated value for the debugger; it is
+        /// deliberately not shown. This is a raw dump of whatever came over the
+        /// FFI, and a generic "echo the payload into the UI" path is one
+        /// refactor away from echoing a response that carries a secret.
         case malformedResponse(String)
 
         var errorDescription: String? {
             switch self {
-            case .notRunning:
-                "The agent core is not running."
             case let .startFailed(code):
                 "The agent core could not start (code \(code))."
             case let .command(message):
                 message
-            case let .malformedResponse(detail):
-                "The agent core returned something unreadable: \(detail)"
+            case .malformedResponse:
+                "The agent core sent a response this app could not read."
             }
         }
     }
@@ -37,6 +38,12 @@ final class AgentBridge: @unchecked Sendable {
     /// Called on Rust's emitter thread with each decoded batch.
     private var onTick: (@Sendable (Tick) -> Void)?
     private var started = false
+
+    /// Owned by the emitter thread alone. Events arrive one at a time on that
+    /// one thread, ten times a second — building a decoder (and its custom
+    /// date-parsing closure) per tick was pure allocation churn. Commands keep
+    /// making their own; they genuinely run concurrently.
+    private let tickDecoder = JSON.decoder()
 
     // ── Lifecycle ───────────────────────────────────────────────────────
 
@@ -76,7 +83,7 @@ final class AgentBridge: @unchecked Sendable {
     fileprivate func handleEvent(_ json: String) {
         guard let onTick else { return }
         do {
-            let tick = try JSON.decoder().decode(Tick.self, from: Data(json.utf8))
+            let tick = try tickDecoder.decode(Tick.self, from: Data(json.utf8))
             onTick(tick)
         } catch {
             // A tick we cannot read is a bug on our side, not the user's
@@ -168,7 +175,6 @@ struct CommandRequest: Encodable, Sendable {
     var gatewayUrl: String?
     var dashboardUrl: String?
     var tlsSkipVerify: Bool?
-    var apiKey: String?
 
     static let snapshot = CommandRequest(cmd: "snapshot")
     static let logsSnapshot = CommandRequest(cmd: "logs_snapshot")
@@ -177,7 +183,6 @@ struct CommandRequest: Encodable, Sendable {
     static let reconnect = CommandRequest(cmd: "reconnect")
     static let reregister = CommandRequest(cmd: "reregister")
     static let takeLegacyApiKey = CommandRequest(cmd: "take_legacy_api_key")
-    static let shutdown = CommandRequest(cmd: "shutdown")
 
     static func setApiKey(_ key: String) -> Self {
         CommandRequest(cmd: "set_api_key", key: key)
@@ -195,15 +200,6 @@ struct CommandRequest: Encodable, Sendable {
             gatewayUrl: gatewayUrl,
             dashboardUrl: dashboardUrl,
             tlsSkipVerify: tlsSkipVerify
-        )
-    }
-
-    static func checkGateway(gatewayUrl: String, apiKey: String, tlsSkipVerify: Bool) -> Self {
-        CommandRequest(
-            cmd: "check_gateway",
-            gatewayUrl: gatewayUrl,
-            tlsSkipVerify: tlsSkipVerify,
-            apiKey: apiKey
         )
     }
 

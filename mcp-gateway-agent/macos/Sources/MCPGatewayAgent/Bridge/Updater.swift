@@ -26,6 +26,11 @@ final class Updater {
         case upToDate
         case available(Release)
         case downloading(Double)
+        /// Downloaded, verified and unpacked; waiting for the user to allow
+        /// the restart. Declining costs nothing — the bundle stays staged in
+        /// the temporary directory and every update control reads "Update
+        /// now" until they are ready.
+        case readyToInstall(Release)
         case readyToRelaunch
         case failed(String)
     }
@@ -35,7 +40,6 @@ final class Updater {
         var url: String
         var signature: String
         var notes: String?
-        var pubDate: Date?
     }
 
     private(set) var state: State = .idle
@@ -94,9 +98,10 @@ final class Updater {
         switch state {
         case .idle, .upToDate, .failed:
             await check(announceFailure: false)
-        case .checking, .downloading, .available, .readyToRelaunch:
-            // A check is already running, or there is a release in hand and
-            // re-checking would only risk clearing it.
+        case .checking, .downloading, .available, .readyToInstall, .readyToRelaunch:
+            // A check is already running, or there is a release in hand —
+            // possibly already staged on disk — and re-checking would only
+            // risk clearing it.
             break
         }
     }
@@ -112,10 +117,6 @@ final class Updater {
 
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
-            decoder.dateDecodingStrategy = .custom { decoder in
-                let text = try decoder.singleValueContainer().decode(String.self)
-                return JSON.parseTimestamp(text) ?? Date()
-            }
             let release = try decoder.decode(Release.self, from: data)
 
             lastChecked = Date()
@@ -129,7 +130,32 @@ final class Updater {
 
     // ── Installing ──────────────────────────────────────────────────────
 
-    func install(_ release: Release) async {
+    /// The verified, unpacked bundle waiting for consent to restart.
+    private struct StagedUpdate {
+        let unpacked: URL
+        let staging: URL
+    }
+
+    private var staged: StagedUpdate?
+
+    /// What every "Update" control calls, whatever state it finds the updater
+    /// in. With a fresh release it downloads, verifies and stages, then asks
+    /// to restart; with a bundle already staged it just asks again. The ask is
+    /// a real macOS alert, because quitting someone's running agent — and with
+    /// it every backend on the machine — is not a thing to do on one click
+    /// with no way out.
+    func requestUpdate(_ release: Release) async {
+        switch state {
+        case .idle, .upToDate, .available, .failed:
+            await downloadAndStage(release)
+        case .readyToInstall:
+            promptToRestart()
+        case .checking, .downloading, .readyToRelaunch:
+            break
+        }
+    }
+
+    private func downloadAndStage(_ release: Release) async {
         guard let publicKey else {
             state = .failed(
                 "This build has no update signing key, so it cannot install updates. "
@@ -141,6 +167,13 @@ final class Updater {
             let signature = Data(base64Encoded: release.signature)
         else {
             state = .failed("The update manifest is malformed.")
+            return
+        }
+        // The signature proves what was downloaded; https bounds who can even
+        // offer a download. A manifest pointing at http:// or file:// has no
+        // honest reason to exist.
+        guard url.scheme?.lowercased() == "https" else {
+            state = .failed("The update manifest does not point at an https URL. Nothing was installed.")
             return
         }
 
@@ -156,30 +189,48 @@ final class Updater {
             }
 
             state = .downloading(0.9)
-            try await Self.swapBundle(archive: archive)
+            staged = try Self.stage(archive: archive, currentVersion: currentVersion)
+            state = .readyToInstall(release)
+            promptToRestart()
+        } catch {
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Ask, install on a yes, stand down on a no.
+    ///
+    /// The swap script is only ever spawned *after* the yes: it waits for this
+    /// PID and then replaces the bundle, so launching it optimistically would
+    /// leave a process lurking that rewrites the app whenever the user happens
+    /// to quit — days later, with no warning.
+    func promptToRestart() {
+        guard case let .readyToInstall(release) = state, let staged else { return }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Update to version \(release.version)?"
+        alert.informativeText =
+            "The update is downloaded and verified. The app quits, installs it, and reopens — "
+            + "this Mac's backends reconnect on their own."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Restart and Update")
+        alert.addButton(withTitle: "Not Now")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        do {
+            try Self.beginSwap(staged: staged)
             state = .readyToRelaunch
-            // The swap script is already waiting on this PID. Quitting here is
-            // what makes updating one click rather than two, and matches what
-            // every other Mac app does once you have asked it to update.
+            // The swap script is now waiting on this PID. Quitting here is
+            // what makes updating one click rather than two.
             relaunch()
         } catch {
             state = .failed(error.localizedDescription)
         }
     }
 
-    /// Unpack next to the installed app, then hand the swap to a detached
-    /// script.
-    ///
-    /// A process cannot reliably replace its own bundle while running, so the
-    /// script waits for this PID to exit, puts the new bundle in place, and
-    /// opens it.
-    ///
-    /// Nothing outside the bundle is touched. Settings live in
-    /// `~/.mcp-gateway-agent/config.toml`, the signed-in account in
-    /// `UserDefaults`, and the gateway key in the login keychain — all of them
-    /// outside `.app`, so an update cannot take them with it.
-    private static func swapBundle(archive: Data) async throws {
-        let installed = Bundle.main.bundleURL
+    /// Download → verify → unpack → check, everything that can happen quietly
+    /// in the background. Nothing the running app depends on is touched.
+    private static func stage(archive: Data, currentVersion: String) throws -> StagedUpdate {
         let staging = FileManager.default.temporaryDirectory
             .appendingPathComponent("mcp-gateway-agent-update-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -196,22 +247,57 @@ final class Updater {
             throw Updater.InstallError.noAppInArchive
         }
 
+        // The version of record is the one inside the signed archive, not the
+        // one the manifest claimed. `isNewer` was checked against the manifest,
+        // and manifest fields are not covered by the signature — so anyone who
+        // could edit the appcast could advertise "99.0.0", point it at a
+        // genuinely signed *older* build, and have the app install its own
+        // patched-out vulnerabilities back. The bundle's Info.plist travelled
+        // inside the signature, so it is the claim that costs something.
+        let plist = unpacked.appendingPathComponent("Contents/Info.plist")
+        let unpackedVersion =
+            (NSDictionary(contentsOf: plist)?["CFBundleShortVersionString"] as? String) ?? ""
+        guard isNewer(unpackedVersion, than: currentVersion) else {
+            throw Updater.InstallError.notNewer(unpackedVersion)
+        }
+
+        return StagedUpdate(unpacked: unpacked, staging: staging)
+    }
+
+    /// Hand the swap to a detached script.
+    ///
+    /// A process cannot reliably replace its own bundle while running, so the
+    /// script waits for this PID to exit, puts the new bundle in place, and
+    /// opens it.
+    ///
+    /// Nothing outside the bundle is touched. Settings live in
+    /// `~/.mcp-gateway-agent/config.toml`, the signed-in account in
+    /// `UserDefaults`, and the gateway key in the login keychain — all of them
+    /// outside `.app`, so an update cannot take them with it.
+    private static func beginSwap(staged: StagedUpdate) throws {
+        let installed = Bundle.main.bundleURL
+        let staging = staged.staging
+        let unpacked = staged.unpacked
+
         // Staged beside the installed bundle rather than in the temporary
         // directory, so the swap below is a rename within one volume instead of
         // a copy across two.
         let incoming = installed.path + ".incoming"
         let outgoing = installed.path + ".outgoing"
 
+        // Paths reach the script as $1…$6, never interpolated into its text: a
+        // `"` or `$(…)` in a filename from the archive stays a filename.
         let script = """
             #!/bin/sh
             # Wait for the running app to exit, then swap the bundle and relaunch.
-            while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done
+            pid="$1"; unpacked="$2"; incoming="$3"; outgoing="$4"; installed="$5"; staging="$6"
+            while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
 
-            rm -rf "\(incoming)" "\(outgoing)"
+            rm -rf "$incoming" "$outgoing"
             # `ditto` rather than `cp` or `mv`: it preserves the signature and the
             # extended attributes that make the bundle launchable.
-            /usr/bin/ditto "\(unpacked.path)" "\(incoming)" || exit 1
-            /usr/bin/xattr -dr com.apple.quarantine "\(incoming)" 2>/dev/null
+            /usr/bin/ditto "$unpacked" "$incoming" || exit 1
+            /usr/bin/xattr -dr com.apple.quarantine "$incoming" 2>/dev/null
 
             # Replace, rather than merge. This used to `ditto` the new bundle
             # straight over the old one, which copies in but never deletes: any
@@ -221,15 +307,15 @@ final class Updater {
             #
             # The old bundle is kept until the new one is in place, so a failure
             # midway puts back a working app instead of leaving none.
-            mv "\(installed.path)" "\(outgoing)" || exit 1
-            if ! mv "\(incoming)" "\(installed.path)"; then
-                mv "\(outgoing)" "\(installed.path)"
+            mv "$installed" "$outgoing" || exit 1
+            if ! mv "$incoming" "$installed"; then
+                mv "$outgoing" "$installed"
                 exit 1
             fi
-            rm -rf "\(outgoing)"
+            rm -rf "$outgoing"
 
-            /usr/bin/open "\(installed.path)"
-            /bin/rm -rf "\(staging.path)"
+            /usr/bin/open "$installed"
+            /bin/rm -rf "$staging"
             """
         let scriptURL = staging.appendingPathComponent("install.sh")
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
@@ -237,16 +323,30 @@ final class Updater {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = [scriptURL.path]
+        process.arguments = [
+            scriptURL.path,
+            String(ProcessInfo.processInfo.processIdentifier),
+            unpacked.path,
+            incoming,
+            outgoing,
+            installed.path,
+            staging.path,
+        ]
         try process.run()
     }
 
     enum InstallError: LocalizedError {
         case noAppInArchive
+        case notNewer(String)
 
         var errorDescription: String? {
             switch self {
-            case .noAppInArchive: "The update archive did not contain an application."
+            case .noAppInArchive:
+                "The update archive did not contain an application."
+            case let .notNewer(version):
+                "The downloaded archive is version "
+                    + "\(version.isEmpty ? "unknown" : version), which is not newer than "
+                    + "this app. Nothing was installed."
             }
         }
     }

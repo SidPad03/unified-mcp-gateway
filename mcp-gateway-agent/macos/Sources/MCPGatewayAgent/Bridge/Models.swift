@@ -4,8 +4,9 @@ import Foundation
 //
 // Rust serializes snake_case; the decoder is configured with
 // `.convertFromSnakeCase`, so the property names here are the camelCase of the
-// Rust field names and nothing needs a CodingKeys block. Adding a field on
-// either side without the other is caught by `AgentBridgeTests`.
+// Rust field names and nothing needs a CodingKeys block. Fields the app never
+// reads are deliberately not mirrored at all — the decoder skips unknown JSON
+// for free, and an unread property is a lie about what the app depends on.
 
 // ── Enumerations ────────────────────────────────────────────────────────
 
@@ -23,7 +24,7 @@ enum ConnState: String, Codable, Sendable {
     }
 }
 
-enum BackendStatus: String, Codable, Sendable, CaseIterable {
+enum BackendStatus: String, Codable, Sendable {
     case disabled, starting, ready, failed, crashed, stopped
 
     var label: String {
@@ -76,11 +77,9 @@ struct ConnectionStatus: Codable, Sendable {
     var gatewayUrl: String
     var agentId: String
     var backendId: String?
-    var connectedSince: Date?
     var attempt: Int
     var lastError: String?
     var retryInMs: Int?
-    var registeredTools: Int
 
     /// `lastError`, rewritten into something you can act on.
     ///
@@ -128,7 +127,6 @@ struct Stats: Codable, Sendable {
     var backendsTotal: Int
     var callsTotal: Int
     var callsErrors: Int
-    var logLinesDropped: Int
 }
 
 struct AgentConfigView: Codable, Sendable {
@@ -192,7 +190,6 @@ struct Snapshot: Codable, Sendable {
     var backends: [BackendView]
     var config: AgentConfigView
     var stats: Stats
-    var generation: Int
     var version: String
     var uptimeSecs: Int
 }
@@ -290,15 +287,6 @@ struct BackendConfig: Codable, Sendable, Equatable {
             enabled: existing.enabled
         )
     }
-}
-
-struct GatewayCheck: Codable, Sendable {
-    var reachable: Bool
-    var authenticated: Bool
-    var detail: String
-    var normalizedUrl: String?
-
-    var isGood: Bool { reachable && authenticated }
 }
 
 struct BackendTestResult: Codable, Sendable, Equatable {
