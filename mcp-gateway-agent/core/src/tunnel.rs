@@ -167,8 +167,8 @@ async fn connect_and_run(
     config: &Config,
     api_key: &str,
 ) -> Result<Outcome, String> {
-    let url = with_token(&config.agent.gateway_url, api_key);
-    let (ws, _response) = connect(&url, config.agent.tls_skip_verify).await?;
+    let request = authorized_request(&config.agent.gateway_url, api_key)?;
+    let (ws, _response) = connect(request, config.agent.tls_skip_verify).await?;
 
     tracing::info!("WebSocket connected");
     let (mut sink, mut stream) = ws.split();
@@ -355,13 +355,32 @@ async fn dispatch(
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-fn with_token(url: &str, api_key: &str) -> String {
-    let separator = if url.contains('?') { '&' } else { '?' };
-    format!("{url}{separator}token={api_key}")
+/// The upgrade request, with the API key as an `Authorization` header.
+///
+/// It used to travel as `?token=` in the URL, and a URL is the one part of a
+/// request that everything logs: the gateway's own `tower_http` traces, any
+/// reverse proxy's access log. The credential was being written to disk on
+/// every connect and every retry. The gateway has always accepted the header
+/// form as well (`agent/mod.rs` falls back to `Authorization` when `?token=`
+/// is absent), so nothing older breaks.
+fn authorized_request(
+    url: &str,
+    api_key: &str,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, String> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let mut request = url
+        .into_client_request()
+        .map_err(|e| describe_connect_error(&e))?;
+    let value = format!("Bearer {api_key}")
+        .parse()
+        .map_err(|_| "The API key contains characters that cannot travel in a header".to_string())?;
+    request.headers_mut().insert("authorization", value);
+    Ok(request)
 }
 
 async fn connect(
-    url: &str,
+    request: tokio_tungstenite::tungstenite::handshake::client::Request,
     tls_skip_verify: bool,
 ) -> Result<
     (
@@ -377,10 +396,10 @@ async fn connect(
                 .with_custom_certificate_verifier(Arc::new(NoVerifier))
                 .with_no_client_auth();
             let connector = tokio_tungstenite::Connector::Rustls(Arc::new(tls));
-            tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector))
+            tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector))
                 .await
         } else {
-            tokio_tungstenite::connect_async(url).await
+            tokio_tungstenite::connect_async(request).await
         }
     };
 
@@ -444,9 +463,18 @@ pub async fn check_gateway(
     api_key: &str,
     tls_skip_verify: bool,
 ) -> GatewayCheck {
-    let url = with_token(gateway_url, api_key);
+    let request = match authorized_request(gateway_url, api_key) {
+        Ok(request) => request,
+        Err(detail) => {
+            return GatewayCheck {
+                reachable: false,
+                authenticated: false,
+                detail,
+            }
+        }
+    };
 
-    let (ws, _) = match connect(&url, tls_skip_verify).await {
+    let (ws, _) = match connect(request, tls_skip_verify).await {
         Ok(pair) => pair,
         Err(detail) => {
             return GatewayCheck {
