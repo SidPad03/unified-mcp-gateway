@@ -232,7 +232,32 @@ impl AgentState {
 
     // ── Backends (runtime and config, kept in step) ─────────────────────
 
+    /// Put real values back where the editor sent [`crate::config::MASKED`].
+    ///
+    /// Every path that takes a backend configuration from the app goes through
+    /// here first — add, update, and test alike — because the sheet is never
+    /// given a masked value and would otherwise hand back a placeholder for one.
+    /// `name` is the backend's *current* name, so a rename still finds the
+    /// configuration the placeholders belong to.
+    pub async fn resolve_masked(
+        &self,
+        name: &str,
+        mut backend: LocalBackendConfig,
+    ) -> LocalBackendConfig {
+        let previous = self
+            .config
+            .read()
+            .await
+            .backend(name)
+            .cloned()
+            .unwrap_or_default();
+        backend.restore_masked_from(&previous);
+        backend
+    }
+
     pub async fn add_backend(&self, backend: LocalBackendConfig) -> Result<(), String> {
+        let name = backend.name.clone();
+        let backend = self.resolve_masked(&name, backend).await;
         self.backends.add(backend.clone()).await?;
         self.config.write().await.backends.push(backend);
         self.persist().await.map_err(|e| e.to_string())
@@ -243,6 +268,7 @@ impl AgentState {
         name: &str,
         backend: LocalBackendConfig,
     ) -> Result<(), String> {
+        let backend = self.resolve_masked(name, backend).await;
         self.backends.update(name, backend.clone()).await?;
         {
             let mut config = self.config.write().await;

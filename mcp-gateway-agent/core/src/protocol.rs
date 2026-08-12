@@ -68,7 +68,9 @@ pub struct ToolInfo {
 /// show the tree rather than a flat list of tools.
 ///
 /// Only **key names** of the environment are sent — the values are the whole
-/// reason a backend has an `env` block in the first place.
+/// reason a backend has an `env` block in the first place, and they stay on the
+/// Mac. `env_masked` names the subset the user marked secret, so the dashboard
+/// can say which ones those are without ever holding one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SubBackendInfo {
     pub name: String,
@@ -81,6 +83,8 @@ pub struct SubBackendInfo {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_masked: Vec<String>,
     #[serde(default)]
     pub tool_count: usize,
 }
@@ -120,6 +124,7 @@ mod golden {
                 args: vec!["blender-mcp".into()],
                 url: None,
                 env_keys: vec!["BLENDER_PATH".into()],
+                env_masked: vec![],
                 tool_count: 1,
             }],
         };
@@ -244,7 +249,8 @@ mod golden {
             command: Some("gitea-mcp".into()),
             args: vec![],
             url: None,
-            env_keys: vec!["GITEA_TOKEN".into()],
+            env_keys: vec!["GITEA_TOKEN".into(), "GITEA_URL".into()],
+            env_masked: vec!["GITEA_TOKEN".into()],
             tool_count: 12,
         };
         let json = serde_json::to_string(&info).unwrap();
@@ -253,5 +259,37 @@ mod golden {
             !json.contains("env\":{"),
             "sub-backend info must not carry env values: {json}"
         );
+    }
+
+    #[test]
+    fn which_variables_are_masked_travels_but_only_as_names() {
+        let info = SubBackendInfo {
+            name: "gitea".into(),
+            transport: "stdio".into(),
+            command: Some("gitea-mcp".into()),
+            args: vec![],
+            url: None,
+            env_keys: vec!["GITEA_TOKEN".into()],
+            env_masked: vec!["GITEA_TOKEN".into()],
+            tool_count: 1,
+        };
+        assert_eq!(
+            serde_json::to_value(&info).unwrap(),
+            json!({
+                "name": "gitea",
+                "transport": "stdio",
+                "command": "gitea-mcp",
+                "env_keys": ["GITEA_TOKEN"],
+                "env_masked": ["GITEA_TOKEN"],
+                "tool_count": 1
+            })
+        );
+
+        // An agent that predates the field still parses.
+        let old: SubBackendInfo = serde_json::from_str(
+            r#"{"name":"gitea","transport":"stdio","env_keys":["GITEA_TOKEN"],"tool_count":1}"#,
+        )
+        .unwrap();
+        assert!(old.env_masked.is_empty());
     }
 }

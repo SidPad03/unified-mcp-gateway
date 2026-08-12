@@ -37,6 +37,15 @@ struct BackendEditor: View {
         let id = UUID()
         var key = ""
         var value = ""
+        /// Hidden everywhere — this sheet, the backend list, the dashboard —
+        /// until it is unmasked here and saved. Off by default: most of what
+        /// goes in an environment is a path or a flag.
+        var masked = false
+
+        /// True while `value` is the placeholder standing in for a value the
+        /// agent would not hand over. The field shows empty, and leaving it that
+        /// way keeps what is on disk.
+        var isHidden: Bool { value == maskedPlaceholder }
     }
 
     private var isEditing: Bool {
@@ -59,10 +68,9 @@ struct BackendEditor: View {
                     transportFields
                     pairEditor(
                         title: "Environment",
-                        note: isEditing
-                            ? "Values are not shown: the agent never hands them back out. "
-                                + "Leave one blank to keep it as it is."
-                            : "Passed to the process. Secrets belong here rather than in the command.",
+                        note: "Passed to the process. Secrets belong here rather than in the "
+                            + "command — mask one with the lock and it is hidden everywhere, "
+                            + "here and on the dashboard, until you unmask it.",
                         pairs: $envPairs
                     )
                     if !draft.isStdio {
@@ -177,10 +185,21 @@ struct BackendEditor: View {
                     TextField("KEY", text: $pair.key)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: Typo.small, design: .monospaced))
-                        .frame(width: 180)
-                    SecureField("value", text: $pair.value)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: Typo.small, design: .monospaced))
+                        .frame(width: 165)
+                    valueField(for: $pair)
+                    Button {
+                        pair.masked.toggle()
+                    } label: {
+                        Image(systemName: pair.masked ? "lock.fill" : "lock.open")
+                            .font(.system(size: Typo.small))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(pair.masked ? Palette.warn : Palette.text3)
+                    .help(
+                        pair.masked
+                            ? "Masked — hidden here and on the dashboard until you unmask it"
+                            : "Plain text — shown wherever this backend is displayed"
+                    )
                     Button {
                         pairs.wrappedValue.removeAll { $0.id == pair.id }
                     } label: {
@@ -191,6 +210,36 @@ struct BackendEditor: View {
                 }
             }
         }
+    }
+
+    /// A masked value is typed blind; a plain one is ordinary text.
+    ///
+    /// A masked variable that already exists arrives as the placeholder, so the
+    /// field shows empty and says why. Typing replaces it; leaving it alone
+    /// keeps what is on disk.
+    private func valueField(for pair: Binding<Pair>) -> some View {
+        let hidden = pair.wrappedValue.isHidden
+        let prompt =
+            switch (hidden, pair.wrappedValue.masked) {
+            case (false, _): "value"
+            case (true, true): "hidden — type to replace"
+            // Unmasked but not yet saved: the value is still on disk, and the
+            // next time this sheet opens it will be in the field.
+            case (true, false): "shown here once you save"
+            }
+        let text = Binding(
+            get: { hidden ? "" : pair.wrappedValue.value },
+            set: { pair.wrappedValue.value = $0 }
+        )
+        return Group {
+            if pair.wrappedValue.masked {
+                SecureField(prompt, text: text)
+            } else {
+                TextField(prompt, text: text)
+            }
+        }
+        .textFieldStyle(.roundedBorder)
+        .font(.system(size: Typo.small, design: .monospaced))
     }
 
     @ViewBuilder
@@ -258,16 +307,22 @@ struct BackendEditor: View {
         if case let .edit(backend) = mode {
             draft = BackendConfig(existing: backend)
             argsText = backend.args.joined(separator: "\n")
-            envPairs = backend.envKeys.map { Pair(key: $0, value: "") }
-            headerPairs = backend.headerKeys.map { Pair(key: $0, value: "") }
+            envPairs = backend.env.map(pair(from:))
+            headerPairs = backend.headers.map(pair(from:))
         }
+    }
+
+    private func pair(from setting: BackendSetting) -> Pair {
+        Pair(key: setting.key, value: setting.value ?? maskedPlaceholder, masked: setting.masked)
     }
 
     /// Fold the editors back into the config.
     ///
-    /// A pair with an empty value on an *existing* backend means "leave this
-    /// one alone", so it is dropped here and the value already on disk survives
-    /// the round trip. On a new backend an empty value is just an empty value.
+    /// A plain variable is sent as typed — what the field shows is what is
+    /// stored. A masked one whose field was left empty is sent as the
+    /// placeholder, which the core turns back into the value already on disk;
+    /// that is what lets an edit to the arguments leave a secret alone, and what
+    /// brings the value back when the mask is cleared.
     private func assemble() -> BackendConfig {
         var config = draft
         config.name = draft.name.trimmingCharacters(in: .whitespaces)
@@ -282,14 +337,23 @@ struct BackendEditor: View {
             for pair in pairs {
                 let key = pair.key.trimmingCharacters(in: .whitespaces)
                 guard !key.isEmpty else { continue }
-                if pair.value.isEmpty && isEditing { continue }
-                result[key] = pair.value
+                result[key] =
+                    pair.masked && pair.value.isEmpty ? maskedPlaceholder : pair.value
             }
             return result
         }
 
+        func maskedKeys(from pairs: [Pair]) -> [String] {
+            pairs
+                .filter(\.masked)
+                .map { $0.key.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+        }
+
         config.env = dictionary(from: envPairs)
+        config.maskedEnv = maskedKeys(from: envPairs)
         config.headers = draft.isStdio ? [:] : dictionary(from: headerPairs)
+        config.maskedHeaders = draft.isStdio ? [] : maskedKeys(from: headerPairs)
         if draft.isStdio { config.url = nil } else { config.command = nil }
         return config
     }

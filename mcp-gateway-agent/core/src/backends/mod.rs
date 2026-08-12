@@ -323,6 +323,36 @@ pub struct ToolSummary {
     pub description: String,
 }
 
+/// One environment variable or header, as the app is allowed to see it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SettingView {
+    pub key: String,
+    /// `None` when the variable is masked. The value is still in `config.toml`
+    /// — it is simply not something the UI gets to render until the user clears
+    /// the mask in the editor.
+    pub value: Option<String>,
+    pub masked: bool,
+}
+
+fn settings_view(values: &HashMap<String, String>, masked: &[String]) -> Vec<SettingView> {
+    let mut keys: Vec<&String> = values.keys().collect();
+    keys.sort();
+    keys.into_iter()
+        .map(|key| {
+            let is_masked = masked.iter().any(|m| m == key);
+            SettingView {
+                key: key.clone(),
+                value: if is_masked {
+                    None
+                } else {
+                    values.get(key).cloned()
+                },
+                masked: is_masked,
+            }
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BackendView {
     pub name: String,
@@ -338,9 +368,9 @@ pub struct BackendView {
     pub command: Option<String>,
     pub args: Vec<String>,
     pub url: Option<String>,
-    /// Key names only — the values are the whole point of having an env block.
-    pub env_keys: Vec<String>,
-    pub header_keys: Vec<String>,
+    /// Every variable by name; the value only when it is not masked.
+    pub env: Vec<SettingView>,
+    pub headers: Vec<SettingView>,
     pub tools: Vec<ToolSummary>,
 }
 
@@ -521,6 +551,8 @@ impl BackendManager {
             let config = backend.config().await;
             let mut env_keys: Vec<String> = config.env.keys().cloned().collect();
             env_keys.sort();
+            let mut env_masked = config.masked_env.clone();
+            env_masked.sort();
             infos.push(SubBackendInfo {
                 name: config.name,
                 transport: config.transport,
@@ -528,6 +560,7 @@ impl BackendManager {
                 args: config.args,
                 url: config.url,
                 env_keys,
+                env_masked,
                 tool_count: runtime.tools.len(),
             });
         }
@@ -541,10 +574,8 @@ impl BackendManager {
         for backend in entries {
             let config = backend.config().await;
             let runtime = backend.runtime().await;
-            let mut env_keys: Vec<String> = config.env.keys().cloned().collect();
-            env_keys.sort();
-            let mut header_keys: Vec<String> = config.headers.keys().cloned().collect();
-            header_keys.sort();
+            let env = settings_view(&config.env, &config.masked_env);
+            let headers = settings_view(&config.headers, &config.masked_headers);
             views.push(BackendView {
                 name: config.name,
                 transport: config.transport,
@@ -561,8 +592,8 @@ impl BackendManager {
                 command: config.command,
                 args: config.args,
                 url: config.url,
-                env_keys,
-                header_keys,
+                env,
+                headers,
                 tools: runtime
                     .tools
                     .iter()
@@ -774,6 +805,40 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("command"), "{err}");
         assert!(manager.snapshot().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_masked_value_never_reaches_the_snapshot() {
+        let (hooks, _rx) = hooks();
+        let manager = BackendManager::new(hooks);
+        manager
+            .add(LocalBackendConfig {
+                name: "secretive".into(),
+                transport: "stdio".into(),
+                command: Some("/bin/sh".into()),
+                args: vec!["-c".into(), "sleep 30".into()],
+                env: HashMap::from([
+                    ("TOKEN".into(), "hunter2".into()),
+                    ("MODE".into(), "debug".into()),
+                ]),
+                masked_env: vec!["TOKEN".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let views = manager.snapshot().await;
+        let json = serde_json::to_string(&views[0]).unwrap();
+        assert!(!json.contains("hunter2"), "masked value leaked: {json}");
+        assert!(
+            json.contains("TOKEN"),
+            "the key is still shown, only the value is not: {json}"
+        );
+        assert!(
+            json.contains("debug"),
+            "an unmasked value is plain text: {json}"
+        );
+        manager.shutdown().await;
     }
 
     #[tokio::test]

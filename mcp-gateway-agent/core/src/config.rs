@@ -21,6 +21,21 @@ fn default_true() -> bool {
     true
 }
 
+/// Stands in for a masked value everywhere the value itself is not allowed to
+/// go — the snapshot the app renders, the sheet you edit a backend in, a
+/// `test_backend` payload on its way back down.
+///
+/// A masked variable is still stored in plain text in `config.toml`; masking is
+/// a rule about what may be *displayed*, not encryption. The editor hands this
+/// placeholder back for any variable the user did not retype, and
+/// [`LocalBackendConfig::restore_masked_from`] swaps the real value in again
+/// before the config is written or a process is started.
+///
+/// The same string is spelled out in `mcp-gateway-server/src/api/backends.rs`;
+/// the two crates cannot share a constant, so if you change it here, change it
+/// there in the same commit.
+pub const MASKED: &str = "__mcpgw_masked__";
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct Config {
     #[serde(default)]
@@ -64,6 +79,15 @@ pub struct LocalBackendConfig {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub headers: HashMap<String, String>,
+    /// Keys of `env` whose values must never be shown again — not in this app,
+    /// not on the dashboard. Everything not listed here is plain text, which is
+    /// the default: most of what goes in an env block is a path or a flag, and
+    /// hiding all of it taught people nothing about which ones were secret.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub masked_env: Vec<String>,
+    /// The same, for `headers`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub masked_headers: Vec<String>,
     /// A disabled backend stays in the config but is never spawned and never
     /// registered with the gateway.
     #[serde(default = "default_true")]
@@ -80,6 +104,8 @@ impl Default for LocalBackendConfig {
             env: HashMap::new(),
             url: None,
             headers: HashMap::new(),
+            masked_env: Vec::new(),
+            masked_headers: Vec::new(),
             enabled: true,
         }
     }
@@ -92,6 +118,42 @@ impl LocalBackendConfig {
 
     pub fn is_http(&self) -> bool {
         matches!(self.transport.as_str(), "http" | "streamable-http")
+    }
+
+    /// Put the real values back where the editor sent [`MASKED`].
+    ///
+    /// The sheet is never given a masked value, so this is what lets a backend
+    /// with a secret in its environment survive an edit that only changed its
+    /// arguments. `previous` is the configuration currently on disk; for a
+    /// backend being added it is `Default`, and an unresolvable placeholder
+    /// collapses to an empty value rather than being stored literally.
+    pub fn restore_masked_from(&mut self, previous: &Self) {
+        for (key, value) in self.env.iter_mut() {
+            if value == MASKED {
+                *value = previous.env.get(key).cloned().unwrap_or_default();
+            }
+        }
+        for (key, value) in self.headers.iter_mut() {
+            if value == MASKED {
+                *value = previous.headers.get(key).cloned().unwrap_or_default();
+            }
+        }
+        self.tidy_masks();
+    }
+
+    /// Sort the mask lists and drop entries for keys that no longer exist, so a
+    /// renamed or deleted variable cannot leave a flag behind that would mask a
+    /// future variable of the same name.
+    pub fn tidy_masks(&mut self) {
+        let env = &self.env;
+        self.masked_env.retain(|k| env.contains_key(k));
+        self.masked_env.sort();
+        self.masked_env.dedup();
+
+        let headers = &self.headers;
+        self.masked_headers.retain(|k| headers.contains_key(k));
+        self.masked_headers.sort();
+        self.masked_headers.dedup();
     }
 
     /// Reject a backend that can never start, before it is written to disk.
@@ -525,6 +587,81 @@ args = ["blender-mcp"]
             ..Default::default()
         };
         assert!(good.validate().is_ok());
+    }
+
+    fn with_secret() -> LocalBackendConfig {
+        LocalBackendConfig {
+            name: "gitea".into(),
+            transport: "stdio".into(),
+            command: Some("gitea-mcp".into()),
+            env: HashMap::from([
+                ("GITEA_TOKEN".into(), "the-real-token".into()),
+                ("GITEA_URL".into(), "http://gitea.local".into()),
+            ]),
+            masked_env: vec!["GITEA_TOKEN".into()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_edit_that_does_not_retype_a_secret_keeps_it() {
+        // What the sheet sends back: the placeholder for the masked variable,
+        // because it was never given the value to begin with.
+        let mut edited = with_secret();
+        edited.env.insert("GITEA_TOKEN".into(), MASKED.into());
+        edited
+            .env
+            .insert("GITEA_URL".into(), "http://new.local".into());
+
+        edited.restore_masked_from(&with_secret());
+
+        assert_eq!(edited.env["GITEA_TOKEN"], "the-real-token");
+        assert_eq!(edited.env["GITEA_URL"], "http://new.local");
+        assert_eq!(edited.masked_env, vec!["GITEA_TOKEN".to_string()]);
+    }
+
+    #[test]
+    fn unmasking_keeps_the_value_it_was_hiding() {
+        // Clearing the flag is the only way back to a masked value: the sheet
+        // still sends the placeholder, the value is restored, and from the next
+        // snapshot on it is shown in plain text.
+        let mut edited = with_secret();
+        edited.env.insert("GITEA_TOKEN".into(), MASKED.into());
+        edited.masked_env.clear();
+
+        edited.restore_masked_from(&with_secret());
+
+        assert_eq!(edited.env["GITEA_TOKEN"], "the-real-token");
+        assert!(edited.masked_env.is_empty());
+    }
+
+    #[test]
+    fn a_placeholder_with_nothing_behind_it_does_not_become_the_value() {
+        // Adding a backend: there is no previous config to restore from, and
+        // storing the literal placeholder would hand the backend a nonsense
+        // environment.
+        let mut fresh = with_secret();
+        fresh.env.insert("GITEA_TOKEN".into(), MASKED.into());
+        fresh.restore_masked_from(&LocalBackendConfig::default());
+        assert_eq!(fresh.env["GITEA_TOKEN"], "");
+    }
+
+    #[test]
+    fn a_removed_variable_takes_its_mask_with_it() {
+        let mut config = with_secret();
+        config.env.remove("GITEA_TOKEN");
+        config.tidy_masks();
+        assert!(config.masked_env.is_empty());
+    }
+
+    #[test]
+    fn masks_survive_the_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut original = sample();
+        original.backends = vec![with_secret()];
+        save(&path, &original).unwrap();
+        assert_eq!(load(&path).unwrap(), original);
     }
 
     #[test]

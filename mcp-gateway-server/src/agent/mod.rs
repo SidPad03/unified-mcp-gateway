@@ -75,6 +75,11 @@ pub struct AgentSubBackendInfo {
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub env_keys: Vec<String>,
+    /// The subset of `env_keys` the user marked secret in the agent. Values
+    /// never leave the agent's machine either way; this only tells the dashboard
+    /// which keys to render as hidden.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub env_masked: Vec<String>,
     #[serde(default)]
     pub tool_count: usize,
 }

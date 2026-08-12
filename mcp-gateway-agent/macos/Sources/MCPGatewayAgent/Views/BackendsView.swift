@@ -275,6 +275,20 @@ private struct BackendRow: View {
         }
     }
 
+    /// `KEY=value` for a plain variable, `KEY=••••` for a masked one.
+    ///
+    /// The row is one line, so a long value is cut short here rather than
+    /// pushing the other facts off the end of it.
+    private static func summary(of settings: [BackendSetting]) -> String {
+        settings
+            .map { setting in
+                guard let value = setting.value else { return "\(setting.key)=••••" }
+                let short = value.count > 24 ? value.prefix(24) + "…" : value[...]
+                return "\(setting.key)=\(short)"
+            }
+            .joined(separator: "  ")
+    }
+
     private var facts: some View {
         HStack(alignment: .top, spacing: 22) {
             if let pid = backend.pid {
@@ -290,11 +304,11 @@ private struct BackendRow: View {
                     tint: backend.restarts > 3 ? Palette.warn : Palette.text
                 )
             }
-            if !backend.envKeys.isEmpty {
-                Fact(label: "Env", value: backend.envKeys.joined(separator: ", "))
+            if !backend.env.isEmpty {
+                Fact(label: "Env", value: Self.summary(of: backend.env))
             }
-            if !backend.headerKeys.isEmpty {
-                Fact(label: "Headers", value: backend.headerKeys.joined(separator: ", "))
+            if !backend.headers.isEmpty {
+                Fact(label: "Headers", value: Self.summary(of: backend.headers))
             }
             Spacer(minLength: 0)
         }

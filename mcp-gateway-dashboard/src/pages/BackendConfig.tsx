@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, Backend, ApiKey } from '@/lib/api';
-import { Plus, Trash2, Server, Wifi, Terminal, Globe, X, RefreshCw, Link, Copy, Check, RotateCcw, Pencil, Laptop, Boxes, Eye, EyeOff } from 'lucide-react';
+import { Plus, Trash2, Server, Wifi, Terminal, Globe, X, RefreshCw, Link, Copy, Check, RotateCcw, Pencil, Laptop, Boxes, Eye, EyeOff, Lock, LockOpen } from 'lucide-react';
 import clsx from 'clsx';
 import { fmt } from '@/lib/format';
 import {
@@ -41,19 +41,64 @@ const TRANSPORT_ICONS: Record<string, typeof Terminal> = {
   agent: Laptop,
 };
 
+/**
+ * What the gateway sends in place of a value the user marked secret, and what
+ * we send back for one nobody retyped. It is never rendered: an entry holding
+ * it shows an empty field with a "hidden" placeholder, and the server swaps the
+ * stored value back in on save. Mirrors `MASKED` in
+ * `mcp-gateway-server/src/api/backends.rs`.
+ */
+const MASKED = '__mcpgw_masked__';
+
+/** One environment variable or header row in the editor. */
+interface EnvEntry {
+  key: string;
+  value: string;
+  /** Hidden everywhere — here, in the config panel, in the agent — until unmasked. */
+  masked: boolean;
+}
+
+const emptyEntry = (): EnvEntry => ({ key: '', value: '', masked: false });
+
+/** Split a config's KV block into editor rows, carrying the mask flags across. */
+const entriesFrom = (values: unknown, masked: unknown): EnvEntry[] => {
+  const maskedKeys = Array.isArray(masked) ? (masked as string[]) : [];
+  return Object.entries((values || {}) as Record<string, unknown>).map(([key, value]) => ({
+    key,
+    value: String(value),
+    masked: maskedKeys.includes(key),
+  }));
+};
+
+/** Fold editor rows back into `{ values, masked }` for the wire. */
+const collectEntries = (entries: EnvEntry[]) => {
+  const values: Record<string, string> = {};
+  const masked: string[] = [];
+  entries.forEach(e => {
+    const key = e.key.trim();
+    if (!key) return;
+    // An empty field on a masked row means "leave it alone": the browser was
+    // never given the value, so the placeholder is the only truthful thing to
+    // send back.
+    values[key] = e.masked && e.value === '' ? MASKED : e.value;
+    if (e.masked) masked.push(key);
+  });
+  return { values, masked };
+};
+
 interface StdioForm {
   command: string;
   args: string[];
-  env: { key: string; value: string }[];
+  env: EnvEntry[];
 }
 
 interface HttpForm {
   url: string;
-  env: { key: string; value: string }[];
+  env: EnvEntry[];
 }
 
-const emptyStdioForm = (): StdioForm => ({ command: '', args: [''], env: [{ key: '', value: '' }] });
-const emptyHttpForm = (): HttpForm => ({ url: '', env: [{ key: '', value: '' }] });
+const emptyStdioForm = (): StdioForm => ({ command: '', args: [''], env: [emptyEntry()] });
+const emptyHttpForm = (): HttpForm => ({ url: '', env: [emptyEntry()] });
 
 export default function BackendConfig({ isAdmin }: Props) {
   const [backends, setBackends] = useState<Backend[]>([]);
@@ -143,20 +188,19 @@ export default function BackendConfig({ isAdmin }: Props) {
     setRiskCategory(backend.risk_category || 'read');
     if (backend.transport === 'stdio') {
       const cfg = backend.config as any;
+      const env = entriesFrom(cfg.env, cfg.masked_env);
       setStdioForm({
         command: cfg.command || '',
         args: cfg.args?.length ? cfg.args : [''],
-        env: Object.entries(cfg.env || {}).map(([key, value]) => ({ key, value: String(value) })),
+        env: env.length ? env : [emptyEntry()],
       });
-      if (stdioForm.env.length === 0) setStdioForm(prev => ({ ...prev, env: [{ key: '', value: '' }] }));
     } else {
       const cfg = backend.config as any;
-      setHttpForm({
-        url: cfg.url || '',
-        // HTTP KV pairs are stored as `headers`; fall back to legacy `env` records.
-        env: Object.entries(cfg.headers || cfg.env || {}).map(([key, value]) => ({ key, value: String(value) })),
-      });
-      if (httpForm.env.length === 0) setHttpForm(prev => ({ ...prev, env: [{ key: '', value: '' }] }));
+      // HTTP KV pairs are stored as `headers`; fall back to legacy `env` records.
+      const env = cfg.headers
+        ? entriesFrom(cfg.headers, cfg.masked_headers)
+        : entriesFrom(cfg.env, cfg.masked_env);
+      setHttpForm({ url: cfg.url || '', env: env.length ? env : [emptyEntry()] });
     }
     setError('');
     setShowModal(true);
@@ -317,19 +361,18 @@ export default function BackendConfig({ isAdmin }: Props) {
 
   const buildConfig = (): Record<string, unknown> => {
     if (transport === 'stdio') {
-      const env: Record<string, string> = {};
-      stdioForm.env.forEach(e => { if (e.key.trim()) env[e.key.trim()] = e.value; });
+      const { values, masked } = collectEntries(stdioForm.env);
       return {
         command: stdioForm.command,
         args: stdioForm.args.filter(a => a !== ''),
-        env,
+        env: values,
+        masked_env: masked,
       };
     } else {
       // HTTP/SSE backends have no subprocess, so these KV pairs are sent as request
       // headers (e.g. Authorization), not environment variables.
-      const headers: Record<string, string> = {};
-      httpForm.env.forEach(e => { if (e.key.trim()) headers[e.key.trim()] = e.value; });
-      return { url: httpForm.url, headers };
+      const { values, masked } = collectEntries(httpForm.env);
+      return { url: httpForm.url, headers: values, masked_headers: masked };
     }
   };
 
@@ -499,28 +542,52 @@ export default function BackendConfig({ isAdmin }: Props) {
     });
   };
 
-  const updateEnv = (form: 'stdio' | 'http', idx: number, field: 'key' | 'value', val: string) => {
+  const patchEnv = (form: 'stdio' | 'http', idx: number, patch: Partial<EnvEntry>) => {
     if (form === 'stdio') {
       const next = [...stdioForm.env];
-      next[idx] = { ...next[idx], [field]: val };
+      next[idx] = { ...next[idx], ...patch };
       setStdioForm({ ...stdioForm, env: next });
     } else {
       const next = [...httpForm.env];
-      next[idx] = { ...next[idx], [field]: val };
+      next[idx] = { ...next[idx], ...patch };
       setHttpForm({ ...httpForm, env: next });
     }
   };
+
+  const updateEnv = (form: 'stdio' | 'http', idx: number, field: 'key' | 'value', val: string) =>
+    patchEnv(form, idx, { [field]: val });
+
+  /**
+   * Flip one variable between masked and plain text.
+   *
+   * Masking hides it immediately; un-masking cannot show the old value here
+   * (the browser never had it) but the placeholder survives the save, so the
+   * value comes back on the next load.
+   */
+  const toggleMask = (form: 'stdio' | 'http', idx: number) => {
+    const entry = (form === 'stdio' ? stdioForm : httpForm).env[idx];
+    patchEnv(form, idx, { masked: !entry.masked });
+    if (entry.masked) {
+      // Leaving masked mode: stop revealing a field that is now plain anyway.
+      setRevealedValues(prev => {
+        const next = new Set(prev);
+        next.delete(`${form}-${idx}`);
+        return next;
+      });
+    }
+  };
+
   const addEnv = (form: 'stdio' | 'http') => {
-    if (form === 'stdio') setStdioForm({ ...stdioForm, env: [...stdioForm.env, { key: '', value: '' }] });
-    else setHttpForm({ ...httpForm, env: [...httpForm.env, { key: '', value: '' }] });
+    if (form === 'stdio') setStdioForm({ ...stdioForm, env: [...stdioForm.env, emptyEntry()] });
+    else setHttpForm({ ...httpForm, env: [...httpForm.env, emptyEntry()] });
   };
   const removeEnv = (form: 'stdio' | 'http', idx: number) => {
     if (form === 'stdio') {
       const next = stdioForm.env.filter((_, i) => i !== idx);
-      setStdioForm({ ...stdioForm, env: next.length ? next : [{ key: '', value: '' }] });
+      setStdioForm({ ...stdioForm, env: next.length ? next : [emptyEntry()] });
     } else {
       const next = httpForm.env.filter((_, i) => i !== idx);
-      setHttpForm({ ...httpForm, env: next.length ? next : [{ key: '', value: '' }] });
+      setHttpForm({ ...httpForm, env: next.length ? next : [emptyEntry()] });
     }
   };
 
@@ -548,41 +615,74 @@ export default function BackendConfig({ isAdmin }: Props) {
         {isHttp && (
           <p className="text-2xs text-ink-3 mb-2">Sent as request headers on every call to this backend (e.g. <span className="font-mono">Authorization = Bearer &lt;token&gt;</span>).</p>
         )}
+        <p className="text-2xs text-ink-3 mb-2">
+          Values are plain text unless you mask them. A masked value is hidden everywhere — this
+          page, the JSON editor, the agent — until you unmask it here and save.
+        </p>
         <div className="space-y-2">
-          {entries.map((entry, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input
-                type="text"
-                value={entry.key}
-                onChange={e => updateEnv(form, i, 'key', e.target.value)}
-                placeholder={keyPlaceholder}
-                className="w-[40%] px-2.5 py-1.5 bg-inset border border-line rounded-row text-xs text-ink font-mono focus:outline-none focus:border-beam-edge"
-              />
-              <span className="text-ink-4 text-xs">=</span>
-              <div className="flex-1 relative">
+          {entries.map((entry, i) => {
+            const revealed = revealedValues.has(`${form}-${i}`);
+            // A value the server would not hand over shows as empty with a
+            // placeholder; typing replaces it, leaving it alone keeps it.
+            const hidden = entry.value === MASKED;
+            return (
+              <div key={i} className="flex items-center gap-2">
                 <input
-                  type={revealedValues.has(`${form}-${i}`) ? 'text' : 'password'}
-                  value={entry.value}
-                  onChange={e => updateEnv(form, i, 'value', e.target.value)}
-                  placeholder={valuePlaceholder}
-                  autoComplete="off"
-                  className="w-full px-2.5 py-1.5 pr-8 bg-inset border border-line rounded-row text-xs text-ink font-mono focus:outline-none focus:border-beam-edge"
+                  type="text"
+                  value={entry.key}
+                  onChange={e => updateEnv(form, i, 'key', e.target.value)}
+                  placeholder={keyPlaceholder}
+                  className="w-[36%] px-2.5 py-1.5 bg-inset border border-line rounded-row text-xs text-ink font-mono focus:outline-none focus:border-beam-edge"
                 />
+                <span className="text-ink-4 text-xs">=</span>
+                <div className="flex-1 relative">
+                  <input
+                    type={entry.masked && !revealed ? 'password' : 'text'}
+                    value={hidden ? '' : entry.value}
+                    onChange={e => updateEnv(form, i, 'value', e.target.value)}
+                    placeholder={
+                      hidden
+                        ? entry.masked
+                          ? '•••••••• hidden — type to replace'
+                          : '•••••••• shown here once you save'
+                        : valuePlaceholder
+                    }
+                    autoComplete="off"
+                    className="w-full px-2.5 py-1.5 pr-8 bg-inset border border-line rounded-row text-xs text-ink font-mono focus:outline-none focus:border-beam-edge"
+                  />
+                  {entry.masked && (
+                    <button
+                      type="button"
+                      onClick={() => toggleReveal(form, i)}
+                      tabIndex={-1}
+                      aria-label={revealed ? 'Hide value' : 'Show value'}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-4 hover:text-ink-2 transition-colors"
+                    >
+                      {revealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  )}
+                </div>
                 <button
                   type="button"
-                  onClick={() => toggleReveal(form, i)}
-                  tabIndex={-1}
-                  aria-label={revealedValues.has(`${form}-${i}`) ? 'Hide value' : 'Show value'}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-4 hover:text-ink-2 transition-colors"
+                  onClick={() => toggleMask(form, i)}
+                  aria-pressed={entry.masked}
+                  title={entry.masked
+                    ? 'Masked — hidden everywhere until you unmask it'
+                    : 'Plain text — visible here and in the agent'}
+                  aria-label={entry.masked ? 'Unmask this value' : 'Mask this value'}
+                  className={clsx(
+                    'p-1 transition-colors',
+                    entry.masked ? 'text-warn hover:text-ink-2' : 'text-ink-4 hover:text-warn'
+                  )}
                 >
-                  {revealedValues.has(`${form}-${i}`) ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  {entry.masked ? <Lock className="w-3.5 h-3.5" /> : <LockOpen className="w-3.5 h-3.5" />}
+                </button>
+                <button type="button" onClick={() => removeEnv(form, i)} className="p-1 text-ink-4 hover:text-deny transition-colors">
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <button type="button" onClick={() => removeEnv(form, i)} className="p-1 text-ink-4 hover:text-deny transition-colors">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -805,10 +905,17 @@ export default function BackendConfig({ isAdmin }: Props) {
                             <span className="text-xs text-ink-3 w-16 shrink-0 mt-0.5">Env:</span>
                             <div className="space-y-1">
                               {Object.entries((backend.config as any).env || {}).map(([k, v]) => (
-                                <div key={k} className="text-xs font-mono">
+                                <div key={k} className="text-xs font-mono flex items-center gap-1">
                                   <span className="text-warn">{k}</span>
                                   <span className="text-ink-4">=</span>
-                                  <span className="text-ink-2">{String(v).length > 40 ? String(v).slice(0, 40) + '...' : String(v)}</span>
+                                  {v === MASKED ? (
+                                    <>
+                                      <span className="text-ink-4">••••••••</span>
+                                      <Lock className="w-3 h-3 text-ink-4" aria-label="Masked" />
+                                    </>
+                                  ) : (
+                                    <span className="text-ink-2">{String(v).length > 40 ? String(v).slice(0, 40) + '...' : String(v)}</span>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -868,8 +975,15 @@ export default function BackendConfig({ isAdmin }: Props) {
                                       <div className="flex items-start gap-2">
                                         <span className="text-micro text-ink-3 w-16 shrink-0 mt-0.5 uppercase tracking-wider">Env</span>
                                         <div className="flex flex-wrap gap-1">
+                                          {/* Values for these never leave the agent's machine; the
+                                              lock marks the ones its owner also masked locally. */}
                                           {sub.env_keys.map((key: string) => (
-                                            <span key={key} className="text-xs text-warn bg-warn-wash px-1.5 py-0.5 rounded-control font-mono">{key}</span>
+                                            <span key={key} className="text-xs text-warn bg-warn-wash px-1.5 py-0.5 rounded-control font-mono inline-flex items-center gap-1">
+                                              {key}
+                                              {sub.env_masked?.includes(key) && (
+                                                <Lock className="w-2.5 h-2.5" aria-label="Masked" />
+                                              )}
+                                            </span>
                                           ))}
                                         </div>
                                       </div>
@@ -886,7 +1000,9 @@ export default function BackendConfig({ isAdmin }: Props) {
                     )}
                     {backend.transport !== 'stdio' && backend.transport !== 'agent' && (
                       <pre className="text-xs text-ink-2 bg-inset p-3 rounded-row overflow-auto max-h-48 font-mono mb-3">
-                        {JSON.stringify(backend.config, null, 2)}
+                        {/* Read-only, so the placeholder can be prettied up here —
+                            unlike the JSON editor, where it has to round-trip. */}
+                        {JSON.stringify(backend.config, (_k, v) => (v === MASKED ? '••••••••' : v), 2)}
                       </pre>
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-3 border-t border-line-soft pt-3">
@@ -938,6 +1054,11 @@ export default function BackendConfig({ isAdmin }: Props) {
               <div>
                 <h3 className="text-md font-semibold text-ink">Edit backends as JSON</h3>
                 <p className="text-xs text-ink-3 mt-0.5">Edit all backend configurations as JSON. Existing backends are matched by name.</p>
+                <p className="text-xs text-ink-3 mt-0.5">
+                  Masked values are not shown here either — they read as{' '}
+                  <span className="font-mono">{MASKED}</span>, and saving them unchanged keeps the
+                  stored value.
+                </p>
               </div>
               <button onClick={() => setShowJsonEditor(false)} className="text-ink-3 hover:text-ink-2">
                 <X className="w-5 h-5" />

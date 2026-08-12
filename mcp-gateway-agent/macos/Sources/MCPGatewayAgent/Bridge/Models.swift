@@ -140,6 +140,25 @@ struct AgentConfigView: Codable, Sendable {
     var configPath: String
 }
 
+/// Stands in for a value this app is not allowed to see.
+///
+/// The core sends it nowhere — a masked variable simply arrives with no value —
+/// but the editor sends it *back* for a variable the user did not retype, and
+/// the core swaps the stored value in again. Mirrors `config::MASKED` in
+/// `mcp-gateway-agent-core`.
+let maskedPlaceholder = "__mcpgw_masked__"
+
+/// One environment variable or header, as the agent is willing to show it.
+struct BackendSetting: Codable, Sendable, Equatable, Identifiable {
+    var key: String
+    /// `nil` when the variable is masked. The value is still in `config.toml`;
+    /// it is not something the UI gets to render until the mask is cleared.
+    var value: String?
+    var masked: Bool
+
+    var id: String { key }
+}
+
 struct ToolSummary: Codable, Sendable, Hashable, Identifiable {
     var name: String
     var description: String
@@ -167,8 +186,8 @@ struct BackendView: Codable, Sendable, Identifiable, Equatable {
     var command: String?
     var args: [String]
     var url: String?
-    var envKeys: [String]
-    var headerKeys: [String]
+    var env: [BackendSetting]
+    var headers: [BackendSetting]
     var tools: [ToolSummary]
 
     var id: String { name }
@@ -245,6 +264,11 @@ struct BackendConfig: Codable, Sendable, Equatable {
     var env: [String: String] = [:]
     var url: String?
     var headers: [String: String] = [:]
+    /// Keys of `env` whose values must never be shown again — here or on the
+    /// dashboard. Everything else is plain text, which is the default.
+    var maskedEnv: [String] = []
+    /// The same, for `headers`.
+    var maskedHeaders: [String] = []
     var enabled: Bool = true
 
     var isStdio: Bool { transport == "stdio" }
@@ -257,6 +281,8 @@ struct BackendConfig: Codable, Sendable, Equatable {
         env: [String: String] = [:],
         url: String? = nil,
         headers: [String: String] = [:],
+        maskedEnv: [String] = [],
+        maskedHeaders: [String] = [],
         enabled: Bool = true
     ) {
         self.name = name
@@ -266,24 +292,34 @@ struct BackendConfig: Codable, Sendable, Equatable {
         self.env = env
         self.url = url
         self.headers = headers
+        self.maskedEnv = maskedEnv
+        self.maskedHeaders = maskedHeaders
         self.enabled = enabled
     }
 
     /// Prefill the editor from a running backend.
     ///
-    /// Environment *values* are deliberately not available here — the agent
-    /// never hands them back out — so editing a backend that has secrets in its
-    /// environment shows the keys with empty values and leaves them untouched
-    /// unless the user types a new one.
+    /// A plain variable arrives with its value and is edited as text. A masked
+    /// one arrives with none — the agent will not hand it back — so it is
+    /// prefilled with the placeholder, which the core turns back into the stored
+    /// value on save. Clearing the mask is what makes a value readable again.
     init(existing: BackendView) {
+        func values(_ settings: [BackendSetting]) -> [String: String] {
+            Dictionary(
+                uniqueKeysWithValues: settings.map { ($0.key, $0.value ?? maskedPlaceholder) }
+            )
+        }
+
         self.init(
             name: existing.name,
             transport: existing.transport,
             command: existing.command,
             args: existing.args,
-            env: Dictionary(uniqueKeysWithValues: existing.envKeys.map { ($0, "") }),
+            env: values(existing.env),
             url: existing.url,
-            headers: Dictionary(uniqueKeysWithValues: existing.headerKeys.map { ($0, "") }),
+            headers: values(existing.headers),
+            maskedEnv: existing.env.filter(\.masked).map(\.key),
+            maskedHeaders: existing.headers.filter(\.masked).map(\.key),
             enabled: existing.enabled
         )
     }

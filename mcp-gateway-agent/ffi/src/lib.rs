@@ -276,6 +276,11 @@ async fn handle(state: &Arc<core::AgentState>, command: Command) -> Result<Value
             Ok(Value::Null)
         }
         Command::TestBackend { backend } => {
+            // Resolve first: testing a backend whose secret was left masked has
+            // to start it with that secret, or the test answers a question
+            // nobody asked.
+            let name = backend.name.clone();
+            let backend = state.resolve_masked(&name, backend).await;
             Ok(serde_json::to_value(core::backends::test_connection(&backend).await?).unwrap())
         }
 

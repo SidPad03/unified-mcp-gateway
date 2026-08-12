@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-08-12
+
+### Added
+
+- **Environment variables and headers can be masked, one at a time.** Every
+  variable in a backend's environment — and every header on an HTTP backend —
+  now carries a lock in the editor, in the dashboard and in the macOS app alike.
+  Unlocked, which is the default, the value is plain text wherever that backend
+  is shown: the configuration panel, the JSON editor, the agent's server list.
+  Locked, it is not rendered anywhere, and the only way back to it is to unlock
+  it in the editor and save. Most of what goes in an environment is a path or a
+  flag, and hiding all of it taught nobody which ones were actually secret.
+
+  Masking is enforced where the value lives rather than in the views that show
+  it. The server and the agent core both substitute a placeholder for a masked
+  value on the way out, and swap the stored value back in when that placeholder
+  returns on a save — so an edit that only changes a command leaves the secret
+  untouched, the JSON editor round-trips it losslessly, and **Test connection**
+  still starts the backend with the real value.
+
+### Changed
+
+- **The macOS app shows environment values it used to withhold.** Editing a
+  backend presented its variables with empty fields, because the agent never
+  handed a value back out; an unmasked value is now shown and edited as text.
+  Existing configurations carry no masks, so everything in them starts visible —
+  mask what should not be.
+- **A masked value is masked for owners too.** `GET /backends` returned the full
+  configuration to any owner; masked entries now come back as a placeholder for
+  every caller. Non-owners still get no `env` or `headers` block at all.
+- **Agents report which variables are masked** — `env_masked` in the
+  registration frame — so the dashboard can mark them. Values themselves still
+  never leave the machine the agent runs on; only key names ever crossed the
+  wire, and that has not changed.
+
 ## [1.0.0] - 2026-08-06
 
 The terminal agent is replaced by a macOS application.
