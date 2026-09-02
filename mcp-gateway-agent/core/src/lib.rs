@@ -26,6 +26,7 @@
 
 pub mod backends;
 pub mod config;
+pub mod control;
 pub mod logbuf;
 pub mod protocol;
 pub mod redact;

@@ -213,29 +213,29 @@ struct Badge: View {
     }
 }
 
-/// Risk classification as a *ramp*, not six unrelated colours: emphasis climbs
-/// with severity, and only the two levels that warrant action take a hue.
-/// Identical rule to the dashboard's `RiskBadge`.
+/// Risk classification as an ordered *ramp*, with a hue on every rung.
+///
+/// A risk category is not a state — a tool is not "in read" the way a backend
+/// is unhealthy — so it sits outside `Tone` and gets its own five-step sweep:
+/// azure, violet, orchid, then the amber and red those two levels carry
+/// everywhere else. Drawing the bottom three rungs in three greys, as this used
+/// to, read as "unimportant" rather than as three different things.
+/// Identical rule and identical colours to the dashboard's `RiskBadge`.
 struct RiskBadge: View {
     let risk: String?
 
     private var level: String { (risk?.isEmpty == false ? risk! : "unclassified") }
 
-    private var tone: Tone {
+    /// `nil` for unclassified, which is a *gap* rather than a level and is
+    /// drawn as a dashed grey outline.
+    private var hue: Color? {
         switch level {
-        case "destructive": .deny
-        case "admin": .warn
-        default: .neutral
-        }
-    }
-
-    private var ink: Color {
-        switch level {
-        case "read": Palette.text4
-        case "write": Palette.text3
-        case "execute": Palette.text
-        case "unclassified": Palette.text4
-        default: tone.color
+        case "read": Palette.read
+        case "write": Palette.write
+        case "execute": Palette.exec
+        case "admin": Palette.warn
+        case "destructive": Palette.deny
+        default: nil
         }
     }
 
@@ -245,17 +245,17 @@ struct RiskBadge: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2.5)
             .background(
-                level == "unclassified" ? Color.clear : tone.wash,
+                hue.map { $0.opacity(0.12) } ?? Color.clear,
                 in: .rect(cornerRadius: Radius.control - 1)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.control - 1)
                     .stroke(
-                        tone == .neutral ? Palette.line : tone.color.opacity(0.24),
-                        style: StrokeStyle(lineWidth: 1, dash: level == "unclassified" ? [2.5, 2.5] : [])
+                        hue?.opacity(0.24) ?? Palette.line,
+                        style: StrokeStyle(lineWidth: 1, dash: hue == nil ? [2.5, 2.5] : [])
                     )
             )
-            .foregroundStyle(ink)
+            .foregroundStyle(hue ?? Palette.text4)
     }
 }
 

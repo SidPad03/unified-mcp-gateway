@@ -25,7 +25,9 @@ pub const MAX_LOG_LINES: usize = 5_000;
 /// Tool calls kept for the Activity page.
 pub const MAX_CALLS: usize = 1_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Ordered least to most severe, and `Ord` follows that order — the Logs page
+/// and `agent_get_local_server_logs` both filter with "at least this level".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Trace,

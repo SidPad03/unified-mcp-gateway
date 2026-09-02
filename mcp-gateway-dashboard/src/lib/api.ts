@@ -121,7 +121,8 @@ export const api = {
     request(`/policies/${id}`, { method: 'DELETE' }),
 
   // Metrics
-  getMetricsSummary: () => request<MetricsSummary>('/metrics/summary'),
+  getMetricsSummary: (range?: MetricsRange) =>
+    request<MetricsSummary>(`/metrics/summary${range ? `?range=${range}` : ''}`),
   // Security posture (owner-only): raw signals for the posture checklist card.
   getSecurityPosture: () => request<SecurityPosture>('/security/posture'),
 
@@ -274,8 +275,11 @@ export interface Role {
 }
 
 export interface MetricsSummary {
+  /** Everything the audit trail holds, at any age — the one figure the range does not touch. */
   total_tool_calls: number;
-  calls_last_24h: number;
+  /** The window the server actually used, which is not necessarily the one asked for. */
+  range: MetricsRange;
+  calls_in_range: number;
   active_backends: number;
   total_backends: number;
   total_tools: number;
@@ -284,12 +288,16 @@ export interface MetricsSummary {
   active_policies: number;
   avg_latency_ms: number;
   error_rate: number;
-  top_tools_24h: { tool_name: string; call_count: number; avg_duration_ms: number; error_count: number }[];
+  top_tools: { tool_name: string; call_count: number; avg_duration_ms: number; error_count: number }[];
   backend_health: { name: string; status: string; tool_count: number }[];
   latency_percentiles: { p50: number; p95: number; p99: number };
   calls_by_risk: { risk_category: string; count: number }[];
-  hourly_volume: { hour: string; count: number }[];
+  volume: { bucket: string; count: number }[];
+  /** How wide one point of `volume` is, which decides how a tick is labelled. */
+  volume_bucket: 'hour' | 'day';
 }
+
+export type MetricsRange = '24h' | '7d' | '30d';
 
 export interface SecurityPostureOwner {
   username: string;

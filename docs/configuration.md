@@ -157,6 +157,7 @@ agent_id = "my-macbook"                                   # must match the backe
 gateway_url = "wss://mcp-gateway.example.com/agent/ws"
 dashboard_url = "https://mcp-gateway.example.com"         # optional; for Audit and Usage
 tls_skip_verify = false                                   # only for self-signed certs in dev
+expose_control_tools = true                               # let the gateway configure this Mac
 
 # A stdio backend — the agent spawns this and talks JSON-RPC over stdin/stdout
 [[backends]]
@@ -196,6 +197,7 @@ Authorization = "Bearer …"
 | `gateway_url` | yes | WebSocket URL, normally `wss://<host>/agent/ws` |
 | `dashboard_url` | no | REST base for the Audit and Usage pages; derived from `gateway_url` if omitted |
 | `tls_skip_verify` | no | Skip TLS verification — self-signed certs only |
+| `expose_control_tools` | no | Defaults to `true`. Registers the `agent_*` tools that let the gateway install, start, stop and reconfigure the MCP servers on this Mac — see [Self-Configuration Tools](self-configuration.md). Set `false` to let the gateway *use* this machine's servers without being able to change them; the app's **Settings → General → Remote control** is the same switch |
 
 **`[[backends]]`**
 

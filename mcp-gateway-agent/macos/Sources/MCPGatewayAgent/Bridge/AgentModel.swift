@@ -308,6 +308,12 @@ final class AgentModel {
         await run(.restartBackend(name))
     }
 
+    /// Turn the gateway's ability to configure this Mac on or off. The core
+    /// re-registers immediately, so turning it off withdraws the tools now.
+    func setExposeControlTools(_ enabled: Bool) async {
+        await run(.setExposeControlTools(enabled))
+    }
+
     func setBackendEnabled(_ name: String, enabled: Bool) async {
         await run(.setBackendEnabled(name, enabled: enabled))
     }

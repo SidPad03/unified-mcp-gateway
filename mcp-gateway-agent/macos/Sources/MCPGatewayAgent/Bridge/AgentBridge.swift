@@ -226,6 +226,10 @@ struct CommandRequest: Encodable, Sendable {
     static func testBackend(_ backend: BackendConfig) -> Self {
         CommandRequest(cmd: "test_backend", backend: backend)
     }
+
+    static func setExposeControlTools(_ enabled: Bool) -> Self {
+        CommandRequest(cmd: "set_expose_control_tools", enabled: enabled)
+    }
 }
 
 // ── JSON ────────────────────────────────────────────────────────────────

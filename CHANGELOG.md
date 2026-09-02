@@ -4,6 +4,111 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-09-02
+
+### Added
+
+- **The gateway can be configured through its own tools.** A `gateway_*`
+  namespace sits alongside everything the gateway routes: register, update,
+  remove, probe, start, stop and restart backends; write, reprioritise and
+  delete RBAC policy; reclassify a tool; tail a backend's stderr; search the
+  audit trail; read a health snapshot. Seventeen tools, so an assistant that
+  finds a backend unhealthy can read its logs, fix its configuration and restart
+  it without anyone opening the dashboard.
+
+  They are not a side door. Each one carries a risk category from the same
+  five-level ladder every other tool is classified on — writing policy is
+  `admin`, deleting one is `destructive` — so a rule you already have ("deny
+  destructive for the ci role") governs them with no special case. Everything
+  that writes additionally requires the `owner` role, checked as the REST API
+  checks it, and every call is recorded in the audit trail under the backend
+  name `gateway`. A tool the caller cannot reach is not advertised in
+  `tools/list`.
+
+- **A Mac running the agent can be configured the same way.** A smaller mirror,
+  `agent_*`, scoped to one machine: list, install, remove, start, stop, restart
+  and reconfigure its MCP servers, and tail their logs. Installing runs the
+  server and asks for its tool list before adopting it, so a mistyped command
+  fails the call instead of leaving a broken row behind. Environment *values*
+  still never leave the machine — only key names, and which of them are masked.
+
+  Nothing that changes the tunnel itself is exposed: a call that repointed
+  `gateway_url` would arrive over the connection it was about to sever. It is on
+  by default, because "install and expose the Obsidian MCP server" is most of
+  the reason to have an agent, and it is a real grant — so
+  `agent.expose_control_tools`, and **Settings → General → Remote control**, are
+  the last word for whoever owns the Mac. See
+  [docs/self-configuration.md](docs/self-configuration.md).
+
+- **A stdio backend's stderr is captured and readable.** The gateway used to let
+  child processes write to its own stderr, where the output was interleaved with
+  every other backend's and lost on restart. Each one now has a 500-line ring,
+  redacted on the way in, that outlives the process — because "why did it die"
+  is a question you only ask after it died. `gateway_get_mcp_server_logs` reads
+  it, along with the backend's recent failures from the audit trail.
+
+- **The Metrics page has 24h / 7d / 30d, like the Tools page and the usage
+  graph.** Every figure on it — throughput, latency percentiles, error rate, top
+  tools, calls by risk, the volume chart — follows the selected window, and the
+  choice is remembered. A month-long window buckets its chart by day rather than
+  drawing 720 hourly points into 190 pixels.
+
+### Changed
+
+- **Risk categories are five colours, not two and three greys.** `read`, `write`
+  and `execute` were drawn in three shades of neutral ink, which read as
+  "unimportant" rather than as three different things. The ladder is now one
+  cool-to-warm sweep — azure, violet, orchid, then the amber and red `admin` and
+  `destructive` already carried — in the dashboard, the macOS app, the charts
+  and the usage graph alike. A risk category is a rung on a ladder rather than a
+  state, so it sits outside the four tones and is the one documented exception
+  to them.
+
+- **The backend rows say they open.** A chevron sits before each backend's name
+  on the dashboard's Backends page, pointing right when the row is shut and down
+  when it is open — the same affordance, in the same position, as the macOS
+  app's list. The row also carries `aria-expanded`.
+
+- **An agent backend can no longer be "edited" from the dashboard.** There was
+  never anything behind it: the Mac running the agent owns its command,
+  environment and tool list, and re-sends all of it on every connection, so a
+  save from this side was reverted without a word at the next reconnect. The
+  Edit button is gone for agent backends, they are left out of the JSON editor
+  with a line saying where they went, and the server refuses the write.
+
+- **`GET /api/v1/metrics/summary` takes `?range=24h|7d|30d`,** and three fields
+  were renamed with it: `calls_last_24h` → `calls_in_range`, `top_tools_24h` →
+  `top_tools`, and `hourly_volume` → `volume` (its `hour` field is now
+  `bucket`). The default window is unchanged, so the values a caller was getting
+  are the values it still gets — only the names moved, because the old ones
+  would have been wrong for any range but the first. The response also carries
+  `range` and `volume_bucket`.
+
+- **The agent's control tools are classified by name, not by keyword.**
+  `agent_install_mcp_server` matches no keyword in the classifier and would have
+  been filed `unclassified` — a tool that runs an arbitrary command on somebody's
+  Mac, sitting outside every category-scoped policy. The names are a fixed,
+  known set, so they are stated.
+
+### Fixed
+
+- **Streamable-HTTP backends that require a session are discovered correctly**
+  ([#10](https://github.com/SidPad03/unified-mcp-gateway/issues/10)). The
+  gateway sent `initialize`, `notifications/initialized` and `tools/list` as
+  three independent POSTs and never read the `Mcp-Session-Id` the first one
+  handed back. A stateful server had no way to know the follow-ups belonged to
+  the session it had just opened, so it correctly answered `tools/list` with
+  nothing and the backend registered zero tools despite a clean handshake. The
+  session is now read from the initialize response and carried on everything
+  that follows.
+
+  `tools/call` learned the same thing, without paying for it on the common path:
+  it still sends the call straight out, and only runs a handshake and retries
+  when the server answers `400` or `404` — the two statuses the spec gives a
+  session meaning. The SSE transport was never affected; it carries its session
+  in the endpoint URL the server announces, which the gateway has always posted
+  to.
+
 ## [1.1.0] - 2026-08-12
 
 ### Added

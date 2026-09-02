@@ -62,6 +62,44 @@ fn effective_risk(risk_category: Option<&str>) -> &str {
     risk_category.unwrap_or(DEFAULT_RISK)
 }
 
+/// Where a `tools/call` is headed.
+///
+/// Both arms take the same road — policy, audit, metrics — and differ only in
+/// who actually runs the call. Keeping that road single is the point: a
+/// `gateway_*` call that skipped the audit trail would be the one kind of call
+/// worth hiding.
+enum Target {
+    Backend {
+        original_name: String,
+        risk_category: Option<String>,
+        backend_id: Uuid,
+        backend_name: String,
+        transport: String,
+    },
+    Gateway {
+        risk: &'static str,
+    },
+}
+
+impl Target {
+    fn risk(&self) -> &str {
+        match self {
+            Target::Backend { risk_category, .. } => effective_risk(risk_category.as_deref()),
+            Target::Gateway { risk } => risk,
+        }
+    }
+
+    /// What the audit trail files the call under. The gateway's own tools are
+    /// filed under `gateway`, which is not a name a backend can take — the
+    /// `backends` table has a unique name and nothing registers itself there.
+    fn backend_name(&self) -> &str {
+        match self {
+            Target::Backend { backend_name, .. } => backend_name,
+            Target::Gateway { .. } => "gateway",
+        }
+    }
+}
+
 async fn handle_mcp(
     State(state): State<AppState>,
     claims: Claims,
@@ -182,12 +220,44 @@ async fn handle_tools_list(
         tool_list.push(tool_obj);
     }
 
+    // The gateway's own tools, offered alongside everything it routes. They go
+    // through the same policy engine — they are classified on the same ladder —
+    // and additionally past the role gate, because advertising a tool that will
+    // always be refused only wastes the reader's context.
+    let mut gateway_count = 0usize;
+    for tool in crate::gateway_tools::catalog() {
+        if !crate::gateway_tools::may_call(&tool, claims) {
+            continue;
+        }
+        let (decision, _, _) = engine.evaluate(tool.name, tool.risk, claims.application.as_deref());
+        if decision != PolicyDecision::Allow {
+            denied_count += 1;
+            continue;
+        }
+        // A backend tool is always `<backend>__<tool>`, so this can only fire
+        // if someone adds a catalog entry that collides. Say so rather than
+        // silently serving two tools with one name.
+        if tools.iter().any(|(name, ..)| name == tool.name) {
+            tracing::warn!(
+                tool = tool.name,
+                "A registered tool shadows a gateway tool name; the gateway tool wins"
+            );
+        }
+        tool_list.push(serde_json::json!({
+            "name": tool.name,
+            "description": tool.description,
+            "inputSchema": tool.input_schema,
+        }));
+        gateway_count += 1;
+    }
+
     tracing::info!(
         user = %claims.username,
         roles = ?claims.roles,
         default_policy = %engine.default_decision(),
         total_tools = tools.len(),
         allowed = tool_list.len(),
+        gateway_tools = gateway_count,
         denied = denied_count,
         "tools/list served"
     );
@@ -243,36 +313,53 @@ async fn handle_tools_call(
         };
     }
 
-    // Resolve tool from registry
-    let tool_row: Option<(Uuid, String, String, Option<String>, Uuid, String, String)> = sqlx::query_as(
-        "SELECT t.tool_id, t.tool_name, t.original_name, t.risk_category, b.backend_id, b.name, b.transport
-         FROM tool_registry t
-         JOIN backends b ON t.backend_id = b.backend_id
-         WHERE t.tool_name = $1 AND t.is_enabled = TRUE AND b.is_enabled = TRUE"
-    )
-    .bind(tool_name)
-    .fetch_optional(&state.db)
-    .await
-    .unwrap_or(None);
+    // Where the call is going. The gateway's own tools are matched by exact
+    // name and checked first; a backend tool is always `<backend>__<tool>`, so
+    // the two namespaces cannot overlap.
+    let gateway_tool = crate::gateway_tools::find(tool_name);
 
-    let (_tool_id, _tool_name, original_name, risk_category, backend_id, backend_name, transport) =
-        match tool_row {
-            Some(r) => r,
-            None => {
-                return JsonRpcResponse {
-                    jsonrpc: "2.0".into(),
-                    id: req.id.clone(),
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code: -32602,
-                        message: format!("Tool not found: {}", tool_name),
-                        data: None,
-                    }),
-                };
+    let target = match &gateway_tool {
+        Some(def) => Target::Gateway { risk: def.risk },
+        None => {
+            let tool_row: Option<(Uuid, String, String, Option<String>, Uuid, String, String)> = sqlx::query_as(
+                "SELECT t.tool_id, t.tool_name, t.original_name, t.risk_category, b.backend_id, b.name, b.transport
+                 FROM tool_registry t
+                 JOIN backends b ON t.backend_id = b.backend_id
+                 WHERE t.tool_name = $1 AND t.is_enabled = TRUE AND b.is_enabled = TRUE"
+            )
+            .bind(tool_name)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
+
+            match tool_row {
+                Some((_, _, original_name, risk_category, backend_id, backend_name, transport)) => {
+                    Target::Backend {
+                        original_name,
+                        risk_category,
+                        backend_id,
+                        backend_name,
+                        transport,
+                    }
+                }
+                None => {
+                    return JsonRpcResponse {
+                        jsonrpc: "2.0".into(),
+                        id: req.id.clone(),
+                        result: None,
+                        error: Some(JsonRpcError {
+                            code: -32602,
+                            message: format!("Tool not found: {}", tool_name),
+                            data: None,
+                        }),
+                    };
+                }
             }
-        };
+        }
+    };
 
-    let risk = effective_risk(risk_category.as_deref());
+    let risk = target.risk();
+    let backend_name = target.backend_name().to_string();
     let user_id: Option<Uuid> = claims.sub.parse().ok();
 
     // Load policies scoped to user's roles and evaluate
@@ -281,8 +368,21 @@ async fn handle_tools_call(
         Err(_) => PolicyEngine::new(vec![], PolicyDecision::Deny),
     };
 
-    let (decision, policy_id, reason) =
+    let (mut decision, policy_id, mut reason) =
         engine.evaluate(tool_name, risk, claims.application.as_deref());
+
+    // The role gate on the gateway's own tools sits on top of policy, and is
+    // recorded as a denial rather than a failed call: refusing to configure the
+    // gateway is a policy outcome, and belongs in the audit trail as one.
+    if let Some(def) = &gateway_tool {
+        if !crate::gateway_tools::may_call(def, claims) {
+            decision = PolicyDecision::Deny;
+            reason = Some(format!(
+                "'{}' configures the gateway and requires the owner role",
+                def.name
+            ));
+        }
+    }
     let decision_str = decision.to_string();
 
     // Record metrics
@@ -337,80 +437,92 @@ async fn handle_tools_call(
         };
     }
 
-    // Forward to backend — returns the raw MCP result object (preserving isError, content, etc.)
-    let result = match transport.as_str() {
-        "streamable-http" => {
-            let config_row: Option<(serde_json::Value,)> =
-                sqlx::query_as("SELECT config FROM backends WHERE backend_id = $1")
-                    .bind(backend_id)
-                    .fetch_optional(&state.db)
-                    .await
-                    .unwrap_or(None);
-
-            match config_row {
-                Some((config,)) => {
-                    crate::backends::BackendManager::call_http_tool(
-                        &config,
-                        &original_name,
-                        &arguments,
-                    )
-                    .await
-                }
-                None => Err("Backend config not found".into()),
-            }
+    // Run the call. A gateway tool runs here, in-process; everything else is
+    // forwarded and comes back as the raw MCP result object (preserving
+    // isError, content, and so on).
+    let result = match &target {
+        Target::Gateway { .. } => {
+            crate::gateway_tools::call(state, claims, tool_name, &arguments).await
         }
-        "sse" => {
-            let config_row: Option<(serde_json::Value,)> =
-                sqlx::query_as("SELECT config FROM backends WHERE backend_id = $1")
-                    .bind(backend_id)
-                    .fetch_optional(&state.db)
-                    .await
-                    .unwrap_or(None);
-
-            match config_row {
-                Some((config,)) => {
-                    crate::backends::BackendManager::call_sse_tool(
-                        &config,
-                        &original_name,
-                        &arguments,
-                    )
-                    .await
-                }
-                None => Err("Backend config not found".into()),
-            }
-        }
-        "stdio" => {
-            state
-                .backend_manager
-                .call_tool(&backend_id, &original_name, &arguments)
-                .await
-        }
-        "agent" => {
-            let config_row: Option<(serde_json::Value,)> =
-                sqlx::query_as("SELECT config FROM backends WHERE backend_id = $1")
-                    .bind(backend_id)
-                    .fetch_optional(&state.db)
-                    .await
-                    .unwrap_or(None);
-
-            match config_row {
-                Some((config,)) => {
-                    let agent_id = config
-                        .get("agent_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(&backend_name);
-                    state
-                        .agent_registry
-                        .call_tool(agent_id, &original_name, &arguments)
+        Target::Backend {
+            original_name,
+            backend_id,
+            transport,
+            ..
+        } => match transport.as_str() {
+            "streamable-http" => {
+                let config_row: Option<(serde_json::Value,)> =
+                    sqlx::query_as("SELECT config FROM backends WHERE backend_id = $1")
+                        .bind(*backend_id)
+                        .fetch_optional(&state.db)
                         .await
+                        .unwrap_or(None);
+
+                match config_row {
+                    Some((config,)) => {
+                        crate::backends::BackendManager::call_http_tool(
+                            &config,
+                            original_name,
+                            &arguments,
+                        )
+                        .await
+                    }
+                    None => Err("Backend config not found".into()),
                 }
-                None => Err("Backend config not found".into()),
             }
-        }
-        _ => Err(format!(
-            "Backend '{}' uses unsupported transport: {}",
-            backend_name, transport
-        )),
+            "sse" => {
+                let config_row: Option<(serde_json::Value,)> =
+                    sqlx::query_as("SELECT config FROM backends WHERE backend_id = $1")
+                        .bind(*backend_id)
+                        .fetch_optional(&state.db)
+                        .await
+                        .unwrap_or(None);
+
+                match config_row {
+                    Some((config,)) => {
+                        crate::backends::BackendManager::call_sse_tool(
+                            &config,
+                            original_name,
+                            &arguments,
+                        )
+                        .await
+                    }
+                    None => Err("Backend config not found".into()),
+                }
+            }
+            "stdio" => {
+                state
+                    .backend_manager
+                    .call_tool(backend_id, original_name, &arguments)
+                    .await
+            }
+            "agent" => {
+                let config_row: Option<(serde_json::Value,)> =
+                    sqlx::query_as("SELECT config FROM backends WHERE backend_id = $1")
+                        .bind(*backend_id)
+                        .fetch_optional(&state.db)
+                        .await
+                        .unwrap_or(None);
+
+                match config_row {
+                    Some((config,)) => {
+                        let agent_id = config
+                            .get("agent_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(&backend_name);
+                        state
+                            .agent_registry
+                            .call_tool(agent_id, original_name, &arguments)
+                            .await
+                    }
+                    None => Err("Backend config not found".into()),
+                }
+            }
+            _ => Err(format!(
+                "Backend '{}' uses unsupported transport: {}",
+                backend_name, transport
+            )),
+        },
     };
 
     let duration = start.elapsed();

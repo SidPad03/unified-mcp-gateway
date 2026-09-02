@@ -242,9 +242,24 @@ Keys are `mcpgw_`-prefixed. Store them at creation time.
 
 ### `GET /api/v1/metrics/summary`
 
-Dashboard metrics: call totals, 24h volume, backend and tool counts,
-`avg_latency_ms`, `error_rate`, `latency_percentiles` (p50/p95/p99),
-`top_tools_24h`, `backend_health`, `calls_by_risk`, and `hourly_volume`.
+Dashboard metrics: `calls_in_range`, backend and tool counts, `avg_latency_ms`,
+`error_rate`, `latency_percentiles` (p50/p95/p99), `top_tools`,
+`backend_health`, `calls_by_risk`, and `volume`. `total_tool_calls` counts every
+row in the audit trail at any age and is the one figure the range does not
+touch.
+
+| Query | Values | Default |
+|-------|--------|---------|
+| `range` | `24h`, `7d`, `30d` | `24h` |
+
+The window is echoed back as `range`, and `volume_bucket` (`hour` or `day`) says
+how wide one point of `volume` is — thirty days of hourly points is 720 of them.
+
+> **Changed in 1.2.0.** `calls_last_24h` → `calls_in_range`, `top_tools_24h` →
+> `top_tools`, and `hourly_volume` → `volume` with its `hour` field renamed
+> `bucket`. The default window is unchanged, so the values a caller was getting
+> are the values it still gets — only the names moved, because the old ones
+> would have been wrong for any range but the first.
 
 ### `GET /metrics`
 
@@ -351,6 +366,13 @@ API key.
   }
 }
 ```
+
+Alongside every tool the gateway aggregates, `tools/list` offers the gateway's
+own `gateway_*` namespace — registering backends, writing policy, restarting
+servers, reading logs and searching the audit trail — and each connected agent's
+`agent_*` mirror for the Mac it runs on. They are governed by the same policy
+engine and recorded in the same audit trail as anything else. See
+[Self-Configuration Tools](self-configuration.md).
 
 ### `GET /agent/ws` (WebSocket)
 

@@ -8,6 +8,8 @@ and other MCP clients) and your MCP tool servers, providing:
 - **Security** — authentication, role-based access control, and policy enforcement
 - **Visibility** — a full audit trail of every tool call, with metrics and dashboards
 - **Remote access** — connect your Mac's MCP servers via the Gateway Agent app
+- **Self-configuration** — an agent can register backends, write policy and restart
+  servers through the same MCP endpoint it uses them from
 
 ## Contents
 
@@ -18,6 +20,7 @@ and other MCP clients) and your MCP tool servers, providing:
 | [Configuration Reference](configuration.md) | Environment variables, backend transports, and the agent config file |
 | [Authentication & Authorization](authentication.md) | JWTs, API keys, roles, and the policy engine |
 | [API Reference](api-reference.md) | Every REST endpoint under `/api/v1`, plus the MCP and WebSocket endpoints |
+| [Self-Configuration Tools](self-configuration.md) | The `gateway_*` and `agent_*` namespaces: configuring the gateway and its agents through MCP |
 | [MCP Gateway Agent](agent.md) | Installing and using the macOS agent app |
 | [Agent Architecture](agent-architecture.md) | The agent↔server WebSocket protocol, supervision, and connection lifecycle |
 | [Agent Desktop App](agent-desktop-app.md) | The agent app's design, the defects it fixes, and the decisions behind it |

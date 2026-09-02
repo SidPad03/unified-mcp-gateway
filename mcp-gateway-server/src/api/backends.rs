@@ -57,7 +57,7 @@ const MASKED: &str = "__mcpgw_masked__";
 /// Strip secret-bearing fields (env vars, auth headers) from a backend config
 /// so they aren't exposed to non-admin callers. Admins keep the full config
 /// because they manage backends; everyone else only needs names/transport.
-fn redact_backend_config(mut config: serde_json::Value) -> serde_json::Value {
+pub(crate) fn redact_backend_config(mut config: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = config.as_object_mut() {
         obj.remove("env");
         obj.remove("headers");
@@ -70,7 +70,7 @@ fn redact_backend_config(mut config: serde_json::Value) -> serde_json::Value {
 /// This runs for admins too. "Masked" would mean very little if the person who
 /// set the flag could read the value back on the next page load, so the only way
 /// to a masked value is to clear its flag in the editor and save.
-fn mask_secret_values(mut config: serde_json::Value) -> serde_json::Value {
+pub(crate) fn mask_secret_values(mut config: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = config.as_object_mut() {
         mask_group(obj, "env", "masked_env");
         mask_group(obj, "headers", "masked_headers");
@@ -113,7 +113,7 @@ fn mask_group(
 /// `current` is the configuration already in the database. A placeholder with
 /// nothing behind it — a new backend, or a key that did not exist before —
 /// collapses to an empty string rather than being stored literally.
-fn restore_masked_values(
+pub(crate) fn restore_masked_values(
     mut incoming: serde_json::Value,
     current: &serde_json::Value,
 ) -> serde_json::Value {
@@ -171,6 +171,88 @@ fn tidy_masks(
     } else {
         config.insert(masked_key.into(), serde_json::json!(kept));
     }
+}
+
+/// Bring a backend up and register whatever it advertises.
+///
+/// `Ok(None)` means there was nothing here to start: an `agent` backend runs on
+/// somebody's Mac and registers itself when it dials in, so its health is not
+/// this side's to set. `Ok(Some(n))` is a successful start with `n` tools
+/// discovered.
+///
+/// Both the REST layer and the `gateway_*` tool namespace go through here, and
+/// that is the point — an agent starting a backend has to land in exactly the
+/// state the dashboard would have produced, health row and all.
+pub(crate) async fn start_and_register(
+    state: &AppState,
+    backend_id: Uuid,
+    name: &str,
+    transport: &str,
+    config: &serde_json::Value,
+) -> Result<Option<usize>, String> {
+    let discovered = match transport {
+        "stdio" => {
+            state
+                .backend_manager
+                .spawn_backend(backend_id, name, config)
+                .await
+        }
+        "streamable-http" => {
+            crate::backends::BackendManager::discover_http_tools(name, config).await
+        }
+        "sse" => crate::backends::BackendManager::discover_sse_tools(name, config).await,
+        "agent" => return Ok(None),
+        other => Err(format!("Unsupported transport: {other}")),
+    };
+
+    match discovered {
+        Ok(tools) => {
+            let count = tools.len();
+            register_discovered_tools(&state.db, backend_id, name, &tools).await;
+            let _ = sqlx::query(
+                "UPDATE backends SET health_status = 'healthy', last_health_check = NOW() WHERE backend_id = $1",
+            )
+            .bind(backend_id)
+            .execute(&state.db)
+            .await;
+            tracing::info!(backend = %name, transport = %transport, tools = count, "Backend started");
+            Ok(Some(count))
+        }
+        Err(e) => {
+            let _ = sqlx::query(
+                "UPDATE backends SET health_status = 'unhealthy', last_health_check = NOW() WHERE backend_id = $1",
+            )
+            .bind(backend_id)
+            .execute(&state.db)
+            .await;
+            // Kept on the manager as well as in the log, so
+            // `gateway_get_mcp_server_status` can say what went wrong rather
+            // than only that something did.
+            state.backend_manager.note_error(backend_id, &e).await;
+            tracing::error!(backend = %name, transport = %transport, error = %e, "Failed to start backend");
+            Err(e)
+        }
+    }
+}
+
+/// Take a backend down: stop its process, withdraw its tools, mark it idle.
+///
+/// The tools are disabled rather than deleted, so re-enabling the backend does
+/// not lose a hand-set risk classification.
+pub(crate) async fn stop_and_withdraw(state: &AppState, backend_id: Uuid, transport: &str) {
+    if transport == "stdio" {
+        state.backend_manager.stop_backend(&backend_id).await;
+    }
+    let _ = sqlx::query("UPDATE tool_registry SET is_enabled = FALSE WHERE backend_id = $1")
+        .bind(backend_id)
+        .execute(&state.db)
+        .await;
+    let _ = sqlx::query(
+        "UPDATE backends SET health_status = 'idle', last_health_check = NOW() WHERE backend_id = $1",
+    )
+    .bind(backend_id)
+    .execute(&state.db)
+    .await;
 }
 
 async fn list_backends(
@@ -268,43 +350,21 @@ async fn create_backend(
         }
     })?;
 
-    let mut health_status = "idle".to_string();
-    let mut tool_count: i64 = 0;
-
-    let discover_result = match req.transport.as_str() {
-        "stdio" => Some(
-            state
-                .backend_manager
-                .spawn_backend(backend_id, &req.name, &req.config)
-                .await,
-        ),
-        "streamable-http" => {
-            Some(crate::backends::BackendManager::discover_http_tools(&req.name, &req.config).await)
-        }
-        "sse" => {
-            Some(crate::backends::BackendManager::discover_sse_tools(&req.name, &req.config).await)
-        }
-        _ => None,
+    let (health_status, tool_count) = match start_and_register(
+        &state,
+        backend_id,
+        &req.name,
+        &req.transport,
+        &req.config,
+    )
+    .await
+    {
+        // An agent backend is registered by the Mac that runs it, so a row
+        // created here just waits, idle, for that machine to dial in.
+        Ok(None) => ("idle".to_string(), 0i64),
+        Ok(Some(count)) => ("healthy".to_string(), count as i64),
+        Err(_) => ("unhealthy".to_string(), 0i64),
     };
-
-    if let Some(result) = discover_result {
-        match result {
-            Ok(tools) => {
-                tool_count = tools.len() as i64;
-                register_discovered_tools(&state.db, backend_id, &req.name, &tools).await;
-                let _ = sqlx::query("UPDATE backends SET health_status = 'healthy', last_health_check = NOW() WHERE backend_id = $1")
-                    .bind(backend_id).execute(&state.db).await;
-                health_status = "healthy".into();
-                tracing::info!(backend = %req.name, transport = %req.transport, tools = tools.len(), "Backend created and started");
-            }
-            Err(e) => {
-                let _ = sqlx::query("UPDATE backends SET health_status = 'unhealthy', last_health_check = NOW() WHERE backend_id = $1")
-                    .bind(backend_id).execute(&state.db).await;
-                health_status = "unhealthy".into();
-                tracing::error!(backend = %req.name, error = %e, "Backend created but failed to start");
-            }
-        }
-    }
 
     Ok(Json(BackendResponse {
         backend_id: backend_id.to_string(),
@@ -347,6 +407,19 @@ async fn update_backend(
         None => return Err(AppError::NotFound("Backend not found".into())),
     };
 
+    // An agent backend's configuration is not ours to write. The Mac running
+    // the agent owns its command, environment and tool list, and it re-sends
+    // all of it on every connection — `register_agent_in_db` upserts `config`
+    // wholesale — so a write accepted here would be reverted without a word the
+    // next time that agent reconnected. Refuse it rather than pretend.
+    // Enabling and disabling still belong to the gateway, so those pass.
+    if transport == "agent" && req.config.is_some() {
+        return Err(AppError::BadRequest(
+            "An agent backend is configured in the macOS app on the machine that runs it.              The gateway can enable or disable it, but its configuration is not editable here."
+                .into(),
+        ));
+    }
+
     // The dashboard never held the masked values, so it sends placeholders back
     // for the ones the user did not retype. Resolve them once, here, and every
     // path below — the write, the respawn, the tool discovery — sees the real
@@ -367,41 +440,9 @@ async fn update_backend(
 
         if is_enabled {
             let config = req.config.as_ref().unwrap_or(&current_config);
-            let result = match transport.as_str() {
-                "stdio" => Some(state.backend_manager.spawn_backend(id, &name, config).await),
-                "streamable-http" => {
-                    Some(crate::backends::BackendManager::discover_http_tools(&name, config).await)
-                }
-                "sse" => {
-                    Some(crate::backends::BackendManager::discover_sse_tools(&name, config).await)
-                }
-                _ => None,
-            };
-            if let Some(result) = result {
-                match result {
-                    Ok(tools) => {
-                        register_discovered_tools(&state.db, id, &name, &tools).await;
-                        let _ = sqlx::query("UPDATE backends SET health_status = 'healthy', last_health_check = NOW() WHERE backend_id = $1")
-                            .bind(id).execute(&state.db).await;
-                    }
-                    Err(e) => {
-                        let _ = sqlx::query("UPDATE backends SET health_status = 'unhealthy', last_health_check = NOW() WHERE backend_id = $1")
-                            .bind(id).execute(&state.db).await;
-                        tracing::error!(backend = %name, error = %e, "Failed to start backend");
-                    }
-                }
-            }
+            let _ = start_and_register(&state, id, &name, &transport, config).await;
         } else {
-            if transport == "stdio" {
-                state.backend_manager.stop_backend(&id).await;
-            }
-            let _ =
-                sqlx::query("UPDATE tool_registry SET is_enabled = FALSE WHERE backend_id = $1")
-                    .bind(id)
-                    .execute(&state.db)
-                    .await;
-            let _ = sqlx::query("UPDATE backends SET health_status = 'idle', last_health_check = NOW() WHERE backend_id = $1")
-                .bind(id).execute(&state.db).await;
+            stop_and_withdraw(&state, id, &transport).await;
         }
     }
     if let Some(config) = &req.config {
@@ -472,17 +513,9 @@ async fn sync_backend(
     }
 
     let result = match transport.as_str() {
-        "stdio" => {
-            state.backend_manager.stop_backend(&id).await;
-            state
-                .backend_manager
-                .spawn_backend(id, &name, &config)
-                .await
+        "stdio" | "streamable-http" | "sse" => {
+            start_and_register(&state, id, &name, &transport, &config).await
         }
-        "streamable-http" => {
-            crate::backends::BackendManager::discover_http_tools(&name, &config).await
-        }
-        "sse" => crate::backends::BackendManager::discover_sse_tools(&name, &config).await,
         "agent" => {
             // Extract agent_id from the backend config
             let agent_id = config
@@ -531,22 +564,11 @@ async fn sync_backend(
     };
 
     match result {
-        Ok(tools) => {
-            let tool_count = tools.len();
-            register_discovered_tools(&state.db, id, &name, &tools).await;
-            let _ = sqlx::query("UPDATE backends SET health_status = 'healthy', last_health_check = NOW() WHERE backend_id = $1")
-                .bind(id).execute(&state.db).await;
-
-            Ok(Json(serde_json::json!({
-                "status": "synced",
-                "tools_discovered": tool_count,
-            })))
-        }
-        Err(e) => {
-            let _ = sqlx::query("UPDATE backends SET health_status = 'unhealthy', last_health_check = NOW() WHERE backend_id = $1")
-                .bind(id).execute(&state.db).await;
-            Err(AppError::Internal(format!("Sync failed: {}", e)))
-        }
+        Ok(tools_discovered) => Ok(Json(serde_json::json!({
+            "status": "synced",
+            "tools_discovered": tools_discovered.unwrap_or(0),
+        }))),
+        Err(e) => Err(AppError::Internal(format!("Sync failed: {}", e))),
     }
 }
 

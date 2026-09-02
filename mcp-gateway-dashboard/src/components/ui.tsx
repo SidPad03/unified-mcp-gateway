@@ -26,7 +26,9 @@ import clsx from 'clsx';
       nothing else. There is no "primary blue", no decorative gradient, and the
       accent is never a button fill — a solid button is near-white on dark and
       near-black on light, which is what keeps the accent scarce enough to read
-      as "alive".
+      as "alive". The one documented exception is the risk ramp further down:
+      a risk category is a rung on a ladder rather than a state, so it gets its
+      own five-step sweep, used nowhere else.
    2. **Hierarchy is weight and colour before size.** A 13px value at 600 in
       primary ink separates from a 13px label at 500 in secondary ink more
       cleanly than two regular weights two points apart.
@@ -313,14 +315,24 @@ export function StatusLabel({
 }
 
 /* ── Risk ──────────────────────────────────────────────────────────────────
-   Risk classification is a *ramp*, not six unrelated colours.
+   Risk classification is an ordered *ramp* — and every rung on it has a hue.
 
-   The old build gave read/write/admin/destructive/execute/unclassified their own
-   hue — emerald, blue, orange, red, purple, grey — which made a page of tools
-   look like a paint chart and told you nothing about which ones to worry about.
-   Here emphasis climbs with severity: the safe categories sit quietly in
-   neutral ink at increasing weight, admin lifts to amber, destructive to red.
-   Unclassified is drawn as a dashed outline because it is a *gap*, not a level.
+   The rule stated above (tone is ok / warn / deny / neutral, and nothing else)
+   holds for anything that describes a *state*. A risk category is not a state:
+   a tool is not "in read" the way a backend is unhealthy. It is a rung on a
+   ladder, and an earlier build drew the bottom three rungs in three shades of
+   the same grey — which read as "unimportant", not as "read, write, execute",
+   and made the label a thing you had to squint at rather than recognise.
+
+   So the ladder is one sweep: azure, violet, orchid, amber, red. Cool at the
+   safe end, warming as the blast radius grows, with admin and destructive
+   keeping the same amber and red they carry everywhere else in the product.
+   Neighbouring rungs are far enough apart in hue that you never have to read
+   the word to know which one you are looking at. Unclassified stays a dashed
+   grey outline, because it is a *gap* rather than a level.
+
+   These five colours live only here and in `RISK_FILL` (charts). Nothing that
+   is not a risk category may use them.
    ───────────────────────────────────────────────────────────────────────── */
 
 export const RISK_LEVELS = [
@@ -333,9 +345,9 @@ export const RISK_LEVELS = [
 ] as const;
 
 const RISK_STYLE: Record<string, string> = {
-  read: 'text-ink-3 bg-neutral-wash border-line',
-  write: 'text-ink-2 bg-neutral-wash border-line',
-  execute: 'text-ink bg-neutral-wash border-line-strong',
+  read: 'text-read bg-read-wash border-read-edge',
+  write: 'text-write bg-write-wash border-write-edge',
+  execute: 'text-exec bg-exec-wash border-exec-edge',
   admin: 'text-warn bg-warn-wash border-warn-edge',
   destructive: 'text-deny bg-deny-wash border-deny-edge',
   unclassified: 'text-ink-4 bg-transparent border-line border-dashed',
@@ -411,6 +423,7 @@ export function RailRow({
   onClick,
   className,
   active,
+  expanded,
 }: {
   tone?: Tone;
   children: ReactNode;
@@ -418,12 +431,16 @@ export function RailRow({
   onClick?: () => void;
   className?: string;
   active?: boolean;
+  /** Set on a row that discloses a panel, so the state reaches a screen reader
+      as well as the chevron the row draws for everyone else. */
+  expanded?: boolean;
 }) {
   return (
     <div
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
+      aria-expanded={expanded === undefined ? undefined : expanded}
       onKeyDown={
         onClick
           ? e => {

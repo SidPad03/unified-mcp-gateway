@@ -40,16 +40,15 @@ export const axisProps = {
 };
 
 /**
- * Risk is *ordinal*, so it gets a sequential ramp rather than six unrelated
- * hues: the safe end climbs through neutral ink, and only the two levels that
- * warrant action take a colour. Encoding an ordered variable categorically is
- * what made the old donut unreadable — six equally-loud slices with no sense of
- * which end was bad.
+ * The same five colours the `RiskBadge` carries, in the same order — a legend
+ * and a bar have to agree or neither is readable. Risk is *ordinal*, so the
+ * ramp is a single cool-to-warm sweep rather than six unrelated hues: which end
+ * is the bad end is legible without reading a label.
  */
 export const RISK_FILL: Record<string, string> = {
-  read: 'var(--text-4)',
-  write: 'var(--text-3)',
-  execute: 'var(--text-2)',
+  read: 'var(--read)',
+  write: 'var(--write)',
+  execute: 'var(--exec)',
   admin: 'var(--warn)',
   destructive: 'var(--deny)',
   unclassified: 'var(--line-strong)',

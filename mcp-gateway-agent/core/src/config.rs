@@ -44,7 +44,7 @@ pub struct Config {
     pub backends: Vec<LocalBackendConfig>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct AgentConfig {
     #[serde(default)]
     pub agent_id: String,
@@ -62,6 +62,35 @@ pub struct AgentConfig {
     /// Skip TLS certificate verification — for self-signed gateways only.
     #[serde(default)]
     pub tls_skip_verify: bool,
+    /// Whether this Mac registers the `agent_*` control tools, which let
+    /// whoever is on the other end of the gateway install, start, stop and
+    /// reconfigure the MCP servers here.
+    ///
+    /// On by default, because "install and expose the Obsidian MCP server" is
+    /// most of the reason to have an agent at all. It is a real grant, though —
+    /// installing a server means running a command on this machine — so the
+    /// tools are classified `admin` and `destructive` on the gateway, where the
+    /// operator's RBAC decides who may reach them, and this switch is the last
+    /// word for whoever owns the Mac.
+    #[serde(default = "default_true")]
+    pub expose_control_tools: bool,
+}
+
+/// Hand-written rather than derived, because `expose_control_tools` defaults to
+/// **true** and a derived `Default` would make it false — so a first run and a
+/// config file that predates the field would disagree about whether this Mac
+/// can be configured from the gateway.
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            agent_id: String::new(),
+            gateway_url: String::new(),
+            api_key: None,
+            dashboard_url: None,
+            tls_skip_verify: false,
+            expose_control_tools: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -292,6 +321,7 @@ pub struct ConfigView {
     pub dashboard_url: Option<String>,
     pub api_base_url: Option<String>,
     pub tls_skip_verify: bool,
+    pub expose_control_tools: bool,
     pub has_api_key: bool,
     pub configured: bool,
     pub config_path: String,
@@ -305,6 +335,7 @@ impl ConfigView {
             dashboard_url: config.agent.dashboard_url.clone(),
             api_base_url: config.api_base_url(),
             tls_skip_verify: config.agent.tls_skip_verify,
+            expose_control_tools: config.agent.expose_control_tools,
             has_api_key,
             configured: config.is_configured() && has_api_key,
             config_path: path.display().to_string(),
@@ -421,9 +452,7 @@ mod tests {
             agent: AgentConfig {
                 agent_id: "sids-macbook-pro".into(),
                 gateway_url: "wss://gw.example.com/agent/ws".into(),
-                api_key: None,
-                dashboard_url: None,
-                tls_skip_verify: false,
+                ..Default::default()
             },
             backends: vec![LocalBackendConfig {
                 name: "obsidian".into(),
@@ -432,6 +461,18 @@ mod tests {
                 ..Default::default()
             }],
         }
+    }
+
+    /// A config file written before the field existed must keep the same
+    /// answer a fresh install gives, or upgrading the agent would quietly
+    /// change whether this Mac can be configured from the gateway.
+    #[test]
+    fn a_config_predating_the_control_switch_reads_as_on() {
+        let older: Config =
+            toml::from_str("[agent]\nagent_id = \"mac\"\ngateway_url = \"wss://gw/agent/ws\"\n")
+                .unwrap();
+        assert!(older.agent.expose_control_tools);
+        assert!(AgentConfig::default().expose_control_tools);
     }
 
     #[test]

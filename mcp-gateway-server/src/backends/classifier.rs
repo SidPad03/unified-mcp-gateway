@@ -84,7 +84,39 @@ const EXECUTE_KEYWORDS: &[&str] = &[
     "test_workflow",
 ];
 
+/// The self-configuration tools an agent registers, and what each one is.
+///
+/// Keyword matching gets these wrong in ways that matter: "install" is in no
+/// list at all, so `agent_install_mcp_server` — which runs a command of the
+/// caller's choosing on somebody's Mac — would land as `unclassified` and slip
+/// past every policy written against a category. These names are a fixed,
+/// known set, so they are stated rather than guessed.
+///
+/// The gateway's own `gateway_*` tools carry their category in
+/// `crate::gateway_tools`, and never reach the classifier: they are not
+/// discovered from anywhere. This table is for the agent's mirror of them,
+/// which arrives over the wire like any other discovered tool.
+const CONTROL_TOOL_RISK: &[(&str, &str)] = &[
+    ("agent_list_local_servers", "read"),
+    ("agent_get_local_server_status", "read"),
+    ("agent_get_local_server_logs", "read"),
+    ("agent_install_mcp_server", "admin"),
+    ("agent_update_config", "admin"),
+    ("agent_remove_mcp_server", "destructive"),
+    ("agent_stop_local_server", "destructive"),
+    ("agent_start_local_server", "execute"),
+    ("agent_restart_local_server", "execute"),
+];
+
 pub fn classify_tool(tool_name: &str, description: &str) -> &'static str {
+    // Stated beats guessed: checked before any keyword rule.
+    if let Some((_, risk)) = CONTROL_TOOL_RISK
+        .iter()
+        .find(|(name, _)| *name == tool_name)
+    {
+        return risk;
+    }
+
     let name_lower = tool_name.to_lowercase();
     let desc_lower = description.to_lowercase();
 
@@ -188,6 +220,49 @@ mod tests {
             classify_tool("delete_org_action_secret", "Delete secret"),
             "admin"
         );
+    }
+
+    /// The agent's control tools are classified from the table, not from
+    /// keywords. Left to the keyword rules, `agent_install_mcp_server` matches
+    /// nothing and comes out `unclassified` — a tool that runs an arbitrary
+    /// command on a user's Mac, sitting outside every category-scoped policy.
+    #[test]
+    fn agent_control_tools_are_classified_by_name() {
+        assert_eq!(
+            classify_tool("agent_install_mcp_server", "Add an MCP server to this Mac"),
+            "admin"
+        );
+        assert_eq!(
+            classify_tool("agent_update_config", "Change a server"),
+            "admin"
+        );
+        assert_eq!(
+            classify_tool("agent_remove_mcp_server", "Remove a server"),
+            "destructive"
+        );
+        assert_eq!(
+            classify_tool("agent_stop_local_server", "Stop a server"),
+            "destructive"
+        );
+        assert_eq!(
+            classify_tool("agent_start_local_server", "Start a server"),
+            "execute"
+        );
+        assert_eq!(
+            classify_tool("agent_list_local_servers", "List the servers"),
+            "read"
+        );
+    }
+
+    /// The table is an exception, not a prefix rule: a backend that happens to
+    /// ship a tool starting with `agent_` is classified like anything else.
+    #[test]
+    fn the_table_matches_whole_names_only() {
+        assert_eq!(
+            classify_tool("agent_install_mcp_server_v2", "Something else entirely"),
+            "unclassified"
+        );
+        assert_eq!(classify_tool("get_agent_status", "Read the status"), "read");
     }
 
     #[test]

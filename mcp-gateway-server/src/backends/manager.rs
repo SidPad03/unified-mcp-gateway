@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
+
+use crate::audit::redactor::Redactor;
 
 struct StdioProcess {
     child: Child,
@@ -16,9 +18,75 @@ pub struct RunningBackend {
     pub name: String,
 }
 
+/// Roughly a screen-hour of a chatty backend, per backend. The agent's
+/// `LogBuffer` keeps 5 000; a gateway can be hosting a dozen of these at once,
+/// so the per-process share is smaller.
+const MAX_LOG_LINES: usize = 500;
+
+/// One line a backend process wrote to stderr.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProcessLogLine {
+    /// RFC 3339, UTC. The reader renders it in their own timezone.
+    pub ts: String,
+    pub text: String,
+}
+
+/// What is known about one stdio backend's process, kept whether or not it is
+/// currently up.
+///
+/// It outlives the process deliberately: "why did it die" is a question you
+/// only ever ask *after* it died, and a record that vanished with the child
+/// left `gateway_get_mcp_server_logs` with nothing to say at exactly the moment
+/// it was needed.
+#[derive(Debug, Default, Clone)]
+pub struct ProcessRecord {
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub stopped_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub pid: Option<u32>,
+    /// How many times this backend has been spawned in this process's lifetime,
+    /// minus the first. A number that climbs on its own is the tell for a
+    /// backend that starts and immediately dies.
+    pub starts: u32,
+    pub last_error: Option<String>,
+    pub log: Vec<ProcessLogLine>,
+    pub log_dropped: u64,
+}
+
+#[derive(Default)]
+struct LogRing {
+    lines: VecDeque<ProcessLogLine>,
+    dropped: u64,
+}
+
+#[derive(Default)]
+struct BackendTelemetry {
+    started_at: Option<chrono::DateTime<chrono::Utc>>,
+    stopped_at: Option<chrono::DateTime<chrono::Utc>>,
+    pid: Option<u32>,
+    starts: u32,
+    last_error: Option<String>,
+    log: Arc<Mutex<LogRing>>,
+}
+
 pub struct BackendManager {
     backends: RwLock<HashMap<Uuid, Arc<RunningBackend>>>,
+    /// Survives `stop_backend`, so the record of a process that has already
+    /// gone is still readable.
+    telemetry: RwLock<HashMap<Uuid, BackendTelemetry>>,
+    /// Backends write credentials to stderr more often than anyone would like,
+    /// and these lines are read back over MCP by an agent. Redact on the way
+    /// *in*: a line is written once and may be read many times.
+    redactor: Arc<Redactor>,
 }
+
+/// The header a streamable-http MCP server uses to hand out — and then demand
+/// back — a session.
+///
+/// The SSE transport has no equivalent: there, the server announces a POST
+/// endpoint over the stream (`event: endpoint`) and the session lives in that
+/// URL, which `SseConnection` already posts every subsequent message to. So
+/// this belongs to the streamable-http paths only.
+const MCP_SESSION_HEADER: &str = "Mcp-Session-Id";
 
 #[derive(Debug, Clone)]
 pub struct DiscoveredTool {
@@ -31,6 +99,8 @@ impl BackendManager {
     pub fn new() -> Self {
         Self {
             backends: RwLock::new(HashMap::new()),
+            telemetry: RwLock::new(HashMap::new()),
+            redactor: Arc::new(Redactor::new()),
         }
     }
 
@@ -76,15 +146,31 @@ impl BackendManager {
             .envs(&env_map)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
+            // Captured rather than inherited so `gateway_get_mcp_server_logs`
+            // has something to tail. A pipe nobody drains fills and wedges the
+            // child, so the reader task below is not optional.
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to spawn '{}': {}", command, e))?;
+        // A spawn failure is recorded before it is returned: a backend that
+        // never got a process is exactly the one whose status has to explain
+        // why, and the caller only stores "unhealthy".
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                let message = format!("Failed to spawn '{}': {}", command, e);
+                self.note_error(backend_id, &message).await;
+                return Err(message);
+            }
+        };
 
+        let pid = child.id();
         let child_stdin = child.stdin.take().ok_or("Failed to capture stdin")?;
         let child_stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+        let child_stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
+
+        let log = self.begin_run(backend_id, pid).await;
+        Self::drain_stderr(child_stderr, log, Arc::clone(&self.redactor));
 
         let proc = StdioProcess {
             child,
@@ -178,6 +264,83 @@ impl BackendManager {
             tracing::info!(backend = %running.name, "Stopping stdio backend");
             let _ = proc.child.kill().await;
         }
+        if let Some(entry) = self.telemetry.write().await.get_mut(backend_id) {
+            entry.stopped_at = Some(chrono::Utc::now());
+            entry.pid = None;
+        }
+    }
+
+    // ── Process telemetry ───────────────────────────────────────────────
+    //
+    // Everything `gateway_get_mcp_server_status` and
+    // `gateway_get_mcp_server_logs` report comes from here. It is kept beside
+    // the process map rather than inside it because the interesting questions —
+    // why did it fail, what did it print before it went — are asked about
+    // backends that are no longer in the process map at all.
+
+    /// Note a new run: bump the start count, clear the previous failure, and
+    /// hand back the ring its stderr should go into.
+    async fn begin_run(&self, backend_id: Uuid, pid: Option<u32>) -> Arc<Mutex<LogRing>> {
+        let mut telemetry = self.telemetry.write().await;
+        let entry = telemetry.entry(backend_id).or_default();
+        entry.started_at = Some(chrono::Utc::now());
+        entry.stopped_at = None;
+        entry.pid = pid;
+        entry.starts += 1;
+        entry.last_error = None;
+        Arc::clone(&entry.log)
+    }
+
+    /// Record why a backend is not working, for the status tool to report.
+    pub async fn note_error(&self, backend_id: Uuid, message: &str) {
+        let mut telemetry = self.telemetry.write().await;
+        let entry = telemetry.entry(backend_id).or_default();
+        entry.last_error = Some(message.to_string());
+    }
+
+    /// What is known about one backend's process — `None` if the gateway has
+    /// never tried to run it in this process's lifetime.
+    pub async fn record(&self, backend_id: &Uuid, lines: usize) -> Option<ProcessRecord> {
+        let telemetry = self.telemetry.read().await;
+        let entry = telemetry.get(backend_id)?;
+        let ring = entry.log.lock().await;
+        let skip = ring.lines.len().saturating_sub(lines);
+        Some(ProcessRecord {
+            started_at: entry.started_at,
+            stopped_at: entry.stopped_at,
+            pid: entry.pid,
+            starts: entry.starts,
+            last_error: entry.last_error.clone(),
+            log: ring.lines.iter().skip(skip).cloned().collect(),
+            log_dropped: ring.dropped,
+        })
+    }
+
+    /// Pump a child's stderr into its ring until the pipe closes.
+    ///
+    /// This task is what makes `Stdio::piped()` safe: an undrained pipe fills
+    /// at 64 KiB and blocks the child mid-write, which for a chatty MCP server
+    /// is a hang with no visible cause.
+    fn drain_stderr(
+        stderr: tokio::process::ChildStderr,
+        ring: Arc<Mutex<LogRing>>,
+        redactor: Arc<Redactor>,
+    ) {
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let line = ProcessLogLine {
+                    ts: chrono::Utc::now().to_rfc3339(),
+                    text: redactor.redact(&line),
+                };
+                let mut ring = ring.lock().await;
+                ring.lines.push_back(line);
+                while ring.lines.len() > MAX_LOG_LINES {
+                    ring.lines.pop_front();
+                    ring.dropped += 1;
+                }
+            }
+        });
     }
 
     pub async fn call_tool(
@@ -211,6 +374,32 @@ impl BackendManager {
         Ok(result)
     }
 
+    /// Ask a *running* stdio backend for its tool list and report how many it
+    /// has.
+    ///
+    /// This is what `gateway_test_backend_connectivity` uses instead of
+    /// re-running discovery: discovery spawns, and spawning kills and replaces
+    /// the process, which is a restart rather than a test. Asking the live
+    /// process is both cheaper and honest about what is actually up.
+    pub async fn probe(&self, backend_id: &Uuid) -> Result<usize, String> {
+        let process = {
+            let backends = self.backends.read().await;
+            backends
+                .get(backend_id)
+                .ok_or_else(|| "Backend process is not running".to_string())?
+                .process
+                .clone()
+        };
+
+        let result =
+            Self::jsonrpc_call(&process, "tools/list", Some(serde_json::json!({}))).await?;
+        Ok(result
+            .get("tools")
+            .and_then(|t| t.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0))
+    }
+
     pub async fn is_running(&self, backend_id: &Uuid) -> bool {
         self.backends.read().await.contains_key(backend_id)
     }
@@ -221,6 +410,11 @@ impl BackendManager {
             let mut proc = running.process.lock().await;
             tracing::info!(backend = %running.name, "Shutting down stdio backend");
             let _ = proc.child.kill().await;
+        }
+        let now = chrono::Utc::now();
+        for entry in self.telemetry.write().await.values_mut() {
+            entry.stopped_at = Some(now);
+            entry.pid = None;
         }
     }
 
@@ -265,6 +459,14 @@ impl BackendManager {
             return Err(format!("Initialize returned HTTP {}: {}", status, body));
         }
 
+        // A stateful server assigns the session here and expects it back on
+        // every request that belongs to it. Read it before the body, because
+        // reading the body consumes the response.
+        let session = Self::session_id(&init_resp);
+        if session.is_some() {
+            tracing::debug!(backend = name, "Backend assigned an MCP session");
+        }
+
         let init_json = Self::read_streamable_response(init_resp)
             .await
             .map_err(|e| format!("Failed to parse initialize response: {}", e))?;
@@ -276,8 +478,7 @@ impl BackendManager {
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
         });
-        let _ = client
-            .post(url)
+        let _ = Self::with_session(client.post(url), session.as_deref())
             .json(&notif_body)
             .timeout(std::time::Duration::from_secs(10))
             .send()
@@ -291,8 +492,7 @@ impl BackendManager {
             "params": {}
         });
 
-        let tools_resp = client
-            .post(url)
+        let tools_resp = Self::with_session(client.post(url), session.as_deref())
             .json(&tools_body)
             .timeout(std::time::Duration::from_secs(30))
             .send()
@@ -349,6 +549,14 @@ impl BackendManager {
     }
 
     /// Forward a tool call to a streamable-http MCP backend.
+    ///
+    /// Most streamable-http servers are stateless and answer a bare
+    /// `tools/call`, which is the fast path taken here: one request, no
+    /// handshake. A **stateful** one refuses it — the spec has such a server
+    /// answer `400 Bad Request` when `Mcp-Session-Id` is missing, and `404 Not
+    /// Found` when the session it names has expired — so those two statuses,
+    /// and only those two, buy a full `initialize` handshake and one retry
+    /// inside the session it opens.
     pub async fn call_http_tool(
         config: &serde_json::Value,
         tool_name: &str,
@@ -371,13 +579,29 @@ impl BackendManager {
             }
         });
 
-        let resp = client
-            .post(url)
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| format!("Backend request failed: {}", e))?;
+        let send = |session: Option<String>| {
+            let request = Self::with_session(client.post(url), session.as_deref())
+                .json(&body)
+                .timeout(std::time::Duration::from_secs(30));
+            async move {
+                request
+                    .send()
+                    .await
+                    .map_err(|e| format!("Backend request failed: {}", e))
+            }
+        };
+
+        let mut resp = send(None).await?;
+
+        if Self::needs_session(resp.status()) {
+            let session = Self::open_http_session(&client, url).await?;
+            tracing::info!(
+                url,
+                tool = tool_name,
+                "Backend requires an MCP session; retrying the call inside one"
+            );
+            resp = send(Some(session)).await?;
+        }
 
         let status = resp.status();
         if !status.is_success() {
@@ -396,6 +620,84 @@ impl BackendManager {
         } else {
             Ok(resp_json)
         }
+    }
+
+    /// The `Mcp-Session-Id` a streamable-http server assigned, if it assigned
+    /// one. Absent on a stateless server, which is the common case.
+    fn session_id(resp: &reqwest::Response) -> Option<String> {
+        resp.headers()
+            .get(MCP_SESSION_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Attach a session to a request, when there is one to attach.
+    fn with_session(
+        builder: reqwest::RequestBuilder,
+        session: Option<&str>,
+    ) -> reqwest::RequestBuilder {
+        match session {
+            Some(id) => builder.header(MCP_SESSION_HEADER, id),
+            None => builder,
+        }
+    }
+
+    /// Whether a status means "you are not in a session and I need you to be".
+    fn needs_session(status: reqwest::StatusCode) -> bool {
+        status == reqwest::StatusCode::BAD_REQUEST || status == reqwest::StatusCode::NOT_FOUND
+    }
+
+    /// Run `initialize` + `notifications/initialized` and return the session
+    /// the server opened.
+    ///
+    /// Errors when the server does not open one: reaching here means it already
+    /// refused a session-less request, so an initialize that assigns nothing
+    /// leaves no way to satisfy it, and saying so beats retrying into the same
+    /// refusal.
+    async fn open_http_session(client: &reqwest::Client, url: &str) -> Result<String, String> {
+        let init_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": { "name": "mcp-gateway", "version": "0.1.0" }
+            }
+        });
+
+        let resp = client
+            .post(url)
+            .json(&init_body)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| format!("HTTP initialize request failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Initialize returned HTTP {}: {}", status, body));
+        }
+
+        let session = Self::session_id(&resp).ok_or_else(|| {
+            format!(
+                "Backend rejected a request without a session but its initialize \
+                 response carried no {MCP_SESSION_HEADER} header"
+            )
+        })?;
+
+        let _ = Self::with_session(client.post(url), Some(&session))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+            }))
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await;
+
+        Ok(session)
     }
 
     /// Discover tools from an SSE MCP backend using the proper SSE protocol:
@@ -1055,5 +1357,59 @@ mod tests {
     #[test]
     fn sse_body_with_no_json_returns_none() {
         assert!(BackendManager::parse_sse_body(": keep-alive comment\n\n").is_none());
+    }
+
+    // ── Streamable-http sessions (issue #10) ────────────────────────────
+
+    fn header_of(builder: reqwest::RequestBuilder) -> Option<String> {
+        let request = builder.build().expect("request builds");
+        request
+            .headers()
+            .get(MCP_SESSION_HEADER)
+            .map(|v| v.to_str().unwrap().to_string())
+    }
+
+    /// The bug: `initialize` opened a session and the follow-up requests were
+    /// sent without it, so a session-strict backend treated `tools/list` as
+    /// un-initialized and answered with an empty tool list.
+    #[test]
+    fn a_session_travels_on_the_requests_that_follow_initialize() {
+        let client = reqwest::Client::new();
+        assert_eq!(
+            header_of(BackendManager::with_session(
+                client.post("http://backend.local/mcp"),
+                Some("sess-abc123"),
+            )),
+            Some("sess-abc123".to_string())
+        );
+    }
+
+    /// The common case is a stateless server, which assigns no session; the
+    /// header must not be invented for one.
+    #[test]
+    fn a_stateless_backend_gets_no_session_header() {
+        let client = reqwest::Client::new();
+        assert_eq!(
+            header_of(BackendManager::with_session(
+                client.post("http://backend.local/mcp"),
+                None
+            )),
+            None
+        );
+    }
+
+    /// Only the two statuses the spec gives a session meaning buy a retry. A
+    /// 500 is the backend's own failure and retrying it inside a session would
+    /// just double the load; a 200 obviously needs nothing.
+    #[test]
+    fn only_the_session_statuses_trigger_a_handshake() {
+        use reqwest::StatusCode;
+        assert!(BackendManager::needs_session(StatusCode::BAD_REQUEST));
+        assert!(BackendManager::needs_session(StatusCode::NOT_FOUND));
+        assert!(!BackendManager::needs_session(StatusCode::OK));
+        assert!(!BackendManager::needs_session(StatusCode::UNAUTHORIZED));
+        assert!(!BackendManager::needs_session(
+            StatusCode::INTERNAL_SERVER_ERROR
+        ));
     }
 }

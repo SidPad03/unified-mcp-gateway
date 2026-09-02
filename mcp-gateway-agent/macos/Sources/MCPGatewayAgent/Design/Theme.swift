@@ -52,6 +52,18 @@ enum Palette {
     static let warn = dynamic("mcpgw.warn", dark: 0xE5A2_44, light: 0xA267_0C)
     static let deny = dynamic("mcpgw.deny", dark: 0xF25F_6B, light: 0xC832_3F)
 
+    /// The three lower rungs of the risk ladder — `read`, `write`, `execute`.
+    ///
+    /// Deliberately outside `Tone`: a risk category is not a state (nothing is
+    /// ever "in read"), it is a rung on a ladder, and drawing the bottom three
+    /// rungs in three greys read as "unimportant" rather than as three
+    /// different things. With `warn` and `deny` above them the five make one
+    /// cool-to-warm sweep. Same values as the dashboard's `--read` /
+    /// `--write` / `--exec`; change both together.
+    static let read = dynamic("mcpgw.read", dark: 0x56B6_F0, light: 0x0A6F_A8)
+    static let write = dynamic("mcpgw.write", dark: 0x9D90_F5, light: 0x5B4B_C4)
+    static let exec = dynamic("mcpgw.exec", dark: 0xD979_E8, light: 0x9A3B_A6)
+
     // ── Helpers ─────────────────────────────────────────────────────────
 
     private static func dynamic(_ name: String, dark: UInt32, light: UInt32) -> Color {

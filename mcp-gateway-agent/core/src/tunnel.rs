@@ -314,7 +314,14 @@ async fn dispatch(
     tool: String,
     arguments: serde_json::Value,
 ) {
-    let backend = state.backends.route_of(&tool).await;
+    // A control tool belongs to the agent itself, so it never appears in the
+    // route table; check for it before asking which backend owns the name.
+    let control = crate::control::is_control_tool(&tool);
+    let backend = if control {
+        Some("agent".to_string())
+    } else {
+        state.backends.route_of(&tool).await
+    };
     state.calls.start(&request_id, &tool, backend.clone());
 
     tracing::info!(
@@ -330,7 +337,11 @@ async fn dispatch(
     let write_tx = write_tx.clone();
     tokio::spawn(async move {
         let started = std::time::Instant::now();
-        let result = state.backends.call_tool(&tool, &arguments).await;
+        let result = if control {
+            crate::control::call(&state, &tool, &arguments).await
+        } else {
+            state.backends.call_tool(&tool, &arguments).await
+        };
         let duration_ms = started.elapsed().as_millis() as u64;
 
         let frame = match &result {

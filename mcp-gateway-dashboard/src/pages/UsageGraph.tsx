@@ -83,10 +83,13 @@ const getAppMeta = (key: string) => {
 };
 
 // ── Risk category colors & labels ──────────────────────────────────
+// The same ramp the `RiskBadge` and the charts use — see `RISK_STYLE` in
+// components/ui.tsx for why every rung carries a hue. `external-api` is a
+// *backend* category rather than a tool one and stays neutral.
 const RISK_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
-  read:         { bg: 'var(--neutral-wash)', text: 'var(--text-4)', dot: 'var(--text-4)' },
-  write:        { bg: 'var(--neutral-wash)', text: 'var(--text-3)', dot: 'var(--text-3)' },
-  execute:      { bg: 'var(--neutral-wash)', text: 'var(--text-2)', dot: 'var(--text-2)' },
+  read:         { bg: 'var(--read-wash)', text: 'var(--read)', dot: 'var(--read)' },
+  write:        { bg: 'var(--write-wash)', text: 'var(--write)', dot: 'var(--write)' },
+  execute:      { bg: 'var(--exec-wash)', text: 'var(--exec)', dot: 'var(--exec)' },
   admin:        { bg: 'var(--warn-wash)', text: 'var(--warn)', dot: 'var(--warn)' },
   destructive:  { bg: 'var(--deny-wash)', text: 'var(--deny)', dot: 'var(--deny)' },
   'external-api': { bg: 'var(--neutral-wash)', text: 'var(--text-3)', dot: 'var(--text-3)' },

@@ -132,6 +132,7 @@ private struct GeneralPane: View {
 
     @State private var startAtLogin = LoginItem.isEnabled
     @State private var loginItemError: String?
+    @State private var exposeControlTools = true
 
     var body: some View {
         Form {
@@ -169,6 +170,25 @@ private struct GeneralPane: View {
                 .foregroundStyle(Palette.text3)
             }
 
+            Section("Remote control") {
+                Toggle("Let the gateway configure this Mac", isOn: $exposeControlTools)
+                    .onChange(of: exposeControlTools) { _, enabled in
+                        Task { await model.setExposeControlTools(enabled) }
+                    }
+                Text(
+                    exposeControlTools
+                        ? "An assistant connected to the gateway can install, start, stop and "
+                            + "reconfigure the MCP servers on this Mac — installing one means "
+                            + "running its command here. Who may do that is decided by the "
+                            + "gateway's policies; these tools are classified admin and "
+                            + "destructive, so a role denied those cannot reach them."
+                        : "The gateway can use the MCP servers on this Mac, but cannot change "
+                            + "them. Add and remove servers on the Backends page."
+                )
+                .font(.system(size: Typo.caption))
+                .foregroundStyle(Palette.text3)
+            }
+
             Section("Files") {
                 LabeledContent("Configuration") {
                     HStack(spacing: 8) {
@@ -184,6 +204,12 @@ private struct GeneralPane: View {
             }
         }
         .formStyle(.grouped)
+        // Seeded from the core rather than defaulted, and re-read whenever the
+        // snapshot changes, so the switch shows what is actually on disk.
+        .onAppear { exposeControlTools = model.config?.exposeControlTools ?? true }
+        .onChange(of: model.config?.exposeControlTools) { _, value in
+            if let value { exposeControlTools = value }
+        }
     }
 
     private func reveal() {
