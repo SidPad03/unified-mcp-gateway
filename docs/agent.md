@@ -59,6 +59,22 @@ command is caught immediately rather than becoming a mystery later.
 Backends can be added, edited, disabled and deleted while the agent is
 connected. The gateway is told about the change within about half a second.
 
+### Letting the gateway do it for you
+
+By default this Mac also registers a set of `agent_*` tools, so an assistant
+connected to the gateway can do all of the above itself — "install and expose the
+Obsidian MCP server" ends with a running server and its tools behind the gate,
+with no trip to this app.
+
+It is a real grant: installing a server means running its command on this
+machine. So the tools are classified `admin` and `destructive` on the gateway,
+where the operator's policies decide who may reach them, and
+**Settings → General → Remote control** is the last word for whoever owns the
+Mac. Turn it off and the gateway can still *use* this machine's servers, but
+cannot change them.
+
+See [Self-Configuration Tools](self-configuration.md) for the full list.
+
 ---
 
 ## The app
@@ -71,6 +87,9 @@ connected. The gateway is told about the change within about half a second.
 | **Logs** | The agent's own log and every backend's stderr, merged, filterable, exportable |
 | **Audit** | The gateway's audit trail for this machine, with 24-hour volume, error rate and latency |
 | **Usage** | Which applications call which tools through this Mac |
+
+Control-tool calls appear on **Activity** like any other traffic, filed against
+the backend `agent`.
 
 **Settings** is the standard ⌘, window, in the app menu and the menu-bar popover.
 

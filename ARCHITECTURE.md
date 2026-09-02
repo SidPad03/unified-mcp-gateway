@@ -17,12 +17,22 @@ clients and MCP tool servers. Three components + Postgres.
 - **mcp-gateway-dashboard** (`mcp-gateway-dashboard/`) — a pure client of `/api/v1`. Holds no authority; the server re-validates every request.
 - **mcp-gateway-agent** (`mcp-gateway-agent/`) — a macOS app that runs on a user's machine, dials **out** to `/agent/ws`, and bridges that machine's local MCP servers to the gateway. It is a Rust core (`core/`) with no UI or platform dependency, a C ABI over it (`ffi/`), and a SwiftUI app that links them (`macos/`); the split keeps the logic testable on the Linux CI runner. The wire protocol is defined in both this and the server crate; the guard against drift is the golden-JSON tests in `core/src/protocol.rs`, and extracting it into a shared crate remains a known follow-up.
 
+## The gateway's own tools
+
+Alongside everything it routes, the gateway offers a `gateway_*` namespace that
+configures the gateway itself, and each connected agent offers an `agent_*`
+mirror for its own machine. They are not a side channel: they go through the
+same policy engine, carry categories from the same risk ladder, and land in the
+same audit trail, with an additional `owner` check on everything that writes.
+The namespaces cannot collide with a backend's tools, which are always
+`<backend>__<tool>`. See [docs/self-configuration.md](docs/self-configuration.md).
+
 ## Auth & trust model (multi-user)
 
 - **Identity:** JWT (dashboard login) OR `mcpgw_`-prefixed API key. Both resolve to `Claims { sub, roles }`; the server re-checks `is_active`/roles against the DB every request.
 - **Roles:** `owner` (admin) vs non-owner. `require_admin` gates mutation + global-aggregate endpoints. Per-user data endpoints (audit, usage, api-keys, users) scope non-owners to their own `sub`.
 - **Trust boundaries:**
-  - *Untrusted:* AI clients, agent-connected machines, downstream MCP backends (their tool payloads, their responses). Backends are third-party code — treat their output and their env as hostile.
+  - *Untrusted:* AI clients, agent-connected machines, downstream MCP backends (their tool payloads, their responses). Backends are third-party code — treat their output and their env as hostile. A stdio backend's stderr is captured for `gateway_get_mcp_server_logs` and passes through the audit redactor on the way into its ring, because that output is read back over MCP.
   - *Trusted:* the server process, Postgres, the operator.
 
 ## Transport hardening notes

@@ -357,8 +357,9 @@ struct FlowModel: Equatable {
 
     private static func detail(for calls: Int, risk: String?) -> String {
         let count = "\(Format.count(calls)) \(calls == 1 ? "call" : "calls")"
-        // Only the two levels that warrant action take a colour, so only those
-        // two need the word that goes with it.
+        // A node's dot carries a `Tone`, which cannot express the risk ramp
+        // (see `RiskBadge`), so the two levels that warrant action say so in
+        // words here instead. The rest read as plain traffic.
         switch risk {
         case "destructive", "admin": return count + " · " + (risk ?? "")
         default: return count

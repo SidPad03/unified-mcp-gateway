@@ -135,6 +135,9 @@ struct AgentConfigView: Codable, Sendable {
     var dashboardUrl: String?
     var apiBaseUrl: String?
     var tlsSkipVerify: Bool
+    /// Whether this Mac registers the `agent_*` tools that let the gateway
+    /// install, start, stop and reconfigure the MCP servers here.
+    var exposeControlTools: Bool
     var hasApiKey: Bool
     var configured: Bool
     var configPath: String

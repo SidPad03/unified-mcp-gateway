@@ -21,6 +21,7 @@ mod audit;
 mod backends;
 mod db;
 mod errors;
+mod gateway_tools;
 mod metrics;
 mod policy;
 #[cfg(test)]

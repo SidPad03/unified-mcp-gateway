@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, Backend, ApiKey } from '@/lib/api';
-import { Plus, Trash2, Server, Wifi, Terminal, Globe, X, RefreshCw, Link, Copy, Check, RotateCcw, Pencil, Laptop, Boxes, Eye, EyeOff, Lock, LockOpen } from 'lucide-react';
+import { Plus, Trash2, Server, Wifi, Terminal, Globe, X, RefreshCw, Link, Copy, Check, RotateCcw, Pencil, Laptop, Boxes, Eye, EyeOff, Lock, LockOpen, ChevronRight } from 'lucide-react';
 import clsx from 'clsx';
 import { fmt } from '@/lib/format';
 import {
@@ -464,14 +464,21 @@ export default function BackendConfig({ isAdmin }: Props) {
     setSyncingAll(false);
   };
 
+  const agentBackendCount = backends.filter(b => b.transport === 'agent').length;
+
   const openJsonEditor = () => {
-    const json = backends.map(b => ({
-      name: b.name,
-      transport: b.transport,
-      config: b.config,
-      risk_category: b.risk_category,
-      is_enabled: b.is_enabled,
-    }));
+    // Agent backends are left out: the Mac that registered one owns its
+    // configuration and re-sends it on every connection, so anything written
+    // here would be silently reverted. The server rejects such a write anyway.
+    const json = backends
+      .filter(b => b.transport !== 'agent')
+      .map(b => ({
+        name: b.name,
+        transport: b.transport,
+        config: b.config,
+        risk_category: b.risk_category,
+        is_enabled: b.is_enabled,
+      }));
     setJsonContent(JSON.stringify(json, null, 2));
     setJsonError('');
     setShowJsonEditor(true);
@@ -490,6 +497,12 @@ export default function BackendConfig({ isAdmin }: Props) {
       for (const entry of parsed) {
         if (!entry.name || !entry.transport) {
           setJsonError('Each backend must have "name" and "transport" fields');
+          return;
+        }
+        if (entry.transport === 'agent') {
+          setJsonError(
+            `"${entry.name}" is an agent backend — it is configured on the Mac that runs the agent, not here.`
+          );
           return;
         }
         const existing = backends.find(b => b.name === entry.name);
@@ -815,12 +828,14 @@ export default function BackendConfig({ isAdmin }: Props) {
         <RailList>
           {backends.map(backend => {
             const isSelected = selectedBackend?.backend_id === backend.backend_id;
+            const isAgent = backend.transport === 'agent';
             const tone = healthTone(backend.health_status, backend.is_enabled);
             return (
               <div key={backend.backend_id}>
                 <RailRow
                   tone={tone}
                   active={isSelected}
+                  expanded={isSelected}
                   onClick={() => setSelectedBackend(isSelected ? null : backend)}
                   className={clsx(!backend.is_enabled && 'opacity-60')}
                   trailing={
@@ -829,9 +844,16 @@ export default function BackendConfig({ isAdmin }: Props) {
                         className="flex items-center gap-1"
                         onClick={e => e.stopPropagation()}
                       >
-                        <Button size="sm" variant="ghost" icon={Pencil} onClick={() => openEditModal(backend)}>
-                          Edit
-                        </Button>
+                        {/* An agent backend has no configuration to edit here:
+                            its command, environment and tool list are owned by
+                            the Mac running the agent, and the next registration
+                            frame overwrites anything typed on this side. The
+                            server refuses such a write too. */}
+                        {!isAgent && (
+                          <Button size="sm" variant="ghost" icon={Pencil} onClick={() => openEditModal(backend)}>
+                            Edit
+                          </Button>
+                        )}
                         {backend.is_enabled && (
                           <Button
                             size="sm"
@@ -866,6 +888,16 @@ export default function BackendConfig({ isAdmin }: Props) {
                   }
                 >
                   <div className="flex items-center gap-3 min-w-0 flex-wrap">
+                    {/* The row opens; say so. Same affordance, same position and
+                        same two states as the agent app's Backends list —
+                        pointing right when shut, down when open. */}
+                    <ChevronRight
+                      aria-hidden="true"
+                      className={clsx(
+                        'w-3 h-3 shrink-0 text-ink-4 transition-transform duration-150',
+                        isSelected && 'rotate-90'
+                      )}
+                    />
                     <Mono className="text-xs font-medium text-ink">{backend.name}</Mono>
                     {isAdmin && (
                       <StatusLabel tone={tone} pulsing={tone === 'ok'}>
@@ -1059,6 +1091,12 @@ export default function BackendConfig({ isAdmin }: Props) {
                   <span className="font-mono">{MASKED}</span>, and saving them unchanged keeps the
                   stored value.
                 </p>
+                {agentBackendCount > 0 && (
+                  <p className="text-xs text-ink-3 mt-0.5">
+                    {agentBackendCount} agent backend{agentBackendCount === 1 ? ' is' : 's are'} not
+                    listed: they are configured in the macOS app on the machine that runs them.
+                  </p>
+                )}
               </div>
               <button onClick={() => setShowJsonEditor(false)} className="text-ink-3 hover:text-ink-2">
                 <X className="w-5 h-5" />

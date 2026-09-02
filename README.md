@@ -271,6 +271,12 @@ Full documentation: [docs/agent.md](docs/agent.md). Design and rationale:
 - Automatic tool namespacing: `{backend}__{tool}` with collision resolution
 - Centralized tool registry with enable/disable per tool
 
+### Self-Configuration
+- A `gateway_*` tool namespace: register, probe, start, stop and restart backends; write and reorder RBAC policy; reclassify a tool; tail a backend's logs; search the audit trail
+- An `agent_*` mirror on each connected Mac: install, start, stop and reconfigure the MCP servers it runs
+- Classified, policy-governed and audited like every other tool — nothing here is a side door
+- See [Self-Configuration Tools](docs/self-configuration.md)
+
 ### Security & Access Control
 - **JWT + API Key** authentication (API keys use `mcpgw_` prefix, SHA-256 hashed)
 - **RBAC** — a built-in `owner` role plus any roles you create, each with a default allow/deny and its own attached policy rules
@@ -301,7 +307,7 @@ Full documentation: [docs/agent.md](docs/agent.md). Design and rationale:
 | Policies | Priority-ordered allow/deny rules, reordered by drag |
 | Usage | Which users and applications call which tools, as a graph |
 | Audit | Chronological event feed with drill-down details |
-| Metrics | Charts for call volume, latency, error rates, backend health |
+| Metrics | Charts for call volume, latency, error rates and backend health, over 24h, 7d or 30d |
 | Users | Users and roles, with per-user API keys |
 | Settings | Gateway URL, AI risk classification, version and update check |
 
@@ -395,6 +401,7 @@ Full documentation lives in [docs/](docs/):
 | [Configuration Reference](docs/configuration.md) | Environment variables, backend transports, agent config |
 | [Authentication & Authorization](docs/authentication.md) | JWTs, API keys, roles, policy engine |
 | [API Reference](docs/api-reference.md) | Every REST, MCP, and WebSocket endpoint |
+| [Self-Configuration Tools](docs/self-configuration.md) | The `gateway_*` and `agent_*` namespaces, and what guards them |
 | [MCP Gateway Agent](docs/agent.md) | Installing, configuring, and running the agent |
 | [Agent Architecture](docs/agent-architecture.md) | The agent↔server WebSocket protocol |
 

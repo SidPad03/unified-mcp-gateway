@@ -68,14 +68,29 @@
   --warn: #a2670c;
   --deny: #c8323f;
 
+  /* The three lower rungs of the risk ladder. They are not states — nothing is
+     ever "in read" — so they are deliberately outside the four tones, and they
+     are the only hues in the product that a *tone* cannot produce. Cool at the
+     safe end, warming through violet into the amber and red above them, so the
+     five levels read as one ordered sweep rather than five unrelated chips. */
+  --read: #0a6fa8;
+  --write: #5b4bc4;
+  --exec: #9a3ba6;
+
   --beam-wash: rgba(11, 143, 99, 0.09);
   --warn-wash: rgba(162, 103, 12, 0.09);
   --deny-wash: rgba(200, 50, 63, 0.08);
   --neutral-wash: rgba(15, 35, 70, 0.05);
+  --read-wash: rgba(10, 111, 168, 0.09);
+  --write-wash: rgba(91, 75, 196, 0.09);
+  --exec-wash: rgba(154, 59, 166, 0.09);
 
   --beam-edge: rgba(11, 143, 99, 0.22);
   --warn-edge: rgba(162, 103, 12, 0.22);
   --deny-edge: rgba(200, 50, 63, 0.2);
+  --read-edge: rgba(10, 111, 168, 0.22);
+  --write-edge: rgba(91, 75, 196, 0.22);
+  --exec-edge: rgba(154, 59, 166, 0.22);
 
   /* The primary action is a near-black fill on light, near-white on dark —
      never the accent. That is what keeps the accent scarce enough to mean
@@ -117,14 +132,24 @@
   --warn: #e5a244;
   --deny: #f25f6b;
 
+  --read: #56b6f0;
+  --write: #9d90f5;
+  --exec: #d979e8;
+
   --beam-wash: rgba(63, 214, 155, 0.1);
   --warn-wash: rgba(229, 162, 68, 0.1);
   --deny-wash: rgba(242, 95, 107, 0.1);
   --neutral-wash: rgba(148, 173, 214, 0.07);
+  --read-wash: rgba(86, 182, 240, 0.1);
+  --write-wash: rgba(157, 144, 245, 0.1);
+  --exec-wash: rgba(217, 121, 232, 0.1);
 
   --beam-edge: rgba(63, 214, 155, 0.24);
   --warn-edge: rgba(229, 162, 68, 0.24);
   --deny-edge: rgba(242, 95, 107, 0.24);
+  --read-edge: rgba(86, 182, 240, 0.24);
+  --write-edge: rgba(157, 144, 245, 0.24);
+  --exec-edge: rgba(217, 121, 232, 0.24);
 
   --solid: #e4e9f2;
   --solid-hover: #ffffff;
@@ -157,15 +182,24 @@
   --color-beam: var(--beam);
   --color-warn: var(--warn);
   --color-deny: var(--deny);
+  --color-read: var(--read);
+  --color-write: var(--write);
+  --color-exec: var(--exec);
 
   --color-beam-wash: var(--beam-wash);
   --color-warn-wash: var(--warn-wash);
   --color-deny-wash: var(--deny-wash);
   --color-neutral-wash: var(--neutral-wash);
+  --color-read-wash: var(--read-wash);
+  --color-write-wash: var(--write-wash);
+  --color-exec-wash: var(--exec-wash);
 
   --color-beam-edge: var(--beam-edge);
   --color-warn-edge: var(--warn-edge);
   --color-deny-edge: var(--deny-edge);
+  --color-read-edge: var(--read-edge);
+  --color-write-edge: var(--write-edge);
+  --color-exec-edge: var(--exec-edge);
 
   --color-solid: var(--solid);
   --color-solid-hover: var(--solid-hover);

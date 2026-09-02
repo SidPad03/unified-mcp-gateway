@@ -171,6 +171,11 @@ enum Command {
         #[serde(default)]
         tls_skip_verify: bool,
     },
+    /// Whether this Mac registers the `agent_*` tools that let the gateway
+    /// configure it.
+    SetExposeControlTools {
+        enabled: bool,
+    },
 
     AddBackend {
         backend: core::LocalBackendConfig,
@@ -253,6 +258,11 @@ async fn handle(state: &Arc<core::AgentState>, command: Command) -> Result<Value
             let mut value = serde_json::to_value(check).unwrap();
             value["normalized_url"] = json!(normalized);
             Ok(value)
+        }
+
+        Command::SetExposeControlTools { enabled } => {
+            state.set_expose_control_tools(enabled).await?;
+            Ok(Value::Null)
         }
 
         Command::AddBackend { backend } => {
@@ -493,6 +503,7 @@ mod tests {
             r#"{"cmd":"take_legacy_api_key"}"#,
             r#"{"cmd":"apply_settings","agent_id":"mac","gateway_url":"wss://gw/agent/ws"}"#,
             r#"{"cmd":"check_gateway","gateway_url":"wss://gw","api_key":"k","tls_skip_verify":true}"#,
+            r#"{"cmd":"set_expose_control_tools","enabled":false}"#,
             r#"{"cmd":"add_backend","backend":{"name":"b","transport":"stdio","command":"uvx"}}"#,
             r#"{"cmd":"update_backend","name":"b","backend":{"name":"b","transport":"stdio","command":"uvx"}}"#,
             r#"{"cmd":"remove_backend","name":"b"}"#,

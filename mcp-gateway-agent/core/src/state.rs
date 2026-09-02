@@ -230,6 +230,25 @@ impl AgentState {
         Ok(())
     }
 
+    /// Turn the `agent_*` control tools on or off.
+    ///
+    /// Re-registers straight away rather than waiting for something else to
+    /// change: turning them off should withdraw them from the gateway now, not
+    /// the next time a backend restarts.
+    pub async fn set_expose_control_tools(&self, enabled: bool) -> Result<(), String> {
+        {
+            let mut config = self.config.write().await;
+            if config.agent.expose_control_tools == enabled {
+                return Ok(());
+            }
+            config.agent.expose_control_tools = enabled;
+        }
+        self.persist().await.map_err(|e| e.to_string())?;
+        self.hooks.touch();
+        self.send_register().await;
+        Ok(())
+    }
+
     // ── Backends (runtime and config, kept in step) ─────────────────────
 
     /// Put real values back where the editor sent [`crate::config::MASKED`].
@@ -326,9 +345,27 @@ impl AgentState {
         let Some(writer) = self.writer().await else {
             return false;
         };
-        let agent_id = self.config.read().await.agent.agent_id.clone();
-        let tools = self.backends.ready_tools().await;
+        let (agent_id, expose_control) = {
+            let config = self.config.read().await;
+            (
+                config.agent.agent_id.clone(),
+                config.agent.expose_control_tools,
+            )
+        };
+        let mut tools = self.backends.ready_tools().await;
         let backends = self.backends.ready_sub_backends().await;
+        // The agent's own tools are registered like any other, so the gateway
+        // classifies, audits and governs them with the same machinery. They are
+        // appended rather than mixed in because they belong to no sub-backend —
+        // `ready_sub_backends` deliberately does not mention them.
+        let control_count = if expose_control {
+            let control = crate::control::catalog();
+            let n = control.len();
+            tools.extend(control);
+            n
+        } else {
+            0
+        };
         let count = tools.len();
 
         let frame = AgentMessage::Register {
@@ -342,7 +379,11 @@ impl AgentState {
             return false;
         }
         self.update_connection(|c| c.registered_tools = count).await;
-        tracing::info!(tool_count = count, "Registered tools with the gateway");
+        tracing::info!(
+            tool_count = count,
+            control_tools = control_count,
+            "Registered tools with the gateway"
+        );
         true
     }
 

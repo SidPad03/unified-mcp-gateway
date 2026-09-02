@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api, MetricsSummary } from '@/lib/api';
+import { api, MetricsRange, MetricsSummary } from '@/lib/api';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { BarChart3, Eye, EyeOff, RotateCcw, Server, SlidersHorizontal } from 'lucide-react';
 import clsx from 'clsx';
@@ -19,6 +19,7 @@ import {
   PageHeader,
   RailList,
   RailRow,
+  Segmented,
   Select,
   StatusLabel,
   Tone,
@@ -42,6 +43,19 @@ const DEFAULT_WIDGETS: WidgetConfig[] = [
 ];
 
 const FULL_WIDTH_WIDGETS: WidgetId[] = ['stats', 'hourlyVolume'];
+
+/** The same three windows the Tools page and the usage graph offer. */
+const RANGES = [
+  { value: '24h' as const, label: '24h' },
+  { value: '7d' as const, label: '7d' },
+  { value: '30d' as const, label: '30d' },
+];
+
+/** Remembered, so the page you left is the page you come back to. */
+function loadRange(): MetricsRange {
+  const stored = localStorage.getItem('mcpgw_metrics_range');
+  return stored === '7d' || stored === '30d' ? stored : '24h';
+}
 
 function loadWidgetConfig(): WidgetConfig[] {
   try {
@@ -79,22 +93,28 @@ export default function MetricsOverview() {
   const [widgets, setWidgets] = useState<WidgetConfig[]>(loadWidgetConfig);
   const [showCustomize, setShowCustomize] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(30);
+  const [range, setRange] = useState<MetricsRange>(loadRange);
 
   useEffect(() => {
     loadMetrics();
     const interval = setInterval(loadMetrics, refreshInterval * 1000);
     return () => clearInterval(interval);
-  }, [refreshInterval]);
+  }, [refreshInterval, range]);
 
   const loadMetrics = async () => {
     try {
-      setMetrics(await api.getMetricsSummary());
+      setMetrics(await api.getMetricsSummary(range));
       setPageError('');
     } catch (e: any) {
       setPageError(e.message || 'Failed to load metrics');
     } finally {
       setLoading(false);
     }
+  };
+
+  const changeRange = (next: MetricsRange) => {
+    localStorage.setItem('mcpgw_metrics_range', next);
+    setRange(next);
   };
 
   const toggleWidget = (id: WidgetId) => {
@@ -147,9 +167,9 @@ export default function MetricsOverview() {
           <Card>
             <div className="flex items-end justify-between gap-8 flex-wrap">
               <div>
-                <Label>Calls routed · 24h</Label>
+                <Label>Calls routed · {metrics.range}</Label>
                 <div className="text-2xl font-semibold tracking-[-0.02em] tabular-nums text-ink mt-1.5">
-                  {fmt.count(metrics.calls_last_24h)}
+                  {fmt.count(metrics.calls_in_range)}
                 </div>
                 <div className="text-2xs text-ink-4 mt-1.5 tabular-nums">
                   {/* `total_tool_calls` counts rows in audit_events, so it is
@@ -197,16 +217,20 @@ export default function MetricsOverview() {
         // An explicit numeric ceiling, not `[0, 'auto']`: recharts' nice-tick
         // pass will happily widen an 'auto' bound past the one you gave it and
         // draw a -45 tick on a series that cannot go below zero.
-        const peak = Math.max(...metrics.hourly_volume.map(h => h.count), 1);
+        const peak = Math.max(...metrics.volume.map(h => h.count), 1);
         const ceiling = Math.max(4, Math.ceil((peak * 1.08) / 4) * 4);
+        // A day-wide bucket wants a date on the axis, not a clock time — the
+        // server says which it sent rather than the client guessing from the
+        // number of points.
+        const byDay = metrics.volume_bucket === 'day';
         return (
-          <ChartCard title="Call volume · 24h" bleed>
-            {metrics.hourly_volume.length === 0 ? (
+          <ChartCard title={`Call volume · ${metrics.range}`} bleed>
+            {metrics.volume.length === 0 ? (
               <EmptyState icon={BarChart3} title="No volume recorded yet" />
             ) : (
               <ResponsiveContainer width="100%" height={190}>
                 <AreaChart
-                  data={metrics.hourly_volume}
+                  data={metrics.volume}
                   margin={{ top: 4, right: 16, bottom: 0, left: 4 }}
                 >
                   <defs>
@@ -217,10 +241,12 @@ export default function MetricsOverview() {
                   </defs>
                   <CartesianGrid stroke="var(--line-soft)" vertical={false} />
                   <XAxis
-                    dataKey="hour"
+                    dataKey="bucket"
                     {...axisProps}
                     tickFormatter={(v: string) =>
-                      new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', hour12: false }) + ':00'
+                      byDay
+                        ? new Date(v).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                        : new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', hour12: false }) + ':00'
                     }
                     minTickGap={28}
                   />
@@ -233,7 +259,15 @@ export default function MetricsOverview() {
                   />
                   <Tooltip
                     {...tooltipProps}
-                    labelFormatter={(v: any) => fmt.hour(v)}
+                    labelFormatter={(v: any) =>
+                      byDay
+                        ? new Date(String(v)).toLocaleDateString(undefined, {
+                            weekday: 'short',
+                            month: 'short',
+                            day: 'numeric',
+                          })
+                        : fmt.hour(v)
+                    }
                     formatter={(value: any) => [fmt.count(Number(value)), 'calls']}
                   />
                   <Area
@@ -253,14 +287,14 @@ export default function MetricsOverview() {
       }
 
       case 'topTools': {
-        const max = metrics.top_tools_24h[0]?.call_count || 1;
+        const max = metrics.top_tools[0]?.call_count || 1;
         return (
-          <ChartCard title="Top tools · 24h" className="h-full">
-            {metrics.top_tools_24h.length === 0 ? (
+          <ChartCard title={`Top tools · ${metrics.range}`} className="h-full">
+            {metrics.top_tools.length === 0 ? (
               <EmptyState icon={BarChart3} title="No tool calls yet" />
             ) : (
               <div className="space-y-2.5">
-                {metrics.top_tools_24h.slice(0, 8).map((tool, i) => (
+                {metrics.top_tools.slice(0, 8).map((tool, i) => (
                   <BarRow
                     key={tool.tool_name}
                     rank={i + 1}
@@ -298,7 +332,7 @@ export default function MetricsOverview() {
           { label: 'p99', value: metrics.latency_percentiles.p99, tone: 'var(--deny)' },
         ];
         return (
-          <ChartCard title="Latency percentiles" className="h-full">
+          <ChartCard title={`Latency percentiles · ${metrics.range}`} className="h-full">
             <div className="space-y-4 pt-1">
               {rows.map(r => (
                 <div key={r.label}>
@@ -334,7 +368,7 @@ export default function MetricsOverview() {
           .filter(Boolean) as MetricsSummary['calls_by_risk'];
         const total = ordered.reduce((s, r) => s + r.count, 0);
         return (
-          <ChartCard title="Calls by risk" className="h-full">
+          <ChartCard title={`Calls by risk · ${metrics.range}`} className="h-full">
             {total === 0 ? (
               <EmptyState icon={BarChart3} title="No classified calls yet" />
             ) : (
@@ -417,6 +451,7 @@ export default function MetricsOverview() {
         description="Throughput, latency, and health for the gateway as a whole."
         actions={
           <>
+            <Segmented value={range} options={RANGES} onChange={changeRange} label="Time range" />
             <Select
               value={refreshInterval}
               onChange={e => setRefreshInterval(Number(e.target.value))}

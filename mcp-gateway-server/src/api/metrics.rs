@@ -1,13 +1,22 @@
-use axum::{extract::State, routing::get, Json, Router};
-use serde::Serialize;
+use axum::{
+    extract::{Query, State},
+    routing::get,
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
 
 use super::auth::Claims;
 use crate::{AppError, AppState};
 
 #[derive(Serialize)]
 pub struct MetricsSummary {
+    /// Every row the audit trail currently holds, at any age. The only figure
+    /// here that the range does not touch.
     pub total_tool_calls: i64,
-    pub calls_last_24h: i64,
+    /// The range these figures were computed over, echoed back so the client
+    /// can label them without trusting its own request to have been honoured.
+    pub range: String,
+    pub calls_in_range: i64,
     pub active_backends: i64,
     pub total_backends: i64,
     pub total_tools: i64,
@@ -16,11 +25,15 @@ pub struct MetricsSummary {
     pub active_policies: i64,
     pub avg_latency_ms: f64,
     pub error_rate: f64,
-    pub top_tools_24h: Vec<ToolMetric>,
+    pub top_tools: Vec<ToolMetric>,
     pub backend_health: Vec<BackendHealth>,
     pub latency_percentiles: LatencyPercentiles,
     pub calls_by_risk: Vec<RiskMetric>,
-    pub hourly_volume: Vec<HourlyVolume>,
+    pub volume: Vec<VolumePoint>,
+    /// `hour` or `day` — how wide one point of `volume` is. Thirty days of
+    /// hourly points is 720 of them in a 190px chart; the client also needs to
+    /// know whether to label a tick with a time or a date.
+    pub volume_bucket: String,
 }
 
 #[derive(Serialize)]
@@ -52,9 +65,37 @@ pub struct RiskMetric {
 }
 
 #[derive(Serialize)]
-pub struct HourlyVolume {
-    pub hour: String,
+pub struct VolumePoint {
+    /// RFC 3339, the same as `/audit/stats` sends. A bare "%H:%M" is not a
+    /// date: `new Date("05:00")` is Invalid Date, so the chart's axis read
+    /// "Invalid Date" and its tooltip fell back to the em dash. The client
+    /// needs the full instant anyway, to render it in the reader's own
+    /// timezone rather than the server's.
+    pub bucket: String,
     pub count: i64,
+}
+
+#[derive(Deserialize)]
+pub struct MetricsQuery {
+    pub range: Option<String>,
+}
+
+/// The windows the dashboard offers, and the only strings that reach SQL.
+///
+/// Every query below interpolates the interval with `format!` rather than
+/// binding it, because Postgres will not take a placeholder inside an
+/// `INTERVAL` literal. That is only safe while the value comes from this
+/// whitelist — an unknown range falls back to 24 hours rather than passing
+/// anything through. `usage.rs` and `tools.rs` resolve their ranges the same
+/// way, and the three lists have to stay in step or the pages disagree about
+/// what "7d" means.
+fn resolve_range(range: Option<&str>) -> (&'static str, &'static str, &'static str) {
+    match range.unwrap_or("24h") {
+        "7d" => ("7d", "7 days", "hour"),
+        "30d" => ("30d", "30 days", "day"),
+        // 24h, and anything unrecognised.
+        _ => ("24h", "24 hours", "hour"),
+    }
 }
 
 pub fn router() -> Router<AppState> {
@@ -64,14 +105,17 @@ pub fn router() -> Router<AppState> {
 async fn metrics_summary(
     State(state): State<AppState>,
     _claims: Claims,
+    Query(query): Query<MetricsQuery>,
 ) -> Result<Json<MetricsSummary>, AppError> {
+    let (range, interval, bucket) = resolve_range(query.range.as_deref());
+
     let (total_tool_calls,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_events")
         .fetch_one(&state.db)
         .await?;
 
-    let (calls_last_24h,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours'",
-    )
+    let (calls_in_range,): (i64,) = sqlx::query_as(&format!(
+        "SELECT COUNT(*) FROM audit_events WHERE timestamp > NOW() - INTERVAL '{interval}'"
+    ))
     .fetch_one(&state.db)
     .await?;
 
@@ -103,62 +147,73 @@ async fn metrics_summary(
             .fetch_one(&state.db)
             .await?;
 
-    let avg_lat: Option<(Option<f64>,)> = sqlx::query_as(
-        "SELECT AVG(duration_ms) FROM audit_events WHERE duration_ms IS NOT NULL AND timestamp > NOW() - INTERVAL '24 hours'"
-    ).fetch_optional(&state.db).await?;
+    let avg_lat: Option<(Option<f64>,)> = sqlx::query_as(&format!(
+        "SELECT AVG(duration_ms) FROM audit_events \
+         WHERE duration_ms IS NOT NULL AND timestamp > NOW() - INTERVAL '{interval}'"
+    ))
+    .fetch_optional(&state.db)
+    .await?;
 
     // Include `tool_error` — a tool that returned isError=true is a failed call.
     // Counting only 'error' reported a 0% error rate while tools were failing.
-    let (error_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_events WHERE status IN ('error', 'tool_error') AND timestamp > NOW() - INTERVAL '24 hours'"
-    ).fetch_one(&state.db).await?;
+    let (error_count,): (i64,) = sqlx::query_as(&format!(
+        "SELECT COUNT(*) FROM audit_events \
+         WHERE status IN ('error', 'tool_error') AND timestamp > NOW() - INTERVAL '{interval}'"
+    ))
+    .fetch_one(&state.db)
+    .await?;
 
     // A fraction in 0.0..=1.0, not a percentage. Both callers treat it as one:
     // the dashboard renders it through `fmt.percent`, which multiplies by 100,
     // and tones it against 0.01 / 0.05 thresholds. Returning 70.0 for a 70%
     // error rate therefore drew "7000%" and painted every non-zero rate red.
-    let error_rate = if calls_last_24h > 0 {
-        error_count as f64 / calls_last_24h as f64
+    let error_rate = if calls_in_range > 0 {
+        error_count as f64 / calls_in_range as f64
     } else {
         0.0
     };
 
-    let top_tools: Vec<(String, i64, Option<f64>, i64)> = sqlx::query_as(
-        "SELECT tool_name, COUNT(*) as cnt, AVG(duration_ms), SUM(CASE WHEN status IN ('error', 'tool_error') THEN 1 ELSE 0 END)
-         FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours'
+    let top_tools: Vec<(String, i64, Option<f64>, i64)> = sqlx::query_as(&format!(
+        "SELECT tool_name, COUNT(*) as cnt, AVG(duration_ms), \
+                SUM(CASE WHEN status IN ('error', 'tool_error') THEN 1 ELSE 0 END) \
+         FROM audit_events WHERE timestamp > NOW() - INTERVAL '{interval}' \
          GROUP BY tool_name ORDER BY cnt DESC LIMIT 10"
-    ).fetch_all(&state.db).await.unwrap_or_default();
+    ))
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
 
     let backend_health: Vec<(String, String, i64)> = sqlx::query_as(
         "SELECT b.name, b.health_status, COUNT(t.tool_id) FROM backends b LEFT JOIN tool_registry t ON b.backend_id = t.backend_id GROUP BY b.name, b.health_status ORDER BY b.name"
     ).fetch_all(&state.db).await.unwrap_or_default();
 
-    let calls_by_risk: Vec<(Option<String>, i64)> = sqlx::query_as(
-        "SELECT COALESCE(t.risk_category, a.risk_category) as risk, COUNT(*)
-         FROM audit_events a
-         LEFT JOIN tool_registry t ON t.tool_name = a.tool_name
-         WHERE a.timestamp > NOW() - INTERVAL '24 hours'
-         GROUP BY risk",
-    )
+    let calls_by_risk: Vec<(Option<String>, i64)> = sqlx::query_as(&format!(
+        "SELECT COALESCE(t.risk_category, a.risk_category) as risk, COUNT(*) \
+         FROM audit_events a \
+         LEFT JOIN tool_registry t ON t.tool_name = a.tool_name \
+         WHERE a.timestamp > NOW() - INTERVAL '{interval}' \
+         GROUP BY risk"
+    ))
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
 
-    let hourly_volume: Vec<(chrono::DateTime<chrono::Utc>, i64)> = sqlx::query_as(
-        "SELECT date_trunc('hour', timestamp) AS hour, COUNT(*) AS cnt \
-         FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours' \
-         GROUP BY hour ORDER BY hour",
-    )
+    let volume: Vec<(chrono::DateTime<chrono::Utc>, i64)> = sqlx::query_as(&format!(
+        "SELECT date_trunc('{bucket}', timestamp) AS bucket, COUNT(*) AS cnt \
+         FROM audit_events WHERE timestamp > NOW() - INTERVAL '{interval}' \
+         GROUP BY bucket ORDER BY bucket"
+    ))
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
 
     // Approximate percentiles
-    let percentiles = compute_percentiles(&state.db).await;
+    let percentiles = compute_percentiles(&state.db, interval).await;
 
     Ok(Json(MetricsSummary {
         total_tool_calls,
-        calls_last_24h,
+        range: range.to_string(),
+        calls_in_range,
         active_backends,
         total_backends,
         total_tools,
@@ -167,7 +222,7 @@ async fn metrics_summary(
         active_policies,
         avg_latency_ms: avg_lat.and_then(|(v,)| v).unwrap_or(0.0),
         error_rate,
-        top_tools_24h: top_tools
+        top_tools: top_tools
             .into_iter()
             .map(|(tool_name, call_count, avg, errors)| ToolMetric {
                 tool_name,
@@ -192,37 +247,66 @@ async fn metrics_summary(
                 count,
             })
             .collect(),
-        hourly_volume: hourly_volume
+        volume: volume
             .into_iter()
-            // RFC 3339, the same as `/audit/stats` sends. A bare "%H:%M" is not
-            // a date: `new Date("05:00")` is Invalid Date, so the chart's axis
-            // read "Invalid Date" and its tooltip fell back to the em dash.
-            // The client needs the full instant anyway, to render the hour in
-            // the reader's own timezone rather than the server's.
-            .map(|(hour, count)| HourlyVolume {
-                hour: hour.to_rfc3339(),
+            .map(|(bucket, count)| VolumePoint {
+                bucket: bucket.to_rfc3339(),
                 count,
             })
             .collect(),
+        volume_bucket: bucket.to_string(),
     }))
 }
 
-async fn compute_percentiles(db: &sqlx::PgPool) -> LatencyPercentiles {
-    let p50: Option<(Option<f64>,)> = sqlx::query_as(
-        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) FROM audit_events WHERE duration_ms IS NOT NULL AND timestamp > NOW() - INTERVAL '24 hours'"
-    ).fetch_optional(db).await.ok().flatten();
-
-    let p95: Option<(Option<f64>,)> = sqlx::query_as(
-        "SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) FROM audit_events WHERE duration_ms IS NOT NULL AND timestamp > NOW() - INTERVAL '24 hours'"
-    ).fetch_optional(db).await.ok().flatten();
-
-    let p99: Option<(Option<f64>,)> = sqlx::query_as(
-        "SELECT percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms) FROM audit_events WHERE duration_ms IS NOT NULL AND timestamp > NOW() - INTERVAL '24 hours'"
-    ).fetch_optional(db).await.ok().flatten();
+async fn compute_percentiles(db: &sqlx::PgPool, interval: &str) -> LatencyPercentiles {
+    async fn at(db: &sqlx::PgPool, interval: &str, fraction: &str) -> f64 {
+        let row: Option<(Option<f64>,)> = sqlx::query_as(&format!(
+            "SELECT percentile_cont({fraction}) WITHIN GROUP (ORDER BY duration_ms) \
+             FROM audit_events \
+             WHERE duration_ms IS NOT NULL AND timestamp > NOW() - INTERVAL '{interval}'"
+        ))
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+        row.and_then(|(v,)| v).unwrap_or(0.0)
+    }
 
     LatencyPercentiles {
-        p50: p50.and_then(|(v,)| v).unwrap_or(0.0),
-        p95: p95.and_then(|(v,)| v).unwrap_or(0.0),
-        p99: p99.and_then(|(v,)| v).unwrap_or(0.0),
+        p50: at(db, interval, "0.5").await,
+        p95: at(db, interval, "0.95").await,
+        p99: at(db, interval, "0.99").await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_whitelisted_ranges_reach_sql() {
+        assert_eq!(resolve_range(Some("24h")), ("24h", "24 hours", "hour"));
+        assert_eq!(resolve_range(Some("7d")), ("7d", "7 days", "hour"));
+        assert_eq!(resolve_range(Some("30d")), ("30d", "30 days", "day"));
+    }
+
+    /// The intervals are interpolated into SQL rather than bound, so anything
+    /// unrecognised — including an injection attempt — has to collapse to the
+    /// default rather than travel.
+    #[test]
+    fn an_unknown_range_falls_back_to_the_default_window() {
+        assert_eq!(resolve_range(None), ("24h", "24 hours", "hour"));
+        assert_eq!(resolve_range(Some("")), ("24h", "24 hours", "hour"));
+        assert_eq!(
+            resolve_range(Some("1 hour'; DROP TABLE audit_events; --")),
+            ("24h", "24 hours", "hour")
+        );
+    }
+
+    /// A month of hourly points is 720 of them; the long window buckets by day.
+    #[test]
+    fn the_longest_window_buckets_by_day() {
+        assert_eq!(resolve_range(Some("30d")).2, "day");
+        assert_eq!(resolve_range(Some("7d")).2, "hour");
     }
 }
