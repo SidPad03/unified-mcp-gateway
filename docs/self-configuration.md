@@ -9,11 +9,50 @@ the audit trail. The point is that an assistant which finds a backend unhealthy
 can read its logs, fix its configuration and restart it, without anybody opening
 the dashboard.
 
+- [They are invisible on the gateway](#they-are-invisible-on-the-gateway)
 - [What guards them](#what-guards-them)
 - [Gateway tools](#gateway-tools)
 - [Agent tools](#agent-tools)
 - [Worked examples](#worked-examples)
 - [Turning them off](#turning-them-off)
+
+---
+
+## They are invisible on the gateway
+
+The gateway is for the tools its operator put behind it. Its own plumbing is not
+part of that picture, so none of it shows up where those tools are counted,
+listed or traced:
+
+| Surface | Internal tools |
+|---|---|
+| MCP `tools/list` and `tools/call` | **Present** — this is the whole point |
+| Dashboard **Tools** page, and its counts | Absent |
+| **Backends** page per-backend tool count | Absent |
+| **Metrics** — tool totals, top tools, calls by risk, volume, latency | Absent |
+| Audit trail, and the live event feed | Absent |
+| **Usage** graph | Absent |
+| Prometheus `/metrics` | Absent |
+
+They are still resolved, still policy-evaluated and still role-gated — only the
+*recording* is skipped. Nothing is hidden from the operator that they cannot get
+at: every internal call is written to the server log at INFO with the caller,
+the tool, the status and the duration, so `docker logs` still answers "who
+reconfigured this, and when":
+
+```
+INFO Internal gateway tool call user=admin tool="gateway_register_backend" status="success" duration_ms=48.2
+WARN Refused an internal gateway tool call user=ci tool="gateway_delete_policy" reason="blocked by policy"
+```
+
+The trade is deliberate and worth stating plainly: an admin action on the gateway
+is **not** in the audit trail you can query from the dashboard. If you need
+tamper-evident records of configuration changes, ship the server log somewhere
+you keep them.
+
+The mechanism is a `tool_registry.is_internal` flag. It is set from a fixed list
+of names (`backends::classifier`), matched whole — a backend of yours that
+happens to ship a tool called `agent_something` is yours, and stays visible.
 
 ---
 
@@ -57,9 +96,9 @@ configuration entirely:
 Priority matters: the engine sorts ascending and the first match wins, so a
 specific deny has to sit ahead of any allow that also matches.
 
-**3. The audit trail.** A `gateway_*` call is recorded like any other, filed
-under the backend name `gateway`. An `agent_*` call is filed under that Mac's
-agent name. Reconfiguring the gateway leaves the same evidence as using it.
+**3. The server log.** Every internal call is written there — see
+[above](#they-are-invisible-on-the-gateway). It is deliberately not in the audit
+trail, which is about the traffic the operator's own tools carry.
 
 A tool the caller cannot reach is not advertised in `tools/list` — an assistant's
 context is better spent on tools it can actually call.
@@ -80,7 +119,7 @@ called `gateway` produces `gateway__foo` and cannot collide with anything here.
 | `gateway_create_policy` | Write a rule: tool pattern, decision, risk categories, application, roles. Appended at the end of the order. |
 | `gateway_update_policy` | Change one — including its `priority`, which is what moves a deny ahead of a broad allow. |
 | `gateway_delete_policy` | Remove one. |
-| `gateway_set_tool_classification` | Set a tool's risk category, which is what policy matches on and the dashboard colours. |
+| `gateway_set_tool_classification` | Set a tool's risk category, which is what policy matches on and the dashboard colours. Refused for the gateway's own tools: their categories are what a policy denying them matches on. |
 
 Policies are identified by `policy_id`, or by `name` when the name is unique.
 A policy bound to no role is never evaluated; `gateway_create_policy` says so in
@@ -238,10 +277,19 @@ the TLS setting stay in the app, where a person can see what they are doing.
 
 ## Turning them off
 
-**On the gateway.** There is no switch, because there does not need to be one:
-the tools require the `owner` role, and a policy denying `gateway_*` closes them
-to a role or an application entirely. See the example under
-[What guards them](#what-guards-them).
+**On the gateway.** **Settings → Gateway tools**, or
+`PATCH /api/v1/settings {"gateway_tools_enabled": false}` (owner only). It
+defaults to **on**, and turning it off withdraws the namespace immediately — the
+setting is read per request, not cached. With it off, `tools/list` does not offer
+the tools and a call to one is answered as an unknown tool, because that is the
+truth: the gateway is not offering it.
+
+For finer control than a single switch, policy still applies — deny `gateway_*`
+for one role or one application and leave it available to another. See the
+example under [What guards them](#what-guards-them).
+
+The switch governs the gateway's own namespace only. Each connected Mac decides
+for itself whether to offer the tools that configure *it*.
 
 **On a Mac.** `agent.expose_control_tools` in
 `~/.mcp-gateway-agent/config.toml`, or **Settings → General → Remote control**

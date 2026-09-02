@@ -4,6 +4,63 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-09-02
+
+### Changed
+
+- **The gateway's own tools are invisible on the gateway.** They shipped in
+  1.2.0 as ordinary tools: listed on the **Tools** page, counted on **Backends**
+  and **Metrics**, and written to the audit trail on every call. That was the
+  wrong shape. A gateway is for the tools its operator put behind it, and
+  seventeen `gateway_*` rows plus nine per connected Mac padded every figure on
+  the dashboard and buried real traffic under configuration chatter.
+
+  They are now marked internal and left out of the tool inventory, the
+  per-backend and per-gateway counts, the audit trail, the live feed, the usage
+  graph and the Prometheus endpoint alike. What does not change: they are still
+  offered over MCP, still resolved, still policy-evaluated and still gated on
+  the `owner` role. Only the recording is skipped — and every internal call is
+  written to the *server* log at INFO with the caller, the tool, the status and
+  the duration, so `docker logs` still answers "who reconfigured this, and
+  when". Worth being explicit about the trade: an admin action on the gateway is
+  no longer in the audit trail you can query from the dashboard, so ship the
+  server log somewhere you keep it if you need those records.
+
+  The flag is `tool_registry.is_internal`, set from a fixed list of names
+  matched whole — a backend of yours that happens to ship a tool called
+  `agent_something` is yours, and stays visible. Migration 012 adds the column,
+  backfills it, and clears the internal rows an upgraded database already has in
+  its audit trail.
+
+- **A tool's rail carries its risk.** The badge said `write` in violet while the
+  3px rail down the left of the same row stayed grey, so the column you scan
+  peripherally only ever separated "admin or destructive" from "everything
+  else". Both now come from one definition of the ramp, which is also what the
+  charts use — a legend and the bar beside it disagreeing is worse than either
+  being wrong alone.
+
+- **The gateway's own tools cannot reclassify themselves.**
+  `gateway_set_tool_classification` refuses an internal tool. Their categories
+  are what a "deny destructive" policy matches on to keep them governed; letting
+  one drop itself to `read` would have undone that in a single call.
+
+- **Two error messages had fourteen stray spaces in them,** from a line
+  continuation `cargo fmt` folded into the literal. The agent-backend edit
+  refusal was one of them.
+
+### Added
+
+- **A switch for the gateway's tools** — **Settings → Gateway tools**, or
+  `PATCH /api/v1/settings` for the API. Owner-only, defaults to on, and read per
+  request: turning it off withdraws the namespace from the next `tools/list`,
+  and a call to one of the tools is answered as an unknown tool, because that is
+  what it now is. Each Mac keeps its own separate switch for the tools that
+  configure it.
+
+- **`GET` / `PATCH /api/v1/settings`,** and a `settings` table behind them, for
+  the handful of switches that belong to the deployment rather than to the
+  browser looking at it.
+
 ## [1.2.0] - 2026-09-02
 
 ### Added

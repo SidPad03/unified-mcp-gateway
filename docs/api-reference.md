@@ -39,6 +39,10 @@ Issue a fresh JWT from a currently valid one. Send the current token in the
 
 ### `GET /api/v1/tools`
 
+Excludes the gateway's own internal tools — see
+[Self-Configuration Tools](self-configuration.md#they-are-invisible-on-the-gateway).
+
+
 List the tool registry. Tools are namespaced `{backend}__{tool}`.
 
 ### `PATCH /api/v1/tools/{tool_id}` — **owner**
@@ -238,6 +242,27 @@ Keys are `mcpgw_`-prefixed. Store them at creation time.
 
 ---
 
+## Settings
+
+### `GET /api/v1/settings`
+
+Gateway-wide settings. Everything else on the dashboard's Settings page is a
+browser preference; what is here changes what the server does.
+
+```json
+{ "gateway_tools_enabled": true }
+```
+
+### `PATCH /api/v1/settings` — **owner**
+
+Same shape, every field optional. Returns the full settings object.
+
+| Field | Default | Effect |
+|-------|---------|--------|
+| `gateway_tools_enabled` | `true` | Whether the `gateway_*` namespace is offered over MCP. Read per request, so turning it off takes effect on the next `tools/list`. |
+
+---
+
 ## Metrics
 
 ### `GET /api/v1/metrics/summary`
@@ -371,8 +396,9 @@ Alongside every tool the gateway aggregates, `tools/list` offers the gateway's
 own `gateway_*` namespace — registering backends, writing policy, restarting
 servers, reading logs and searching the audit trail — and each connected agent's
 `agent_*` mirror for the Mac it runs on. They are governed by the same policy
-engine and recorded in the same audit trail as anything else. See
-[Self-Configuration Tools](self-configuration.md).
+engine, but they are deliberately absent from the dashboard's inventory, counts,
+audit trail and metrics: they are the gateway's plumbing rather than tools the
+operator put behind it. See [Self-Configuration Tools](self-configuration.md).
 
 ### `GET /agent/ws` (WebSocket)
 

@@ -129,14 +129,17 @@ async fn metrics_summary(
         .fetch_one(&state.db)
         .await?;
 
-    let (total_tools,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tool_registry")
-        .fetch_one(&state.db)
-        .await?;
-
-    let (enabled_tools,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM tool_registry WHERE is_enabled = TRUE")
+    // Internal tools are excluded everywhere the operator counts theirs.
+    let (total_tools,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM tool_registry WHERE is_internal = FALSE")
             .fetch_one(&state.db)
             .await?;
+
+    let (enabled_tools,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM tool_registry WHERE is_enabled = TRUE AND is_internal = FALSE",
+    )
+    .fetch_one(&state.db)
+    .await?;
 
     let (total_users,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&state.db)

@@ -92,8 +92,13 @@ const EXECUTE_KEYWORDS: &[&str] = &[
 /// past every policy written against a category. These names are a fixed,
 /// known set, so they are stated rather than guessed.
 ///
+/// This is also the list that decides what is *internal*: a tool here is
+/// plumbing rather than something the operator put behind the gateway, so it
+/// is kept off the Tools page, out of the counts, and out of the audit trail.
+/// See [`is_control_tool`].
+///
 /// The gateway's own `gateway_*` tools carry their category in
-/// `crate::gateway_tools`, and never reach the classifier: they are not
+/// `crate::gateway_tools` and never reach the classifier — they are not
 /// discovered from anywhere. This table is for the agent's mirror of them,
 /// which arrives over the wire like any other discovered tool.
 const CONTROL_TOOL_RISK: &[(&str, &str)] = &[
@@ -107,6 +112,29 @@ const CONTROL_TOOL_RISK: &[(&str, &str)] = &[
     ("agent_start_local_server", "execute"),
     ("agent_restart_local_server", "execute"),
 ];
+
+/// Whether a *bare* tool name — the name as the backend advertised it, before
+/// the `<backend>__` prefix — is one of an agent's control tools.
+///
+/// Whole-name matching, never a prefix: a backend that happens to ship a tool
+/// called `agent_something_else` is one of the operator's own tools and must
+/// stay visible like any other.
+pub fn is_control_tool(original_name: &str) -> bool {
+    CONTROL_TOOL_RISK
+        .iter()
+        .any(|(name, _)| *name == original_name)
+}
+
+/// The same names, so the test in `db` can check that migration 012's backfill
+/// list has not fallen behind this one.
+///
+/// The migration keeps its names written out in literal SQL rather than
+/// generated from here — a migration you cannot read in full is a migration
+/// nobody audits — so the two lists are guarded by a test instead.
+#[cfg(test)]
+pub fn control_tool_names() -> Vec<&'static str> {
+    CONTROL_TOOL_RISK.iter().map(|(name, _)| *name).collect()
+}
 
 pub fn classify_tool(tool_name: &str, description: &str) -> &'static str {
     // Stated beats guessed: checked before any keyword rule.
@@ -263,6 +291,27 @@ mod tests {
             "unclassified"
         );
         assert_eq!(classify_tool("get_agent_status", "Read the status"), "read");
+    }
+
+    /// The same whole-name rule decides what is hidden from the operator's
+    /// Tools page. A near-miss is somebody's own tool and has to stay visible.
+    #[test]
+    fn only_the_exact_control_names_count_as_internal() {
+        assert!(is_control_tool("agent_install_mcp_server"));
+        assert!(is_control_tool("agent_list_local_servers"));
+        assert!(!is_control_tool("agent_install_mcp_server_v2"));
+        assert!(!is_control_tool("agent_something_else"));
+        assert!(!is_control_tool("obsidian_list_notes"));
+        // Namespaced names never reach this: the registry stores the bare name.
+        assert!(!is_control_tool("mac__agent_install_mcp_server"));
+    }
+
+    #[test]
+    fn every_control_tool_is_classified_and_listed() {
+        for name in control_tool_names() {
+            assert!(is_control_tool(name), "{name}");
+            assert_ne!(classify_tool(name, ""), "unclassified", "{name}");
+        }
     }
 
     #[test]

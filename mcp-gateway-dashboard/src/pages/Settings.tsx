@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api, Tool } from '@/lib/api';
 import { useUpdateCheck } from '@/hooks/useUpdateCheck';
-import { Sparkles, Key, Eye, EyeOff, Loader2, CheckCircle, AlertTriangle, X, Info, Link, RefreshCw } from 'lucide-react';
+import { Sparkles, Key, Eye, EyeOff, Loader2, CheckCircle, AlertTriangle, X, Info, Link, RefreshCw, Wrench } from 'lucide-react';
 import clsx from 'clsx';
 import { PageHeader } from '@/components/ui';
 
@@ -64,9 +64,41 @@ export default function Settings() {
   const [gatewayUrl, setGatewayUrl] = useState(() => localStorage.getItem('mcpgw_gateway_url') || '');
   const [gatewayUrlSaved, setGatewayUrlSaved] = useState(false);
 
+  // The gateway's own tools. Unlike everything else on this page, this one
+  // lives on the server: it changes what MCP clients are offered, so it has to
+  // be the same for everyone rather than a preference of this browser.
+  const [gatewayToolsEnabled, setGatewayToolsEnabled] = useState<boolean | null>(null);
+  const [gatewayToolsSaving, setGatewayToolsSaving] = useState(false);
+  const [gatewayToolsError, setGatewayToolsError] = useState('');
+
   useEffect(() => {
     loadTools();
+    loadSettings();
   }, []);
+
+  const loadSettings = async () => {
+    try {
+      setGatewayToolsEnabled((await api.getSettings()).gateway_tools_enabled);
+    } catch {
+      /* the rest of the page is still useful; the switch stays out of the way */
+    }
+  };
+
+  const toggleGatewayTools = async (next: boolean) => {
+    setGatewayToolsSaving(true);
+    setGatewayToolsError('');
+    // Optimistic, then reconciled against what the server actually stored.
+    setGatewayToolsEnabled(next);
+    try {
+      const saved = await api.updateSettings({ gateway_tools_enabled: next });
+      setGatewayToolsEnabled(saved.gateway_tools_enabled);
+    } catch (e: any) {
+      setGatewayToolsEnabled(!next);
+      setGatewayToolsError(e.message || 'Could not save that');
+    } finally {
+      setGatewayToolsSaving(false);
+    }
+  };
 
   const loadTools = async () => {
     try {
@@ -318,6 +350,56 @@ No other text.`
           <p className="text-micro text-ink-4 mt-1.5">Stored in your browser and used to build the client configuration.</p>
         </div>
       </div>
+
+      {/* Gateway tools — owner-only, and only shown once we know the state.
+          A switch that renders "off" while it is still loading is a switch
+          somebody flips twice. */}
+      {isOwner && gatewayToolsEnabled !== null && (
+        <div className="bg-panel border border-line rounded-card p-6 mb-6">
+          <div className="flex items-start gap-4 mb-5">
+            <div className="w-10 h-10 bg-beam-wash rounded-card flex items-center justify-center shrink-0">
+              <Wrench className="w-5 h-5 text-beam" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-ink">Gateway tools</h3>
+              <p className="text-xs text-ink-3 mt-1">
+                Lets a connected assistant configure this gateway through MCP — register and
+                restart backends, write policy, read a backend's logs. They are the gateway's own
+                plumbing, so they never appear on the Tools page and their calls stay out of the
+                audit trail and the metrics.
+              </p>
+            </div>
+          </div>
+
+          <label className="flex items-start gap-3 p-4 rounded-card border border-line hover:border-line-strong transition-colors cursor-pointer">
+            <input
+              type="checkbox"
+              checked={gatewayToolsEnabled}
+              disabled={gatewayToolsSaving}
+              onChange={e => toggleGatewayTools(e.target.checked)}
+              className="mt-0.5 shrink-0"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-ink">
+                Offer the gateway's own tools over MCP
+              </span>
+              <span className="block text-xs text-ink-3 mt-1">
+                {gatewayToolsEnabled
+                  ? 'Owners can configure the gateway from an MCP client. Everything that writes needs the owner role, and policy applies as it does to any other tool — a rule denying destructive tools denies these too.'
+                  : 'The namespace is withdrawn. Clients see only the tools you put behind the gateway, and a call to a gateway tool is answered as an unknown tool.'}
+              </span>
+            </span>
+          </label>
+
+          {gatewayToolsError && (
+            <p className="text-xs text-deny mt-2">{gatewayToolsError}</p>
+          )}
+          <p className="text-micro text-ink-4 mt-2.5">
+            Each Mac running the agent has its own switch for the tools that configure it —
+            Settings → General → Remote control in that app.
+          </p>
+        </div>
+      )}
 
       {/* AI Risk Classification Section */}
       <div className="bg-panel border border-line rounded-card p-6 mb-6">

@@ -280,11 +280,12 @@ async fn list_backends(
         created_at,
     ) in backends
     {
-        let (tool_count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1")
-                .bind(backend_id)
-                .fetch_one(&state.db)
-                .await?;
+        let (tool_count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1 AND is_internal = FALSE",
+        )
+        .bind(backend_id)
+        .fetch_one(&state.db)
+        .await?;
 
         let config = if is_admin {
             mask_secret_values(config)
@@ -415,7 +416,7 @@ async fn update_backend(
     // Enabling and disabling still belong to the gateway, so those pass.
     if transport == "agent" && req.config.is_some() {
         return Err(AppError::BadRequest(
-            "An agent backend is configured in the macOS app on the machine that runs it.              The gateway can enable or disable it, but its configuration is not editable here."
+            "An agent backend is configured in the macOS app on the machine that runs it. The gateway can enable or disable it, but its configuration is not editable here."
                 .into(),
         ));
     }
@@ -533,7 +534,9 @@ async fn sync_backend(
                     // Give the agent a moment to respond, then return current tool count
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     let (tool_count,): (i64,) =
-                        sqlx::query_as("SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1")
+                        sqlx::query_as(
+                "SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1 AND is_internal = FALSE",
+            )
                             .bind(id)
                             .fetch_one(&state.db)
                             .await?;

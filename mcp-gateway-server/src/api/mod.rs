@@ -8,6 +8,7 @@ pub mod mcp;
 pub mod metrics;
 pub mod policies;
 pub mod roles;
+pub mod settings;
 pub mod tools;
 pub mod updates;
 pub mod usage;
@@ -25,6 +26,7 @@ pub fn router() -> Router<AppState> {
         .merge(users::router())
         .merge(roles::router())
         .merge(policies::router())
+        .merge(settings::router())
         .merge(metrics::router())
         .merge(api_keys::router())
         .merge(agent_auth::router())

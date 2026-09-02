@@ -45,6 +45,12 @@ pub fn router() -> Router<AppState> {
         .route("/tools/:id", axum::routing::patch(update_tool))
 }
 
+/// The tool inventory, as the operator assembled it.
+///
+/// `is_internal` rows are excluded on purpose: the gateway's own control tools
+/// are plumbing, and a page whose headline is "every tool aggregated from the
+/// connected MCP backends" should not have the gateway's own wiring padding the
+/// count. They are still served over MCP, and still governed by policy.
 async fn list_tools(
     State(state): State<AppState>,
     _claims: Claims,
@@ -61,7 +67,7 @@ async fn list_tools(
          COALESCE((SELECT COUNT(*) FROM audit_events a WHERE a.tool_name = t.tool_name AND a.timestamp > NOW() - INTERVAL '{}'), 0) as call_count
          FROM tool_registry t
          JOIN backends b ON t.backend_id = b.backend_id
-         WHERE 1=1",
+         WHERE t.is_internal = FALSE",
         interval
     );
     let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(base_sql);

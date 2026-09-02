@@ -274,7 +274,9 @@ Full documentation: [docs/agent.md](docs/agent.md). Design and rationale:
 ### Self-Configuration
 - A `gateway_*` tool namespace: register, probe, start, stop and restart backends; write and reorder RBAC policy; reclassify a tool; tail a backend's logs; search the audit trail
 - An `agent_*` mirror on each connected Mac: install, start, stop and reconfigure the MCP servers it runs
-- Classified, policy-governed and audited like every other tool — nothing here is a side door
+- Classified and policy-governed like every other tool — nothing here is a side door
+- Invisible on the gateway itself: absent from the Tools page, the counts, the audit trail, the metrics and the usage graph, because the gateway is for the tools *you* put behind it
+- One switch in **Settings → Gateway tools**, and a separate one on each Mac
 - See [Self-Configuration Tools](docs/self-configuration.md)
 
 ### Security & Access Control

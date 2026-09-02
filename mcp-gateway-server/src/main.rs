@@ -225,18 +225,27 @@ pub async fn register_discovered_tools(
     for tool in tools {
         let namespaced = format!("{}__{}", backend_name, tool.name);
         let auto_risk = backends::classifier::classify_tool(&tool.name, &tool.description);
+        // An agent's control tools are the gateway's own plumbing, not part of
+        // the inventory the operator assembled. They are routed and policed
+        // like anything else, and hidden from every page that counts or lists
+        // "the tools behind the gate".
+        let is_internal = backends::classifier::is_control_tool(&tool.name);
         let tool_id = uuid::Uuid::new_v4();
 
         // UPSERT: insert new tools with auto-classification, but preserve the
         // existing risk_category for tools that already exist (manual overrides).
+        // `is_internal` *is* refreshed, because it is derived from the name
+        // rather than chosen by anyone — a row written before the column
+        // existed has to pick the flag up on the next discovery.
         let result = sqlx::query(
-            "INSERT INTO tool_registry (tool_id, tool_name, backend_id, original_name, description, input_schema, risk_category, is_enabled, last_seen)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, NOW())
+            "INSERT INTO tool_registry (tool_id, tool_name, backend_id, original_name, description, input_schema, risk_category, is_enabled, is_internal, last_seen)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, NOW())
              ON CONFLICT (backend_id, original_name) DO UPDATE SET
                tool_name = EXCLUDED.tool_name,
                description = EXCLUDED.description,
                input_schema = EXCLUDED.input_schema,
                is_enabled = TRUE,
+               is_internal = EXCLUDED.is_internal,
                last_seen = NOW()"
         )
         .bind(tool_id)
@@ -246,6 +255,7 @@ pub async fn register_discovered_tools(
         .bind(&tool.description)
         .bind(&tool.input_schema)
         .bind(auto_risk)
+        .bind(is_internal)
         .execute(pool)
         .await;
 

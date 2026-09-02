@@ -5,7 +5,7 @@ import { BarChart3, Eye, EyeOff, RotateCcw, Server, SlidersHorizontal } from 'lu
 import clsx from 'clsx';
 import SecurityPostureCard from '@/components/SecurityPostureCard';
 import { fmt } from '@/lib/format';
-import { BarRow, ChartCard, RISK_FILL, StackedBar, axisProps, tooltipProps } from '@/components/chart';
+import { BarRow, ChartCard, StackedBar, axisProps, tooltipProps } from '@/components/chart';
 import {
   Banner,
   Button,
@@ -23,6 +23,7 @@ import {
   Select,
   StatusLabel,
   Tone,
+  riskColor,
 } from '@/components/ui';
 
 type WidgetId = 'stats' | 'topTools' | 'latency' | 'riskBreakdown' | 'backendHealth' | 'hourlyVolume';
@@ -378,7 +379,7 @@ export default function MetricsOverview() {
                   segments={ordered.map(r => ({
                     key: r.risk_category,
                     value: r.count,
-                    fill: RISK_FILL[r.risk_category] || RISK_FILL.unclassified,
+                    fill: riskColor(r.risk_category),
                   }))}
                 />
                 <div className="space-y-1.5">
@@ -386,7 +387,7 @@ export default function MetricsOverview() {
                     <div key={r.risk_category} className="flex items-center gap-2.5 text-2xs">
                       <span
                         className="w-2 h-2 rounded-[2px] shrink-0"
-                        style={{ background: RISK_FILL[r.risk_category] || RISK_FILL.unclassified }}
+                        style={{ background: riskColor(r.risk_category) }}
                       />
                       <span className="text-ink-2 flex-1">{r.risk_category}</span>
                       <span className="text-ink-4 tabular-nums">

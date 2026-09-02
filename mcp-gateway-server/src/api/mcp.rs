@@ -89,6 +89,28 @@ impl Target {
         }
     }
 
+    /// Whether this call is the gateway configuring itself rather than
+    /// somebody using the gateway.
+    ///
+    /// An internal call is still resolved, still policy-evaluated and still
+    /// role-gated — it simply leaves no trace on the surfaces that are about
+    /// the operator's own traffic: no audit row, no Prometheus sample, nothing
+    /// on the live feed, nothing in the usage graph. The gateway is for the
+    /// tools its operator put behind it; its own plumbing is not part of that
+    /// picture, and a burst of `gateway_*` calls in the middle of an audit
+    /// trail is noise in the one place that has to stay readable.
+    ///
+    /// The calls are not *invisible*: each one is written to the server log at
+    /// INFO, so `docker logs` still answers "who reconfigured this and when".
+    fn is_internal(&self) -> bool {
+        match self {
+            Target::Gateway { .. } => true,
+            Target::Backend { original_name, .. } => {
+                crate::backends::classifier::is_control_tool(original_name)
+            }
+        }
+    }
+
     /// What the audit trail files the call under. The gateway's own tools are
     /// filed under `gateway`, which is not a name a backend can take — the
     /// `backends` table has a unique name and nothing registers itself there.
@@ -225,7 +247,16 @@ async fn handle_tools_list(
     // and additionally past the role gate, because advertising a tool that will
     // always be refused only wastes the reader's context.
     let mut gateway_count = 0usize;
+    let gateway_tools_enabled = crate::api::settings::read_bool(
+        &state.db,
+        crate::api::settings::GATEWAY_TOOLS_ENABLED,
+        true,
+    )
+    .await;
     for tool in crate::gateway_tools::catalog() {
+        if !gateway_tools_enabled {
+            break;
+        }
         if !crate::gateway_tools::may_call(&tool, claims) {
             continue;
         }
@@ -358,8 +389,32 @@ async fn handle_tools_call(
         }
     };
 
+    // Switched off in Settings, the namespace is not there at all: a call to it
+    // is answered the same way a call to any unknown tool is, rather than as a
+    // policy refusal, because "the gateway does not offer this" is the truth.
+    if gateway_tool.is_some()
+        && !crate::api::settings::read_bool(
+            &state.db,
+            crate::api::settings::GATEWAY_TOOLS_ENABLED,
+            true,
+        )
+        .await
+    {
+        return JsonRpcResponse {
+            jsonrpc: "2.0".into(),
+            id: req.id.clone(),
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32602,
+                message: format!("Tool not found: {}", tool_name),
+                data: None,
+            }),
+        };
+    }
+
     let risk = target.risk();
     let backend_name = target.backend_name().to_string();
+    let internal = target.is_internal();
     let user_id: Option<Uuid> = claims.sub.parse().ok();
 
     // Load policies scoped to user's roles and evaluate
@@ -386,43 +441,56 @@ async fn handle_tools_call(
     let decision_str = decision.to_string();
 
     // Record metrics
-    state
-        .metrics
-        .record_policy_decision(&decision_str, tool_name);
+    if !internal {
+        state
+            .metrics
+            .record_policy_decision(&decision_str, tool_name);
+    }
 
     if decision != PolicyDecision::Allow {
         let duration = start.elapsed();
         let duration_ms = duration.as_secs_f64() * 1000.0;
 
-        // Audit the denial
-        if let Some(ref audit) = state.audit {
-            let _ = audit
-                .record_event(
-                    tool_name,
-                    &backend_name,
-                    risk,
-                    Some(&arguments.to_string()),
-                    None,
-                    duration_ms,
-                    "denied",
-                    reason.as_deref(),
-                    "deny",
-                    policy_id.as_deref(),
-                    user_id,
-                    None,
-                    None,
-                    claims.application.as_deref(),
-                )
-                .await;
-        }
+        if internal {
+            // The refusal still has to be findable by whoever runs the
+            // gateway, just not on the pages that are about their traffic.
+            tracing::warn!(
+                user = %claims.username,
+                tool = tool_name,
+                reason = reason.as_deref().unwrap_or("policy"),
+                "Refused an internal gateway tool call"
+            );
+        } else {
+            // Audit the denial
+            if let Some(ref audit) = state.audit {
+                let _ = audit
+                    .record_event(
+                        tool_name,
+                        &backend_name,
+                        risk,
+                        Some(&arguments.to_string()),
+                        None,
+                        duration_ms,
+                        "denied",
+                        reason.as_deref(),
+                        "deny",
+                        policy_id.as_deref(),
+                        user_id,
+                        None,
+                        None,
+                        claims.application.as_deref(),
+                    )
+                    .await;
+            }
 
-        state.metrics.record_tool_call(
-            tool_name,
-            &backend_name,
-            "denied",
-            risk,
-            duration.as_secs_f64(),
-        );
+            state.metrics.record_tool_call(
+                tool_name,
+                &backend_name,
+                "denied",
+                risk,
+                duration.as_secs_f64(),
+            );
+        }
 
         let deny_reason = reason.unwrap_or_else(|| "Access denied by policy".into());
         return JsonRpcResponse {
@@ -549,35 +617,45 @@ async fn handle_tools_call(
                 "success"
             };
 
-            // Audit
-            if let Some(ref audit) = state.audit {
-                let _ = audit
-                    .record_event(
-                        tool_name,
-                        &backend_name,
-                        risk,
-                        Some(&arguments.to_string()),
-                        Some(&content.to_string()),
-                        duration_ms,
-                        audit_status,
-                        None,
-                        &decision_str,
-                        policy_id.as_deref(),
-                        user_id,
-                        None,
-                        None,
-                        claims.application.as_deref(),
-                    )
-                    .await;
-            }
+            if internal {
+                tracing::info!(
+                    user = %claims.username,
+                    tool = tool_name,
+                    status = audit_status,
+                    duration_ms,
+                    "Internal gateway tool call"
+                );
+            } else {
+                // Audit
+                if let Some(ref audit) = state.audit {
+                    let _ = audit
+                        .record_event(
+                            tool_name,
+                            &backend_name,
+                            risk,
+                            Some(&arguments.to_string()),
+                            Some(&content.to_string()),
+                            duration_ms,
+                            audit_status,
+                            None,
+                            &decision_str,
+                            policy_id.as_deref(),
+                            user_id,
+                            None,
+                            None,
+                            claims.application.as_deref(),
+                        )
+                        .await;
+                }
 
-            state.metrics.record_tool_call(
-                tool_name,
-                &backend_name,
-                audit_status,
-                risk,
-                duration.as_secs_f64(),
-            );
+                state.metrics.record_tool_call(
+                    tool_name,
+                    &backend_name,
+                    audit_status,
+                    risk,
+                    duration.as_secs_f64(),
+                );
+            }
 
             // If the backend already returned MCP content array, pass it through directly
             if content.is_array() {
@@ -621,35 +699,44 @@ async fn handle_tools_call(
             }
         }
         Err(err_msg) => {
-            // Audit error
-            if let Some(ref audit) = state.audit {
-                let _ = audit
-                    .record_event(
-                        tool_name,
-                        &backend_name,
-                        risk,
-                        Some(&arguments.to_string()),
-                        None,
-                        duration_ms,
-                        "error",
-                        Some(&err_msg),
-                        &decision_str,
-                        policy_id.as_deref(),
-                        user_id,
-                        None,
-                        None,
-                        claims.application.as_deref(),
-                    )
-                    .await;
-            }
+            if internal {
+                tracing::warn!(
+                    user = %claims.username,
+                    tool = tool_name,
+                    error = %err_msg,
+                    "Internal gateway tool call failed"
+                );
+            } else {
+                // Audit error
+                if let Some(ref audit) = state.audit {
+                    let _ = audit
+                        .record_event(
+                            tool_name,
+                            &backend_name,
+                            risk,
+                            Some(&arguments.to_string()),
+                            None,
+                            duration_ms,
+                            "error",
+                            Some(&err_msg),
+                            &decision_str,
+                            policy_id.as_deref(),
+                            user_id,
+                            None,
+                            None,
+                            claims.application.as_deref(),
+                        )
+                        .await;
+                }
 
-            state.metrics.record_tool_call(
-                tool_name,
-                &backend_name,
-                "error",
-                risk,
-                duration.as_secs_f64(),
-            );
+                state.metrics.record_tool_call(
+                    tool_name,
+                    &backend_name,
+                    "error",
+                    risk,
+                    duration.as_secs_f64(),
+                );
+            }
 
             JsonRpcResponse {
                 jsonrpc: "2.0".into(),
@@ -671,6 +758,44 @@ async fn handle_tools_call(
 mod tests {
     use super::*;
     use crate::policy::engine::PolicyRule;
+
+    fn backend_target(original_name: &str) -> Target {
+        Target::Backend {
+            original_name: original_name.into(),
+            risk_category: Some("read".into()),
+            backend_id: Uuid::nil(),
+            backend_name: "mac".into(),
+            transport: "agent".into(),
+        }
+    }
+
+    /// The gateway's own tools are plumbing, and so are the control tools an
+    /// agent registers. Neither belongs in the audit trail, the metrics or the
+    /// usage graph, which are about the traffic the operator's own tools carry.
+    #[test]
+    fn the_gateways_own_plumbing_is_internal() {
+        assert!(Target::Gateway { risk: "admin" }.is_internal());
+        assert!(backend_target("agent_install_mcp_server").is_internal());
+        assert!(backend_target("agent_get_local_server_logs").is_internal());
+    }
+
+    /// Everything the operator actually put behind the gateway is not, however
+    /// close its name gets.
+    #[test]
+    fn a_users_own_tool_is_never_internal() {
+        assert!(!backend_target("obsidian_list_notes").is_internal());
+        assert!(!backend_target("agent_install_mcp_server_v2").is_internal());
+        assert!(!backend_target("delete_branch").is_internal());
+    }
+
+    /// `gateway` is what an internal call would be filed under if it were ever
+    /// recorded, and it is not a name a backend can take — `backends.name` is
+    /// unique and nothing registers itself there.
+    #[test]
+    fn a_gateway_call_is_filed_under_the_gateway() {
+        assert_eq!(Target::Gateway { risk: "read" }.backend_name(), "gateway");
+        assert_eq!(backend_target("x").backend_name(), "mac");
+    }
 
     #[test]
     fn null_risk_resolves_to_unclassified() {

@@ -331,8 +331,9 @@ export function StatusLabel({
    the word to know which one you are looking at. Unclassified stays a dashed
    grey outline, because it is a *gap* rather than a level.
 
-   These five colours live only here and in `RISK_FILL` (charts). Nothing that
-   is not a risk category may use them.
+   The five colours are written down once, just below, and reached through
+   `riskColor` by the rails and the charts. Nothing that is not a risk category
+   may use them.
    ───────────────────────────────────────────────────────────────────────── */
 
 export const RISK_LEVELS = [
@@ -353,12 +354,23 @@ const RISK_STYLE: Record<string, string> = {
   unclassified: 'text-ink-4 bg-transparent border-line border-dashed',
 };
 
-/** The tone a risk category contributes to a row's rail. */
-export function riskTone(risk?: string | null): Tone {
-  if (risk === 'destructive') return 'deny';
-  if (risk === 'admin') return 'warn';
-  return 'neutral';
-}
+/**
+ * The ramp as raw colours, for anything Tailwind classes cannot reach: a row's
+ * rail, a chart fill, an SVG. It is the same five hues the badge above carries,
+ * and it is the only place they are written down — a legend and the bar beside
+ * it disagreeing is worse than either being wrong on its own.
+ */
+const RISK_COLOR: Record<string, string> = {
+  read: 'var(--read)',
+  write: 'var(--write)',
+  execute: 'var(--exec)',
+  admin: 'var(--warn)',
+  destructive: 'var(--deny)',
+};
+
+/** Unclassified — and anything unrecognised — falls back to structure grey. */
+export const riskColor = (risk?: string | null): string =>
+  RISK_COLOR[risk ?? ''] ?? 'var(--line-strong)';
 
 export function RiskBadge({
   risk,
@@ -403,9 +415,19 @@ export function RiskBadge({
    ───────────────────────────────────────────────────────────────────────── */
 
 /** For a table cell — the rail as an inset shadow, so it does not cost a column. */
-export const railStyle = (tone?: Tone) => ({
-  boxShadow: `inset 3px 0 0 0 ${tone ? toneColor(tone) : 'transparent'}`,
-});
+const rail = (color: string) => ({ boxShadow: `inset 3px 0 0 0 ${color}` });
+
+export const railStyle = (tone?: Tone) => rail(tone ? toneColor(tone) : 'transparent');
+
+/**
+ * The rail for a row whose verdict is a risk category rather than a state.
+ *
+ * Reading the badge and the rail as two different scales was the tell that the
+ * old mapping was wrong: the badge said `write` in violet while the rail beside
+ * it stayed grey, so the column you scan peripherally only ever distinguished
+ * "admin or destructive" from "everything else".
+ */
+export const riskRailStyle = (risk?: string | null) => rail(riskColor(risk));
 
 /** A list of railed rows. */
 export function RailList({ children, className }: { children: ReactNode; className?: string }) {

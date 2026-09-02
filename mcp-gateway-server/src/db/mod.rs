@@ -224,6 +224,55 @@ END $$;
     r#"
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_secret TEXT;
 "#,
+    // 012: Internal tools, and a place to keep gateway settings.
+    //
+    // `is_internal` marks the gateway's own plumbing — the control tools an
+    // agent registers so the gateway can configure it. They are still routed
+    // and still policed; they are simply not part of the inventory the
+    // operator put behind the gateway, so they stay off the Tools page, out of
+    // the counts and out of the audit trail. The backfill names them
+    // explicitly rather than matching a prefix, because a backend may
+    // legitimately ship a tool whose name begins the same way; the list is
+    // `backends::classifier::control_tool_names`, and the two must agree.
+    r#"
+ALTER TABLE tool_registry ADD COLUMN IF NOT EXISTS is_internal BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE tool_registry SET is_internal = TRUE WHERE original_name IN (
+    'agent_list_local_servers',
+    'agent_get_local_server_status',
+    'agent_get_local_server_logs',
+    'agent_install_mcp_server',
+    'agent_update_config',
+    'agent_remove_mcp_server',
+    'agent_start_local_server',
+    'agent_stop_local_server',
+    'agent_restart_local_server'
+);
+
+-- Almost every read wants the visible tools, so the index carries only those.
+CREATE INDEX IF NOT EXISTS idx_tools_visible ON tool_registry(backend_id) WHERE is_internal = FALSE;
+
+-- Audit rows written before internal calls stopped being recorded. The trail is
+-- meant to be about the operator's own traffic; leaving these in would put a
+-- burst of gateway_* and agent_* calls in the middle of it.
+DELETE FROM audit_events
+WHERE backend_name = 'gateway'
+   OR tool_name LIKE '%\_\_agent\_list\_local\_servers'
+   OR tool_name LIKE '%\_\_agent\_get\_local\_server\_status'
+   OR tool_name LIKE '%\_\_agent\_get\_local\_server\_logs'
+   OR tool_name LIKE '%\_\_agent\_install\_mcp\_server'
+   OR tool_name LIKE '%\_\_agent\_update\_config'
+   OR tool_name LIKE '%\_\_agent\_remove\_mcp\_server'
+   OR tool_name LIKE '%\_\_agent\_start\_local\_server'
+   OR tool_name LIKE '%\_\_agent\_stop\_local\_server'
+   OR tool_name LIKE '%\_\_agent\_restart\_local\_server';
+
+CREATE TABLE IF NOT EXISTS settings (
+    key VARCHAR(64) PRIMARY KEY,
+    value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"#,
 ];
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
@@ -231,4 +280,31 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
         pool.execute(*sql).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MIGRATIONS;
+    use crate::backends::classifier::control_tool_names;
+
+    /// Migration 012 backfills `is_internal` from a list of names written out
+    /// in SQL, and `register_discovered_tools` sets the same flag from
+    /// `classifier::is_control_tool`. Two lists, one meaning: if a control tool
+    /// is added to the classifier and not to the migration, every row already
+    /// in an upgraded database stays visible on the Tools page until that
+    /// agent happens to reconnect.
+    #[test]
+    fn the_backfill_names_every_control_tool() {
+        let migration = MIGRATIONS
+            .iter()
+            .find(|sql| sql.contains("is_internal"))
+            .expect("migration 012 is present");
+
+        for name in control_tool_names() {
+            assert!(
+                migration.contains(&format!("'{name}'")),
+                "{name} is a control tool but migration 012 does not backfill it"
+            );
+        }
+    }
 }

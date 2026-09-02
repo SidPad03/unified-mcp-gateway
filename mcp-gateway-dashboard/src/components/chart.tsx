@@ -39,21 +39,6 @@ export const axisProps = {
   tickLine: false,
 };
 
-/**
- * The same five colours the `RiskBadge` carries, in the same order — a legend
- * and a bar have to agree or neither is readable. Risk is *ordinal*, so the
- * ramp is a single cool-to-warm sweep rather than six unrelated hues: which end
- * is the bad end is legible without reading a label.
- */
-export const RISK_FILL: Record<string, string> = {
-  read: 'var(--read)',
-  write: 'var(--write)',
-  execute: 'var(--exec)',
-  admin: 'var(--warn)',
-  destructive: 'var(--deny)',
-  unclassified: 'var(--line-strong)',
-};
-
 export function ChartCard({
   title,
   trailing,

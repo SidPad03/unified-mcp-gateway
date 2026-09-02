@@ -317,7 +317,7 @@ async fn usage_graph(
                    AND timestamp > NOW() - INTERVAL '{}'
                  GROUP BY tool_name
              ) ae ON ae.tool_name = t.tool_name
-             WHERE t.is_enabled = TRUE AND b.is_enabled = TRUE
+             WHERE t.is_enabled = TRUE AND b.is_enabled = TRUE AND t.is_internal = FALSE
                AND ($2::text IS NULL OR b.name = $2)
              ORDER BY call_count DESC, t.tool_name
              LIMIT 100",
@@ -414,7 +414,7 @@ async fn usage_graph(
                    AND timestamp > NOW() - INTERVAL '{}'
                  GROUP BY tool_name
              ) ae ON ae.tool_name = t.tool_name
-             WHERE t.is_enabled = TRUE AND b.is_enabled = TRUE
+             WHERE t.is_enabled = TRUE AND b.is_enabled = TRUE AND t.is_internal = FALSE
                AND ($2::text IS NULL OR b.name = $2)
              ORDER BY call_count DESC
              LIMIT 50",

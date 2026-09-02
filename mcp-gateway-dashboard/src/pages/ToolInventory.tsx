@@ -25,8 +25,7 @@ import {
   Td,
   Th,
   Tone,
-  railStyle,
-  riskTone,
+  riskRailStyle,
 } from '@/components/ui';
 
 type SortKey = 'tool_name' | 'backend_name' | 'risk_category' | 'call_count_24h' | 'is_enabled';
@@ -363,9 +362,11 @@ export default function ToolInventory() {
                       expanded && 'bg-raised'
                     )}
                   >
-                    {/* The gate rail: destructive tools are a red edge you can
-                        find by scrolling, without reading a word. */}
-                    <Td style={railStyle(riskTone(tool.risk_category))}>
+                    {/* The gate rail, carrying the tool's risk in the same five
+                        colours the badge uses: the severity of a page of tools
+                        is readable by scrolling the left edge, without reading
+                        a word. */}
+                    <Td style={riskRailStyle(tool.risk_category)}>
                       <div className="w-[min(168px,42vw)] sm:w-[240px] md:w-[300px] xl:w-[400px]">
                         <div className="font-mono text-xs text-ink truncate">{tool.tool_name}</div>
                         <div className="text-2xs text-ink-3 truncate mt-0.5">

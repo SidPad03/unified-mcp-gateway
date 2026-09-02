@@ -909,17 +909,26 @@ async fn set_tool_classification(state: &AppState, args: &Value) -> Result<Value
         ));
     }
 
-    let previous: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT risk_category FROM tool_registry WHERE tool_name = $1")
+    let row: Option<(Option<String>, bool)> =
+        sqlx::query_as("SELECT risk_category, is_internal FROM tool_registry WHERE tool_name = $1")
             .bind(tool_name)
             .fetch_optional(&state.db)
             .await
             .map_err(|e| e.to_string())?;
-    let previous = previous.ok_or_else(|| {
+    let (previous, is_internal) = row.ok_or_else(|| {
         format!(
             "No tool named '{tool_name}' is registered. Names are namespaced '<backend>__<tool>'."
         )
     })?;
+
+    // The control tools' categories are what a "deny destructive" policy
+    // matches on to keep them out of the wrong hands. Letting one of those
+    // tools reclassify itself down to `read` would undo that in a single call.
+    if is_internal {
+        return Err(format!(
+            "'{tool_name}' is one of the gateway's own tools. Their classifications are fixed, because a policy denying them is what keeps them governed."
+        ));
+    }
 
     sqlx::query("UPDATE tool_registry SET risk_category = $1 WHERE tool_name = $2")
         .bind(risk)
@@ -930,7 +939,7 @@ async fn set_tool_classification(state: &AppState, args: &Value) -> Result<Value
 
     Ok(json!({
         "tool_name": tool_name,
-        "was": previous.0.unwrap_or_else(|| "unclassified".into()),
+        "was": previous.unwrap_or_else(|| "unclassified".into()),
         "now": risk,
         "note": "Policies matching on risk category apply to this tool from the next call onward.",
     }))
@@ -960,12 +969,13 @@ async fn list_backends(state: &AppState, claims: &Claims) -> Result<Value, Strin
 
     let mut backends = Vec::with_capacity(rows.len());
     for (id, name, transport, config, risk, enabled, health, checked) in rows {
-        let (tool_count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1")
-                .bind(id)
-                .fetch_one(&state.db)
-                .await
-                .map_err(|e| e.to_string())?;
+        let (tool_count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1 AND is_internal = FALSE",
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
 
         // Same rule as `GET /backends`: an owner sees the configuration with
         // secret values replaced by a placeholder, everyone else gets no
@@ -1181,7 +1191,9 @@ async fn test_connectivity(state: &AppState, args: &Value) -> Result<Value, Stri
             let agent_id = agent_id_of(&backend);
             if state.agent_registry.is_connected(&agent_id).await {
                 let (count,): (i64,) =
-                    sqlx::query_as("SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1")
+                    sqlx::query_as(
+                "SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1 AND is_internal = FALSE",
+            )
                         .bind(backend.id)
                         .fetch_one(&state.db)
                         .await
@@ -1254,7 +1266,7 @@ async fn stop_server(state: &AppState, args: &Value) -> Result<Value, String> {
     // had already switched off individually was not being served, so reporting
     // it as withdrawn here would overstate what just changed.
     let (withdrawn,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1 AND is_enabled = TRUE",
+        "SELECT COUNT(*) FROM tool_registry          WHERE backend_id = $1 AND is_enabled = TRUE AND is_internal = FALSE",
     )
     .bind(backend.id)
     .fetch_one(&state.db)
@@ -1336,12 +1348,13 @@ async fn server_status(state: &AppState, args: &Value) -> Result<Value, String> 
         }
         matched = true;
 
-        let (tool_count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1")
-                .bind(id)
-                .fetch_one(&state.db)
-                .await
-                .map_err(|e| e.to_string())?;
+        let (tool_count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1 AND is_internal = FALSE",
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
 
         let mut entry = json!({
             "name": name,

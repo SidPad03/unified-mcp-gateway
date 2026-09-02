@@ -123,6 +123,10 @@ export const api = {
   // Metrics
   getMetricsSummary: (range?: MetricsRange) =>
     request<MetricsSummary>(`/metrics/summary${range ? `?range=${range}` : ''}`),
+
+  getSettings: () => request<GatewaySettings>('/settings'),
+  updateSettings: (body: Partial<GatewaySettings>) =>
+    request<GatewaySettings>('/settings', { method: 'PATCH', body: JSON.stringify(body) }),
   // Security posture (owner-only): raw signals for the posture checklist card.
   getSecurityPosture: () => request<SecurityPosture>('/security/posture'),
 
@@ -298,6 +302,11 @@ export interface MetricsSummary {
 }
 
 export type MetricsRange = '24h' | '7d' | '30d';
+
+export interface GatewaySettings {
+  /** Whether the gateway offers its own `gateway_*` tools over MCP. */
+  gateway_tools_enabled: boolean;
+}
 
 export interface SecurityPostureOwner {
   username: string;

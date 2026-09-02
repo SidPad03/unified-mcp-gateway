@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-gateway-agent-core"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -714,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-gateway-agent-ffi"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "mcp-gateway-agent-core",
  "serde",

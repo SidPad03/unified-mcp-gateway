@@ -22,8 +22,12 @@ clients and MCP tool servers. Three components + Postgres.
 Alongside everything it routes, the gateway offers a `gateway_*` namespace that
 configures the gateway itself, and each connected agent offers an `agent_*`
 mirror for its own machine. They are not a side channel: they go through the
-same policy engine, carry categories from the same risk ladder, and land in the
-same audit trail, with an additional `owner` check on everything that writes.
+same policy engine and carry categories from the same risk ladder, with an
+additional `owner` check on everything that writes. They are, however,
+**invisible on the gateway** — `tool_registry.is_internal` keeps them off the
+Tools page and out of the counts, and their calls are written to the server log
+instead of the audit trail, so the trail stays about the traffic the operator's
+own tools carry. `Settings → Gateway tools` withdraws the namespace entirely.
 The namespaces cannot collide with a backend's tools, which are always
 `<backend>__<tool>`. See [docs/self-configuration.md](docs/self-configuration.md).
 
