@@ -5,15 +5,16 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use super::redactor::Redactor;
+use super::LiveEvent;
 
 pub struct AuditRecorder {
     pool: PgPool,
     redactor: Redactor,
-    event_tx: broadcast::Sender<String>,
+    event_tx: broadcast::Sender<LiveEvent>,
 }
 
 impl AuditRecorder {
-    pub fn new(pool: PgPool, event_tx: broadcast::Sender<String>) -> Self {
+    pub fn new(pool: PgPool, event_tx: broadcast::Sender<LiveEvent>) -> Self {
         Self {
             pool,
             redactor: Redactor::new(),
@@ -47,9 +48,17 @@ impl AuditRecorder {
         let request_hash = request_payload.map(hash_payload);
         let response_hash = response_payload.map(hash_payload);
 
-        // Redact payloads before storage
+        // Redact payloads before storage.
+        //
+        // `error_message` goes through the redactor as well: it is built from a
+        // backend's own response body (`Backend returned HTTP 401: {…}`), which
+        // is exactly where an upstream echoes back the credential the gateway
+        // just sent it. It was previously redacted only on the way to the live
+        // feed, so the Audit page and every database backup carried the
+        // plaintext the live feed had already hidden.
         let redacted_request = request_payload.map(|p| self.redactor.redact(p));
         let redacted_response = response_payload.map(|p| self.redactor.redact(p));
+        let redacted_error = error_message.map(|e| self.redactor.redact(e));
 
         let policy_uuid: Option<Uuid> = policy_id.and_then(|id| id.parse().ok());
 
@@ -72,15 +81,14 @@ impl AuditRecorder {
         .bind(redacted_response)
         .bind(duration_ms)
         .bind(status)
-        .bind(error_message)
+        .bind(redacted_error.as_deref())
         .bind(policy_decision)
         .bind(policy_uuid)
         .bind(application)
         .execute(&self.pool)
         .await?;
 
-        // Broadcast live event to connected dashboard clients (redact sensitive fields)
-        let redacted_error = error_message.map(|e| self.redactor.redact(e));
+        // Broadcast live event to connected dashboard clients
         let live = serde_json::json!({
             "type": "tool_call",
             "tool_name": tool_name,
@@ -93,7 +101,10 @@ impl AuditRecorder {
             "error_message": redacted_error,
             "user_id": user_id.map(|u| u.to_string()),
         });
-        let _ = self.event_tx.send(live.to_string());
+        let _ = self.event_tx.send(LiveEvent {
+            user_id,
+            json: live.to_string(),
+        });
 
         Ok(event_id)
     }

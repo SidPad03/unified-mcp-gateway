@@ -20,7 +20,13 @@ pub struct BackendResponse {
     pub health_status: String,
     pub last_health_check: Option<String>,
     pub created_at: String,
+    /// Tools this backend published, excluding the gateway's own control tools.
+    /// See [`tool_counts`] — this is the one definition of the noun.
     pub tool_count: i64,
+    /// The subset a call can still reach: `tool_count` minus the tools the
+    /// operator disabled, and zero when the backend itself is disabled. What
+    /// "behind the gate" means, and what `tools/list` will serve.
+    pub enabled_tool_count: i64,
 }
 
 #[derive(Deserialize)]
@@ -54,13 +60,78 @@ pub fn router() -> Router<AppState> {
 /// — two crates, one contract; change both together.
 const MASKED: &str = "__mcpgw_masked__";
 
-/// Strip secret-bearing fields (env vars, auth headers) from a backend config
-/// so they aren't exposed to non-admin callers. Admins keep the full config
-/// because they manage backends; everyone else only needs names/transport.
+/// The names a backend may not take.
+///
+/// `gateway` is what the audit trail files the gateway's own tools under
+/// (`api::mcp::Target::backend_name`), and migration 012 deletes every row
+/// filed under it. A backend allowed to take the name would have its history
+/// deleted along with them and would be indistinguishable from the gateway in
+/// every `backend=` filter.
+const RESERVED_BACKEND_NAMES: &[&str] = &["gateway"];
+
+/// Reject a backend name that cannot work before it reaches the unique index.
+///
+/// Applied on every write path — REST create and `gateway_register_backend` —
+/// because a name checked in one place and not the other is how `gateway`
+/// became registrable while `api::mcp` documented that it was not.
+pub(crate) fn validate_backend_name(name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("A backend needs a name".into());
+    }
+    if trimmed.len() > 255 {
+        return Err("A backend name may be at most 255 characters".into());
+    }
+    if trimmed.contains("__") {
+        return Err(
+            "A backend name cannot contain '__' — that is the tool namespace separator".into(),
+        );
+    }
+    if RESERVED_BACKEND_NAMES
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case(trimmed))
+    {
+        return Err(format!(
+            "'{trimmed}' is reserved — the gateway files its own tool calls under that name"
+        ));
+    }
+    Ok(())
+}
+
+/// Environment variables the gateway reads for itself, and which therefore must
+/// not reach a backend.
+///
+/// A stdio backend is third-party code the operator pointed at; the child
+/// inherits this process's environment, so without this list an `npx`-fetched
+/// server could read `JWT_SECRET` and mint an owner token, or read
+/// `DATABASE_URL` and go straight to Postgres past auth, policy and the audit
+/// trail. `the_gateways_own_secrets_are_stripped_from_a_backend` keeps the list
+/// in step with what the server actually reads.
+pub(crate) const GATEWAY_ONLY_ENV: &[&str] = &[
+    "JWT_SECRET",
+    "DATABASE_URL",
+    "MCPGW_ADMIN_PASSWORD",
+    "GITHUB_TOKEN",
+    "TEST_DATABASE_URL",
+];
+
+/// Strip secret-bearing fields from a backend config so they aren't exposed to
+/// non-admin callers. Admins keep the full config because they manage backends;
+/// everyone else only needs the transport and the mask flags.
+///
+/// `command`, `args` and `url` go with `env` and `headers`: a stdio argv
+/// routinely carries a credential — the dashboard's own Connect flow writes
+/// `["-y", "mcp-remote", url, "--header", "Authorization: Bearer …"]` — and an
+/// SSE URL can carry a session token in its query string. Removing only `env`
+/// and `headers` left both readable by any authenticated account on the page a
+/// non-owner lands on.
 pub(crate) fn redact_backend_config(mut config: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = config.as_object_mut() {
         obj.remove("env");
         obj.remove("headers");
+        obj.remove("command");
+        obj.remove("args");
+        obj.remove("url");
     }
     config
 }
@@ -173,6 +244,58 @@ fn tidy_masks(
     }
 }
 
+/// How many tools a backend has, for every backend, in one query.
+///
+/// **This is the only definition of "tools on this backend".** The noun is
+/// drawn on the Backends page, on Metrics → Backend health, on the Usage
+/// graph's backend nodes and by `gateway_list_backends`, and it was written out
+/// by hand at each of them with a different filter: one excluded internal
+/// tools, one excluded nothing, one excluded disabled tools instead. A
+/// connected Mac therefore read 6, 15 and 15 on three pages of the same
+/// gateway. Every caller now takes the pair from here.
+///
+/// `registered` is what the backend published and the gateway kept, minus the
+/// gateway's own control tools — the figure CHANGELOG 1.2.1 promised. `enabled`
+/// is the subset a `tools/call` can still reach, which is what "behind the
+/// gate" means and is always the smaller of the two.
+///
+/// One grouped query rather than a `COUNT(*)` per row: the old loop issued one
+/// round trip per backend on every page load, and this page polls.
+pub(crate) async fn tool_counts(
+    db: &sqlx::PgPool,
+) -> Result<std::collections::HashMap<Uuid, ToolCounts>, sqlx::Error> {
+    let rows: Vec<(Uuid, i64, i64)> = sqlx::query_as(
+        "SELECT b.backend_id, \
+                COUNT(t.tool_id) FILTER (WHERE t.is_internal = FALSE), \
+                COUNT(t.tool_id) FILTER (WHERE t.is_internal = FALSE AND t.is_enabled = TRUE AND b.is_enabled = TRUE) \
+         FROM backends b \
+         LEFT JOIN tool_registry t ON t.backend_id = b.backend_id \
+         GROUP BY b.backend_id",
+    )
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(backend_id, registered, enabled)| {
+            (
+                backend_id,
+                ToolCounts {
+                    registered,
+                    enabled,
+                },
+            )
+        })
+        .collect())
+}
+
+/// The two figures [`tool_counts`] returns. `enabled <= registered`, always.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ToolCounts {
+    pub registered: i64,
+    pub enabled: i64,
+}
+
 /// Bring a backend up and register whatever it advertises.
 ///
 /// `Ok(None)` means there was nothing here to start: an `agent` backend runs on
@@ -267,6 +390,8 @@ async fn list_backends(
     .fetch_all(&state.db)
     .await?;
 
+    let counts = tool_counts(&state.db).await?;
+
     let mut result = Vec::new();
     for (
         backend_id,
@@ -280,12 +405,9 @@ async fn list_backends(
         created_at,
     ) in backends
     {
-        let (tool_count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM tool_registry WHERE backend_id = $1 AND is_internal = FALSE",
-        )
-        .bind(backend_id)
-        .fetch_one(&state.db)
-        .await?;
+        let count = counts.get(&backend_id).copied().unwrap_or_default();
+        let tool_count = count.registered;
+        let enabled_tool_count = count.enabled;
 
         let config = if is_admin {
             mask_secret_values(config)
@@ -304,6 +426,7 @@ async fn list_backends(
             last_health_check: last_health_check.map(|t| t.to_rfc3339()),
             created_at: created_at.to_rfc3339(),
             tool_count,
+            enabled_tool_count,
         });
     }
 
@@ -322,6 +445,8 @@ async fn create_backend(
             "Transport must be 'stdio', 'streamable-http', 'sse', or 'agent'".into(),
         ));
     }
+
+    validate_backend_name(&req.name).map_err(AppError::BadRequest)?;
 
     // Nothing to restore a placeholder from on a brand new backend, but the
     // JSON editor can carry one over from a config it was shown, and storing it
@@ -377,7 +502,11 @@ async fn create_backend(
         health_status,
         last_health_check: Some(chrono::Utc::now().to_rfc3339()),
         created_at: chrono::Utc::now().to_rfc3339(),
+        // A backend is created enabled, and discovery registers every tool
+        // enabled, so the two are equal for exactly as long as this response
+        // takes to reach the client.
         tool_count,
+        enabled_tool_count: tool_count,
     }))
 }
 
@@ -667,10 +796,97 @@ mod tests {
         assert_eq!(restore_masked_values(masked, &config), config);
     }
 
+    /// A non-owner gets the shape of a backend, never anything that can carry a
+    /// credential. An argv is one of those: the dashboard's own Connect flow
+    /// writes `["-y", "mcp-remote", url, "--header", "Authorization: Bearer …"]`
+    /// into exactly this field.
     #[test]
-    fn a_non_admin_still_gets_no_env_block_at_all() {
+    fn a_non_admin_gets_no_env_no_headers_and_no_command_line() {
         let redacted = redact_backend_config(stored());
         assert!(redacted.get("env").is_none());
-        assert_eq!(redacted["command"], "gitea-mcp");
+        assert!(redacted.get("headers").is_none());
+        assert!(redacted.get("command").is_none());
+        assert!(redacted.get("args").is_none());
+        assert!(redacted.get("url").is_none());
+
+        let redacted = redact_backend_config(json!({
+            "url": "https://example.test/sse?token=sk-live-1234",
+            "headers": {"Authorization": "Bearer sk-live-1234"},
+        }));
+        assert!(redacted.get("url").is_none());
+        assert!(redacted.get("headers").is_none());
+    }
+
+    #[test]
+    fn the_audit_trails_own_backend_name_is_not_registrable() {
+        // `api::mcp::Target::backend_name` files the gateway's own tool calls
+        // under `gateway`, and migration 012 deletes every row filed under it.
+        assert!(validate_backend_name("gateway").is_err());
+        assert!(validate_backend_name("GATEWAY").is_err());
+        assert!(validate_backend_name("  gateway  ").is_err());
+
+        assert!(validate_backend_name("gateway-of-gateways").is_ok());
+        assert!(validate_backend_name("filesystem").is_ok());
+    }
+
+    #[test]
+    fn a_backend_name_cannot_carry_the_namespace_separator_or_be_blank() {
+        assert!(validate_backend_name("").is_err());
+        assert!(validate_backend_name("   ").is_err());
+        assert!(validate_backend_name("my__backend").is_err());
+        assert!(validate_backend_name(&"n".repeat(256)).is_err());
+        assert!(validate_backend_name(&"n".repeat(255)).is_ok());
+    }
+
+    /// The list exists so a stdio backend cannot read the gateway's own
+    /// secrets out of the environment it inherits. A variable the server
+    /// starts reading and nobody adds here is a silent regression, so the
+    /// test reads `src/` rather than trusting the list.
+    #[test]
+    fn the_gateways_own_secrets_are_stripped_from_a_backend() {
+        const NOT_SECRET: &[&str] = &[
+            "RUST_LOG",
+            "LISTEN_ADDR",
+            "CARGO_PKG_VERSION",
+            "UPDATE_CHECK_REPO",
+            "UPDATE_CHECK_DISABLED",
+        ];
+
+        let mut missing = Vec::new();
+        for entry in walk_rs(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")) {
+            let body = std::fs::read_to_string(&entry).unwrap();
+            for (_, rest) in body
+                .match_indices("env::var(\"")
+                .map(|(i, m)| (i, &body[i + m.len()..]))
+            {
+                let Some(end) = rest.find('"') else { continue };
+                let name = &rest[..end];
+                if NOT_SECRET.contains(&name) || GATEWAY_ONLY_ENV.contains(&name) {
+                    continue;
+                }
+                missing.push(format!("{name} (read in {})", entry.display()));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "the server reads these and they are neither listed in GATEWAY_ONLY_ENV nor \
+             marked harmless: {missing:?}"
+        );
+    }
+
+    fn walk_rs(dir: std::path::PathBuf) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(walk_rs(path));
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+        out
     }
 }

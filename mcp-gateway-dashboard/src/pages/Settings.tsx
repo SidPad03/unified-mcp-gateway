@@ -3,27 +3,14 @@ import { api, Tool } from '@/lib/api';
 import { useUpdateCheck } from '@/hooks/useUpdateCheck';
 import { Sparkles, Key, Eye, EyeOff, Loader2, CheckCircle, AlertTriangle, X, Info, Link, RefreshCw, Wrench } from 'lucide-react';
 import clsx from 'clsx';
-import { PageHeader } from '@/components/ui';
+// The risk ramp has one definition. Settings used to carry its own map, which
+// painted `read` in the accent — the colour that means "healthy" everywhere
+// else — and `write`, `execute` and `unclassified` in one identical grey, so a
+// tool reclassified write → execute showed the same colour on both sides of the
+// arrow in the very table an operator uses to review the change.
+import { PageHeader, RISK_LEVELS, riskColor } from '@/components/ui';
 
-const RISK_COLORS: Record<string, string> = {
-  read: 'text-beam',
-  write: 'text-ink-2',
-  admin: 'text-warn',
-  destructive: 'text-deny',
-  execute: 'text-ink-2',
-  unclassified: 'text-ink-2',
-};
-
-const RISK_BG: Record<string, string> = {
-  read: 'bg-beam-wash border-beam-edge',
-  write: 'bg-neutral-wash border-line',
-  admin: 'bg-warn-wash border-warn-edge',
-  destructive: 'bg-deny-wash border-deny-edge',
-  execute: 'bg-neutral-wash border-line',
-  unclassified: 'bg-neutral-wash border-line',
-};
-
-const RISK_CATEGORIES = ['read', 'write', 'admin', 'destructive', 'execute', 'unclassified'];
+const RISK_CATEGORIES = RISK_LEVELS as readonly string[];
 
 /** Owner check from the cached session, matching useAuth's `isAdmin`. */
 function useIsOwner(): boolean {
@@ -590,10 +577,10 @@ No other text.`
                     <tr key={i} className="border-b border-line-soft">
                       <td className="px-4 py-2 text-xs text-ink-2 font-mono">{r.tool}</td>
                       <td className="px-4 py-2">
-                        <span className={clsx('text-xs', RISK_COLORS[r.from] || 'text-ink-2')}>{r.from}</span>
+                        <span className="text-xs" style={{ color: riskColor(r.from) }}>{r.from}</span>
                       </td>
                       <td className="px-4 py-2">
-                        <span className={clsx('text-xs font-medium', RISK_COLORS[r.to] || 'text-ink-2')}>{r.to}</span>
+                        <span className="text-xs font-medium" style={{ color: riskColor(r.to) }}>{r.to}</span>
                       </td>
                     </tr>
                   ))}

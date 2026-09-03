@@ -73,7 +73,12 @@ pub struct AuditQuery {
 #[derive(Serialize)]
 pub struct AuditExportResponse {
     pub events: Vec<AuditEventResponse>,
+    /// Every row matching the filter, not the number returned. A client that
+    /// writes `events` to a file has to compare the two before calling it a
+    /// complete export.
     pub total: i64,
+    /// `total` exceeds what this response carries.
+    pub truncated: bool,
 }
 
 pub fn router() -> Router<AppState> {
@@ -83,28 +88,16 @@ pub fn router() -> Router<AppState> {
         .route("/audit/stats", get(audit_stats))
 }
 
-async fn query_audit(
-    State(state): State<AppState>,
-    claims: Claims,
-    Query(query): Query<AuditQuery>,
-) -> Result<Json<AuditExportResponse>, AppError> {
-    // Clamp to [1, 500]: `.min(500)` alone let a negative `limit` (e.g. -1) through
-    // to the SQL LIMIT, bypassing the row cap.
-    let limit = query.limit.unwrap_or(50).clamp(1, 500);
-    let offset = query.offset.unwrap_or(0);
-
-    // Non-admin users can only see their own events
-    let user_filter = if !claims.roles.contains(&"owner".to_string()) {
-        Some(claims.sub.clone())
-    } else {
-        query.user_id.clone()
-    };
-
-    // Build dynamic query with sqlx::QueryBuilder
-    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
-        "SELECT event_id, timestamp, trace_id, session_id, user_id, client_id, tool_name, backend_name, risk_category, request_hash, response_hash, duration_ms, status, error_message, policy_decision, policy_id, COALESCE(risk_flags, '[]'::jsonb) as risk_flags, COALESCE(metadata, '{}'::jsonb) as metadata, application FROM audit_events WHERE 1=1"
-    );
-
+/// Append the shared `WHERE` clauses to a query over `audit_events`.
+///
+/// The rows query, its `COUNT(*)` and the export all have to filter identically
+/// or the trail reports one thing and hands you another: the count was written
+/// out three times by hand, and the export was written not at all.
+fn push_audit_filters(
+    qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>,
+    query: &AuditQuery,
+    user_filter: Option<&str>,
+) {
     if let Some(ref tool) = query.tool_name {
         qb.push(" AND tool_name ILIKE '%' || ");
         qb.push_bind(tool.clone());
@@ -118,7 +111,7 @@ async fn query_audit(
         qb.push(" AND status = ");
         qb.push_bind(status.clone());
     }
-    if let Some(ref uid) = user_filter {
+    if let Some(uid) = user_filter {
         qb.push(" AND user_id = ");
         qb.push_bind(Uuid::parse_str(uid).unwrap_or_default());
     }
@@ -146,53 +139,37 @@ async fn query_audit(
             qb.push_bind(to_dt.with_timezone(&chrono::Utc));
         }
     }
+}
+
+async fn query_audit(
+    State(state): State<AppState>,
+    claims: Claims,
+    Query(query): Query<AuditQuery>,
+) -> Result<Json<AuditExportResponse>, AppError> {
+    // Clamp to [1, 500]: `.min(500)` alone let a negative `limit` (e.g. -1) through
+    // to the SQL LIMIT, bypassing the row cap.
+    let limit = query.limit.unwrap_or(50).clamp(1, 500);
+    let offset = query.offset.unwrap_or(0);
+
+    // Non-admin users can only see their own events
+    let user_filter = if !claims.roles.contains(&"owner".to_string()) {
+        Some(claims.sub.clone())
+    } else {
+        query.user_id.clone()
+    };
+
+    // Build dynamic query with sqlx::QueryBuilder
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "SELECT event_id, timestamp, trace_id, session_id, user_id, client_id, tool_name, backend_name, risk_category, request_hash, response_hash, duration_ms, status, error_message, policy_decision, policy_id, COALESCE(risk_flags, '[]'::jsonb) as risk_flags, COALESCE(metadata, '{}'::jsonb) as metadata, application FROM audit_events WHERE 1=1"
+    );
+    push_audit_filters(&mut qb, &query, user_filter.as_deref());
 
     // Count query (same filters)
     let mut count_qb =
         sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT COUNT(*) FROM audit_events WHERE 1=1");
-    if let Some(ref tool) = query.tool_name {
-        count_qb.push(" AND tool_name ILIKE '%' || ");
-        count_qb.push_bind(tool.clone());
-        count_qb.push(" || '%'");
-    }
-    if let Some(ref backend) = query.backend {
-        count_qb.push(" AND backend_name = ");
-        count_qb.push_bind(backend.clone());
-    }
-    if let Some(ref status) = query.status {
-        count_qb.push(" AND status = ");
-        count_qb.push_bind(status.clone());
-    }
-    if let Some(ref uid) = user_filter {
-        count_qb.push(" AND user_id = ");
-        count_qb.push_bind(Uuid::parse_str(uid).unwrap_or_default());
-    }
-    if let Some(ref risk) = query.risk_category {
-        count_qb.push(" AND risk_category = ");
-        count_qb.push_bind(risk.clone());
-    }
-    if let Some(ref decision) = query.policy_decision {
-        count_qb.push(" AND policy_decision = ");
-        count_qb.push_bind(decision.clone());
-    }
-    if let Some(ref app) = query.application {
-        count_qb.push(" AND application = ");
-        count_qb.push_bind(app.clone());
-    }
-    if let Some(ref from) = query.from {
-        if let Ok(from_dt) = chrono::DateTime::parse_from_rfc3339(from) {
-            count_qb.push(" AND timestamp >= ");
-            count_qb.push_bind(from_dt.with_timezone(&chrono::Utc));
-        }
-    }
-    if let Some(ref to) = query.to {
-        if let Ok(to_dt) = chrono::DateTime::parse_from_rfc3339(to) {
-            count_qb.push(" AND timestamp <= ");
-            count_qb.push_bind(to_dt.with_timezone(&chrono::Utc));
-        }
-    }
+    push_audit_filters(&mut count_qb, &query, user_filter.as_deref());
 
-    qb.push(" ORDER BY timestamp DESC LIMIT ");
+    qb.push(" ORDER BY timestamp DESC, event_id DESC LIMIT ");
     qb.push_bind(limit);
     qb.push(" OFFSET ");
     qb.push_bind(offset);
@@ -226,27 +203,40 @@ async fn query_audit(
         .collect();
 
     Ok(Json(AuditExportResponse {
+        truncated: total.0 > result.len() as i64,
         events: result,
         total: total.0,
     }))
 }
 
+/// The whole trail, or as much of it as one response can carry.
+///
+/// It takes the same filters as `GET /audit` so an export from a filtered view
+/// is that view. It also reports the real `total`, not the number of rows it
+/// managed to return: the dashboard used to export through `GET /audit`, which
+/// clamps `limit` to 500, so a 40,000-event trail downloaded as 500 rows with
+/// nothing saying so — next to a Clear button that then truncated the table.
+const EXPORT_LIMIT: i64 = 10_000;
+
 async fn export_audit(
     State(state): State<AppState>,
     claims: Claims,
+    Query(query): Query<AuditQuery>,
 ) -> Result<Json<AuditExportResponse>, AppError> {
     super::auth::require_admin(&claims)?;
 
-    let events: Vec<AuditEventRow> = sqlx::query_as(
-        "SELECT event_id, timestamp, trace_id, session_id, user_id, client_id, tool_name, backend_name, risk_category, request_hash, response_hash, duration_ms, status, error_message, policy_decision, policy_id, COALESCE(risk_flags, '[]'::jsonb) as risk_flags, COALESCE(metadata, '{}'::jsonb) as metadata, application
-         FROM audit_events
-         ORDER BY timestamp DESC
-         LIMIT 10000"
-    )
-    .fetch_all(&state.db)
-    .await?;
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "SELECT event_id, timestamp, trace_id, session_id, user_id, client_id, tool_name, backend_name, risk_category, request_hash, response_hash, duration_ms, status, error_message, policy_decision, policy_id, COALESCE(risk_flags, '[]'::jsonb) as risk_flags, COALESCE(metadata, '{}'::jsonb) as metadata, application FROM audit_events WHERE 1=1"
+    );
+    push_audit_filters(&mut qb, &query, query.user_id.as_deref());
+    qb.push(" ORDER BY timestamp DESC, event_id DESC LIMIT ");
+    qb.push_bind(EXPORT_LIMIT);
+    let events: Vec<AuditEventRow> = qb.build_query_as().fetch_all(&state.db).await?;
 
-    let total = events.len() as i64;
+    let mut count_qb =
+        sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT COUNT(*) FROM audit_events WHERE 1=1");
+    push_audit_filters(&mut count_qb, &query, query.user_id.as_deref());
+    let (total,): (i64,) = count_qb.build_query_as().fetch_one(&state.db).await?;
 
     let result: Vec<AuditEventResponse> = events
         .into_iter()
@@ -274,6 +264,7 @@ async fn export_audit(
         .collect();
 
     Ok(Json(AuditExportResponse {
+        truncated: total > result.len() as i64,
         events: result,
         total,
     }))

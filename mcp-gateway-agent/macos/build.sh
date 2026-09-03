@@ -82,7 +82,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$VERSION" ]]; then
-  # The version of record lives in the FFI crate; CI patches it there.
+  # A local build with no --version falls back to the FFI crate's, which tracks
+  # the release. CI does not patch that file: agent-app.yml is handed the
+  # version its caller computed and passes it as --version.
   VERSION="$(grep '^version' "$AGENT_ROOT/ffi/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')"
 fi
 

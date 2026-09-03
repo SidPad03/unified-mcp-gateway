@@ -9,7 +9,10 @@ Authorization: Bearer <jwt_or_mcpgw_api_key>
 
 Endpoints marked **owner** require the `owner` role. Endpoints marked **scoped**
 are available to any authenticated user but return only that user's own rows
-unless the caller is an owner.
+unless the caller is an owner. Endpoints marked **self or owner** take a
+`{user_id}`, and a non-owner may only name themselves.
+
+An endpoint with no marker is readable by any authenticated caller.
 
 ---
 
@@ -114,8 +117,14 @@ Query audit events.
 | `policy_decision` | string | `allow`, `deny` |
 | `from` / `to` | ISO 8601 | Time bounds |
 | `application` | string | Filter by calling application |
-| `limit` | int | Page size (default 50) |
+| `limit` | int | Page size, default 50, clamped to 1..500. A larger value is silently reduced, so compare `events.length` against `total` before treating a response as complete |
 | `offset` | int | Pagination offset |
+
+The response is `{ events, total, truncated }`. `total` counts every event
+matching the filter, `events` carries at most `limit` of them, and `truncated`
+says the two differ. Rows are ordered `timestamp DESC, event_id DESC` — the
+tiebreaker matters, because a burst of calls shares a millisecond and an offset
+page over an unstable order can repeat a row or skip one.
 
 > `tool_error` is a distinct status meaning the backend returned a result with
 > `isError: true`. It is a failure, and it is counted as one in `error_count`
@@ -123,21 +132,18 @@ Query audit events.
 
 ### `GET /api/v1/audit/export` — **owner**
 
-Returns the 10,000 most recent events, newest first. Unlike `GET /audit` it
-takes no filter parameters and is not scoped to the caller.
+Returns up to 10,000 events, newest first, and takes the same filter parameters
+as `GET /audit`. The response is the same `{ events, total, truncated }` shape,
+so a caller writing the file can tell a complete export from a slice.
 
 ### `GET /api/v1/audit/stats`
 
 | Parameter | Description |
 |-----------|-------------|
-| `backend` | One backend only. The macOS agent passes its own `backend_id` so it can show this machine's volume, error rate and latency without pulling rows |
+| `backend` | One backend only, by **name** (`backends.name`, which is what `audit_events.backend_name` holds) — not the UUID. The macOS agent passes its own agent id, which is that name. `all` or empty means every backend |
 | `user_id` | Owners only; `all` aggregates across every user |
 
 Scoped exactly as `GET /audit` is: a non-owner sees only their own events.
-
-> **Changed in 1.0.0.** This endpoint previously returned deployment-wide counts
-> and the global top-tools list to any authenticated caller, leaking both volume
-> and tool names across accounts.
 
 ```json
 {
@@ -211,14 +217,24 @@ creating or updating a policy, not when updating the role.
 ```json
 {
   "name": "Block destructive ops",
-  "priority": 1,
   "tool_pattern": "*__delete_*,*__remove_*",
   "decision": "deny",
   "reason": "Destructive operations are not allowed",
+  "role_ids": ["<role_uuid>"],
   "risk_categories": ["destructive"],
   "application_match": null
 }
 ```
+
+`POST` does not take a `priority`: it assigns `MAX(priority) + 1`, which puts a
+new rule **last** in the chain. A fresh gateway is seeded with `Allow all tools`
+at priority 2, and the first match wins — so a deny rule created this way is
+behind the catch-all and never fires. Follow the create with
+`PUT /api/v1/policies/{policy_id}` carrying the `priority` you want.
+
+`role_ids` is not optional in practice. A policy bound to no role is never
+loaded by the engine, which reads rules through `role_policies`, so it is inert
+however it is drawn.
 
 See [Authentication & Authorization](authentication.md#policy-engine) for how
 rules are evaluated.
@@ -233,10 +249,10 @@ rules are evaluated.
 | `POST /api/v1/api-keys` — **owner** | Create a key. The plaintext is returned **once**. |
 | `PATCH /api/v1/api-keys/{key_id}` — **owner** | Rename a key. This endpoint accepts only `name`; there is no enable/disable. |
 | `DELETE /api/v1/api-keys/{key_id}` — **owner** | Revoke a key — takes effect immediately |
-| `GET /api/v1/api-keys/by-user/{user_id}` | Keys belonging to a user. Self or owner. |
-| `POST /api/v1/api-keys/provision/{user_id}` | Create the per-application key set for a user. Self or owner. |
-| `POST /api/v1/api-keys/reveal/{user_id}` | Reveal stored per-application keys so a client config can be copied |
-| `POST /api/v1/api-keys/rotate` | Regenerate a single per-application key |
+| `GET /api/v1/api-keys/by-user/{user_id}` — **self or owner** | Keys belonging to a user (metadata only) |
+| `POST /api/v1/api-keys/provision/{user_id}` — **self or owner** | Create the per-application key set for a user |
+| `POST /api/v1/api-keys/reveal/{user_id}` — **self or owner** | Return the stored per-application keys **in plaintext**, so a client config can be copied. A key created before 1.1.0 has no stored ciphertext and is rotated to produce one |
+| `POST /api/v1/api-keys/rotate` — **self or owner** | Revoke one per-application key and issue a replacement. `user_id` defaults to the caller |
 
 Keys are `mcpgw_`-prefixed. Store them at creation time.
 
@@ -263,9 +279,41 @@ Same shape, every field optional. Returns the full settings object.
 
 ---
 
+## Security
+
+### `GET /api/v1/security/posture` — **owner**
+
+The signals behind the Metrics page's security checklist. Deliberately raw: the
+endpoint reports facts and the card decides what is a pass and what is a
+warning, because an aggregate "you are secure" verdict over three checks would
+manufacture assurance the gateway cannot give.
+
+```json
+{
+  "listen_addr": "0.0.0.0:3200",
+  "listen_addr_public": true,
+  "admin_password_change_pending": false,
+  "active_owner_count": 1,
+  "owners": [{ "username": "admin", "last_login": "2026-09-03T21:52:54Z" }]
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `listen_addr` | What `LISTEN_ADDR` resolved to |
+| `listen_addr_public` | The listener is not on loopback, so it is reachable from off the machine |
+| `admin_password_change_pending` | An active account still owes its first-login password change |
+| `active_owner_count` / `owners` | Active accounts holding the `owner` role. Zero means nobody can administer the gateway |
+
+---
+
 ## Metrics
 
-### `GET /api/v1/metrics/summary`
+### `GET /api/v1/metrics/summary` — **owner**
+
+Every figure here is a deployment-wide aggregate with no per-user meaning, so it
+is gated like the other global aggregates. `GET /audit/stats` is the per-user
+view of the same rows.
 
 Dashboard metrics: `calls_in_range`, backend and tool counts, `avg_latency_ms`,
 `error_rate`, `latency_percentiles` (p50/p95/p99), `top_tools`,
@@ -280,17 +328,19 @@ touch.
 The window is echoed back as `range`, and `volume_bucket` (`hour` or `day`) says
 how wide one point of `volume` is — thirty days of hourly points is 720 of them.
 
-> **Changed in 1.2.0.** `calls_last_24h` → `calls_in_range`, `top_tools_24h` →
-> `top_tools`, and `hourly_volume` → `volume` with its `hour` field renamed
-> `bucket`. The default window is unchanged, so the values a caller was getting
-> are the values it still gets — only the names moved, because the old ones
-> would have been wrong for any range but the first.
+`calls_by_risk[].risk_category` carries the same six values the rest of the
+product uses (`read`, `write`, `execute`, `admin`, `destructive`,
+`unclassified`); a call whose tool has no classification is reported as
+`unclassified`, not as a seventh word. A client must still render a category it
+does not recognise rather than dropping it, or the percentages it computes will
+be over a subset of the traffic.
 
 ### `GET /metrics`
 
 Prometheus text-format metrics, served at the **root**, not under `/api/v1`.
 
-> This endpoint is currently unauthenticated. Do not expose it publicly — scrape
+> This endpoint is unauthenticated, so Prometheus can scrape it without a
+> credential. Do not expose it publicly — scrape
 > it from an internal network or restrict it at your reverse proxy.
 
 ---
@@ -303,7 +353,9 @@ Prometheus text-format metrics, served at the **root**, not under `/api/v1`.
 | `GET /api/v1/usage/connections` | Connection-level usage records |
 
 Owners may pass `user_id=all` to aggregate across every user; other callers see
-only their own activity. `range` accepts `24h`, `7d` (default) or `30d`.
+only their own activity, whatever they pass. `/usage/graph` also takes `range`
+(`24h`, `7d` — the default — or `30d`) and `backend`, a backend **name** that
+narrows the whole graph to one machine. `/usage/connections` takes neither.
 
 `GET /usage/graph` also takes an optional **`backend`** filter, added in 1.0.0
 for the macOS agent. It is applied inside the SQL rather than to the results,
@@ -402,9 +454,21 @@ operator put behind it. See [Self-Configuration Tools](self-configuration.md).
 
 ### `GET /agent/ws` (WebSocket)
 
-Where remote agents connect. See [Agent Architecture](agent-architecture.md).
+Where remote agents connect. The agent sends its API key in an `Authorization:
+Bearer` header on the upgrade request; a `?token=` query parameter is accepted
+as a fallback for older agents, and should not be used — a URL is the one part
+of a request that every proxy writes to disk. See
+[Agent Architecture](agent-architecture.md).
 
 ### `GET /api/v1/ws/live` (WebSocket)
 
-Live event feed powering the dashboard's real-time view. Authenticated;
-non-owners receive only their own events.
+Live event feed powering the dashboard's real-time view.
+
+Authenticated by the same rules as every REST request: a JWT or an `mcpgw_` key,
+re-checked against `users.is_active` and the current roles, and refused for an
+account that still owes a first-login password change. Non-owners receive only
+their own events.
+
+A browser cannot set a header on a WebSocket, so the dashboard passes its token
+as `?token=`. Turn off query-string logging on this path, or accept that the
+token lands in your proxy's access log.

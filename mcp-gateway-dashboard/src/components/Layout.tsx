@@ -16,6 +16,7 @@ import {
   Users,
   Wrench,
   X,
+  type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { BrandLockup } from '@/components/BrandMark';
@@ -37,6 +38,13 @@ interface Props {
  * thing is for. Three groups, in the order the questions actually get asked:
  * what is connected and what may it do; what went through; who runs it.
  */
+interface NavItem {
+  to: string;
+  icon: LucideIcon;
+  label: string;
+  admin: boolean;
+}
+
 const GROUPS = [
   {
     label: 'Gateway',
@@ -81,6 +89,15 @@ export default function Layout({ children, auth }: Props) {
   // The off-canvas nav is a navigation surface, so a navigation closes it.
   useEffect(() => setNavOpen(false), [location.pathname]);
 
+  // The tab title is how an operator finds this window among ten of them, and
+  // among several gateways. It said "MCP Gateway" on every page.
+  useEffect(() => {
+    const here = GROUPS.flatMap(g => g.items as readonly NavItem[]).find(
+      i => i.to === location.pathname
+    );
+    document.title = here ? `${here.label} · MCP Gateway` : 'MCP Gateway';
+  }, [location.pathname]);
+
   useEffect(() => {
     if (!navOpen) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setNavOpen(false);
@@ -94,6 +111,14 @@ export default function Layout({ children, auth }: Props) {
     // with `min-h-0` on the scroller also avoids doing viewport arithmetic by
     // hand — the top bar simply takes its height and the content gets the rest.
     <div className="flex flex-col lg:flex-row h-dvh overflow-hidden">
+      {/* Thirteen nav links sit before the content on every page. */}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:h-8 focus:px-3 focus:inline-flex focus:items-center focus:rounded-control focus:bg-high focus:border focus:border-line focus:text-xs focus:text-ink"
+      >
+        Skip to content
+      </a>
+
       {/* Narrow screens: a slim bar with the mark and a way into the nav. */}
       <div className="lg:hidden flex items-center gap-3 h-12 shrink-0 px-3 border-b border-line bg-void">
         <IconButton icon={Menu} label="Open navigation" onClick={() => setNavOpen(true)} />
@@ -112,7 +137,7 @@ export default function Layout({ children, auth }: Props) {
 
       {/* The sidebar shares the canvas colour — one plane, divided by a hairline.
           Giving it its own fill would split the app into two worlds. */}
-      <main className="flex-1 min-h-0 min-w-0 overflow-y-auto">
+      <main id="main" tabIndex={-1} className="flex-1 min-h-0 min-w-0 overflow-y-auto">
         {bleed ? (
           children
         ) : (

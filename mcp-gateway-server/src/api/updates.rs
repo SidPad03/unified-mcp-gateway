@@ -41,6 +41,23 @@ const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const TAG_PREFIX: &str = "gateway-v";
 const DEFAULT_REPO: &str = "SidPad03/unified-mcp-gateway";
 
+/// Whether `UPDATE_CHECK_DISABLED` turns the check off.
+///
+/// Tested for a value rather than for presence. `is_ok()` meant that setting it
+/// to `false` disabled the check, which is the opposite of what it reads as —
+/// and it meant compose could not pass the variable through with an empty
+/// default, because an empty string counted as "disabled" for every deployment
+/// that had not set it.
+fn update_check_disabled() -> bool {
+    match std::env::var("UPDATE_CHECK_DISABLED") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        ),
+        Err(_) => false,
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new().route("/updates/check", get(check_for_updates))
 }
@@ -116,7 +133,7 @@ async fn check_for_updates(
         error: None,
     };
 
-    if std::env::var("UPDATE_CHECK_DISABLED").is_ok() {
+    if update_check_disabled() {
         status.error = Some("Update checks are disabled on this deployment.".into());
         return Ok(Json(status));
     }
@@ -241,6 +258,33 @@ fn is_newer(latest: &str, current: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// `UPDATE_CHECK_DISABLED=false` used to disable the check, because
+    /// presence was the test. An air-gapped operator setting it to `1` and a
+    /// compose file passing it through empty must not mean the same thing.
+    #[test]
+    fn the_disable_switch_reads_its_value() {
+        let _guard = crate::test_support::lock_env();
+        for (value, expected) in [
+            ("1", true),
+            ("true", true),
+            ("yes", true),
+            ("", false),
+            ("0", false),
+            ("false", false),
+            ("  FALSE  ", false),
+            ("off", false),
+        ] {
+            std::env::set_var("UPDATE_CHECK_DISABLED", value);
+            assert_eq!(
+                super::update_check_disabled(),
+                expected,
+                "UPDATE_CHECK_DISABLED={value:?}"
+            );
+        }
+        std::env::remove_var("UPDATE_CHECK_DISABLED");
+        assert!(!super::update_check_disabled());
+    }
+
     use super::*;
 
     fn rel(tag: &str) -> GithubRelease {

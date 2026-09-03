@@ -22,3 +22,16 @@ pub fn lock_env() -> tokio::sync::MutexGuard<'static, ()> {
 pub async fn lock_env_async() -> tokio::sync::MutexGuard<'static, ()> {
     ENV_LOCK.lock().await
 }
+
+/// Serialises every test that touches `TEST_DATABASE_URL`.
+///
+/// They all point at one scratch database and all start by emptying it, so
+/// concurrently they delete each other's fixtures mid-test. The failure is a
+/// missing row in an unrelated assertion, which reads as a broken fix rather
+/// than as a broken harness.
+pub static DB_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Acquire the database lock from a `#[tokio::test]`.
+pub async fn lock_db() -> tokio::sync::MutexGuard<'static, ()> {
+    DB_LOCK.lock().await
+}

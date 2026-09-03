@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api, AuditEvent, User } from '@/lib/api';
 import { ChevronLeft, ChevronRight, Download, ScrollText, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
@@ -57,13 +57,16 @@ export default function AuditTimeline() {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [exportNote, setExportNote] = useState('');
   const [page, setPage] = useState(0);
+  /** Monotonic id of the newest in-flight request; older ones are dropped. */
+  const requestSeq = useRef(0);
   const [pageError, setPageError] = useState('');
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [userFilter, setUserFilter] = useState('');
-  const [clientFilter, setClientFilter] = useState('');
   const [backendFilter, setBackendFilter] = useState('');
   const [riskFilter, setRiskFilter] = useState('');
   const [policyFilter, setPolicyFilter] = useState('');
@@ -79,7 +82,6 @@ export default function AuditTimeline() {
   const limit = 20;
 
   const [knownUsers, setKnownUsers] = useState<string[]>([]);
-  const [knownClients, setKnownClients] = useState<string[]>([]);
   const [knownBackends, setKnownBackends] = useState<string[]>([]);
 
   useEffect(() => {
@@ -88,7 +90,6 @@ export default function AuditTimeline() {
     page,
     statusFilter,
     userFilter,
-    clientFilter,
     backendFilter,
     riskFilter,
     policyFilter,
@@ -108,47 +109,71 @@ export default function AuditTimeline() {
     try {
       const data = await api.getAuditEvents({ limit: '500', offset: '0' });
       setKnownUsers([...new Set(data.events.map(e => e.user_id).filter(Boolean) as string[])]);
-      setKnownClients([...new Set(data.events.map(e => e.client_id).filter(Boolean) as string[])]);
       setKnownBackends([...new Set(data.events.map(e => e.backend_name).filter(Boolean))]);
     } catch {
       /* filters degrade to free text; the timeline still loads */
     }
   };
 
+  /** The filters as the server takes them. Shared with Export so the file is
+   *  the view, not an unfiltered slice of the newest rows. */
+  const filterParams = (): Record<string, string> => {
+    const params: Record<string, string> = {};
+    if (statusFilter) params.status = statusFilter;
+    if (search) params.tool_name = search;
+    if (userFilter) params.user_id = userFilter;
+    if (backendFilter) params.backend = backendFilter;
+    if (riskFilter) params.risk_category = riskFilter;
+    if (policyFilter) params.policy_decision = policyFilter;
+    if (applicationFilter) params.application = applicationFilter;
+    if (dateFrom) params.from = `${dateFrom}T00:00:00Z`;
+    if (dateTo) params.to = `${dateTo}T23:59:59Z`;
+    return params;
+  };
+
   const loadEvents = async () => {
+    // Filter changes fire requests that do not return in order. Anything but
+    // the newest is discarded, so the rows on screen always belong to the
+    // controls above them.
+    const seq = ++requestSeq.current;
     setLoading(true);
     try {
-      const params: Record<string, string> = {
+      const data = await api.getAuditEvents({
+        ...filterParams(),
         limit: String(limit),
         offset: String(page * limit),
-      };
-      if (statusFilter) params.status = statusFilter;
-      if (search) params.tool_name = search;
-      if (userFilter) params.user_id = userFilter;
-      if (clientFilter) params.client_id = clientFilter;
-      if (backendFilter) params.backend = backendFilter;
-      if (riskFilter) params.risk_category = riskFilter;
-      if (policyFilter) params.policy_decision = policyFilter;
-      if (applicationFilter) params.application = applicationFilter;
-      if (dateFrom) params.from = `${dateFrom}T00:00:00Z`;
-      if (dateTo) params.to = `${dateTo}T23:59:59Z`;
-
-      const data = await api.getAuditEvents(params);
+      });
+      if (seq !== requestSeq.current) return;
       setEvents(data.events);
       setTotal(data.total);
+      setLoadFailed(false);
       setPageError('');
     } catch (e: any) {
+      if (seq !== requestSeq.current) return;
+      // The rows and the count on screen are now unrelated to what was asked
+      // for. Saying "0 events recorded" on an append-only ledger because the
+      // request failed is the worst wrong verdict this page can give.
+      setLoadFailed(true);
       setPageError(e.message || 'Failed to load audit events');
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   };
 
   const totalPages = Math.ceil(total / limit);
 
   const handleExport = async () => {
+    setExportNote('');
     try {
-      const data = await api.getAuditEvents({ limit: '10000', offset: '0' });
+      // `/audit/export` carries the whole trail; `/audit` clamps `limit` to 500
+      // and said nothing about it, so a 40,000-event export was a 500-row file
+      // with no sign it was short.
+      const data = await api.exportAuditEvents(filterParams());
+      if (data.truncated) {
+        setExportNote(
+          `Exported the newest ${fmt.count(data.events.length)} of ${fmt.count(data.total)} matching events. Narrow the filters to export the rest.`
+        );
+      }
       const blob = new Blob([JSON.stringify(data.events, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -181,7 +206,6 @@ export default function AuditTimeline() {
   const activeFilters = [
     statusFilter,
     userFilter,
-    clientFilter,
     backendFilter,
     riskFilter,
     policyFilter,
@@ -194,7 +218,6 @@ export default function AuditTimeline() {
     setSearch('');
     setStatusFilter('');
     setUserFilter('');
-    setClientFilter('');
     setBackendFilter('');
     setRiskFilter('');
     setPolicyFilter('');
@@ -227,6 +250,12 @@ export default function AuditTimeline() {
         </Banner>
       )}
 
+      {exportNote && (
+        <Banner tone="warn" onDismiss={() => setExportNote('')} className="mb-4">
+          {exportNote}
+        </Banner>
+      )}
+
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <div className="relative flex-1 min-w-[220px] max-w-sm">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ink-4 pointer-events-none" />
@@ -234,8 +263,16 @@ export default function AuditTimeline() {
             type="search"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && loadEvents()}
-            placeholder="Search by tool name..."
+            onKeyDown={e => {
+              // Every other filter resets the page. Without this, searching
+              // from page 4 asked for offset 60 into a ten-row result and the
+              // table said "Nothing matches those filters" while the header
+              // above it counted the matches.
+              if (e.key !== 'Enter') return;
+              if (page === 0) loadEvents();
+              else setPage(0);
+            }}
+            placeholder="filesystem__read_file"
             className="pl-8"
           />
         </div>
@@ -255,7 +292,7 @@ export default function AuditTimeline() {
           </Button>
         )}
         <div className="ml-auto text-2xs text-ink-4 tabular-nums">
-          {fmt.count(total)} events recorded
+          {loadFailed ? 'count unavailable' : `${fmt.count(total)} events recorded`}
         </div>
       </div>
 
@@ -272,7 +309,7 @@ export default function AuditTimeline() {
                 className="w-full"
               >
                 <option value="">All statuses</option>
-                {['success', 'error', 'tool_error', 'denied', 'timeout'].map(s => (
+                {['success', 'error', 'tool_error', 'denied'].map(s => (
                   <option key={s} value={s}>
                     {s}
                   </option>
@@ -292,23 +329,6 @@ export default function AuditTimeline() {
                 {knownUsers.map(u => (
                   <option key={u} value={u}>
                     {userMap.get(u) || u.slice(0, 8)}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Client">
-              <Select
-                value={clientFilter}
-                onChange={e => {
-                  setClientFilter(e.target.value);
-                  setPage(0);
-                }}
-                className="w-full"
-              >
-                <option value="">All clients</option>
-                {knownClients.map(c => (
-                  <option key={c} value={c}>
-                    {c}
                   </option>
                 ))}
               </Select>
@@ -423,6 +443,18 @@ export default function AuditTimeline() {
             <TableMessage colSpan={8}>
               <Loading label="Loading events..." />
             </TableMessage>
+          ) : loadFailed && events.length === 0 ? (
+            /* The four empties are not interchangeable. This one is "the
+               request failed", and it must never render as "no calls recorded
+               yet" — on an append-only ledger that is a claim, not a blank. */
+            <TableMessage colSpan={8}>
+              <EmptyState
+                icon={ScrollText}
+                title="The audit trail could not be read"
+                message="This is a failed request, not an empty ledger. Nothing here has been lost."
+                action={<Button onClick={loadEvents}>Try again</Button>}
+              />
+            </TableMessage>
           ) : events.length === 0 ? (
             <TableMessage colSpan={8}>
               <EmptyState
@@ -434,7 +466,9 @@ export default function AuditTimeline() {
                     : 'Once an AI client routes a tool call through the gateway, it lands here.'
                 }
                 action={
-                  activeFilters > 0 ? <Button onClick={clearAllFilters}>Clear filters</Button> : undefined
+                  activeFilters > 0 || search ? (
+                    <Button onClick={clearAllFilters}>Clear filters</Button>
+                  ) : undefined
                 }
               />
             </TableMessage>
@@ -610,8 +644,13 @@ export default function AuditTimeline() {
         confirmLabel="Clear everything"
       >
         <p className="text-xs text-ink-2">
-          <Mono className="text-ink">{fmt.count(total)}</Mono> events will be deleted. Export
-          first if you need to keep them.
+          {/* `total` is the count under the current filters, and Clear is not
+              filtered — it truncates the table. Printing the filtered figure
+              here told an operator who had narrowed to three denials that three
+              rows would go, and then deleted forty thousand. */}
+          Every event is deleted, including the{' '}
+          {activeFilters > 0 || search ? 'ones the current filter hides' : 'ones off this page'}.
+          Export first if you need to keep them.
         </p>
       </ConfirmModal>
     </div>

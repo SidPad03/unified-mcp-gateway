@@ -31,6 +31,13 @@ services:
       MCPGW_ADMIN_PASSWORD: ${MCPGW_ADMIN_PASSWORD:-}
       LISTEN_ADDR: "0.0.0.0:3200"
       RUST_LOG: mcp_gateway_server=info,tower_http=debug
+      # The dashboard's update check. Documented in docs/deployment.md, and
+      # they only reach the server if the service names them here — compose
+      # interpolates ${...} only where a service references it, so setting them
+      # in .env alone did nothing and an air-gapped gateway kept calling GitHub.
+      UPDATE_CHECK_DISABLED: ${UPDATE_CHECK_DISABLED:-}
+      UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy

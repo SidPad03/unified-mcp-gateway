@@ -84,8 +84,10 @@ export default function ToolInventory() {
   };
 
   const backendHealth: Record<string, string> = {};
+  const backendEnabled: Record<string, boolean> = {};
   backends.forEach(b => {
     backendHealth[b.name] = b.health_status;
+    backendEnabled[b.name] = b.is_enabled;
   });
 
   const loadTools = async () => {
@@ -122,6 +124,9 @@ export default function ToolInventory() {
 
   const getToolStatus = (tool: Tool): ToolStatus => {
     if (!tool.is_enabled) return 'disabled';
+    // A tool on a disabled backend is not reachable, whatever its own flag
+    // says: `tools/list` filters on both. It used to read "Enabled".
+    if (backendEnabled[tool.backend_name] === false) return 'disabled';
     const health = backendHealth[tool.backend_name];
     if (health && health !== 'healthy' && health !== 'idle') return 'disconnected';
     return 'enabled';
@@ -198,7 +203,11 @@ export default function ToolInventory() {
       <Card className="mb-5">
         <div className="flex items-end justify-between gap-8 flex-wrap">
           <div>
-            <Label>Calls routed · {callsRange}</Label>
+            {/* Not "Calls routed": this is the sum over the tools below, so it
+                leaves out every call to a tool that has since been removed from
+                the registry, and it is a different figure from the Metrics
+                page's "Calls routed" for the same window. Say which one it is. */}
+            <Label>Calls to these tools · {callsRange}</Label>
             <div className="text-2xl font-semibold tracking-[-0.02em] tabular-nums text-ink mt-1.5">
               {fmt.count(totalCalls)}
             </div>
@@ -207,8 +216,10 @@ export default function ToolInventory() {
             <MiniStat label="Tools" value={fmt.count(tools.length)} />
             <MiniStat label="Enabled" value={fmt.count(tools.filter(t => t.is_enabled).length)} />
             <MiniStat label="Backends" value={fmt.count(backendNames.length)} />
+            {/* "Disconnected" next to "Backends" read as a count of backends;
+                it counts tools. */}
             <MiniStat
-              label="Disconnected"
+              label="Tools offline"
               value={fmt.count(disconnected)}
               tone={disconnected > 0 ? 'warn' : undefined}
             />
@@ -242,7 +253,7 @@ export default function ToolInventory() {
             type="search"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search name, description, backend..."
+            placeholder="read_file"
             className="pl-8"
           />
         </div>

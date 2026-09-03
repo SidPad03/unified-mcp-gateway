@@ -3,11 +3,14 @@
 The gateway aggregates other people's tools. It also exposes some of its own.
 
 `gateway_*` configures the gateway; `agent_*` configures one Mac running the
-agent. They are ordinary MCP tools — they appear in `tools/list`, they are
-classified on the same risk ladder, policy governs them, and every call lands in
-the audit trail. The point is that an assistant which finds a backend unhealthy
-can read its logs, fix its configuration and restart it, without anybody opening
-the dashboard.
+agent. They are ordinary MCP tools in every way that matters for safety — they
+appear in `tools/list`, they are classified on the same risk ladder, and policy
+governs them — but they are not part of the inventory the operator assembled, so
+they are left out of the counts and their calls go to the server log rather than
+to the audit trail. See [They are invisible on the
+gateway](#they-are-invisible-on-the-gateway). The point is that an assistant
+which finds a backend unhealthy can read its logs, fix its configuration and
+restart it, without anybody opening the dashboard.
 
 - [They are invisible on the gateway](#they-are-invisible-on-the-gateway)
 - [What guards them](#what-guards-them)

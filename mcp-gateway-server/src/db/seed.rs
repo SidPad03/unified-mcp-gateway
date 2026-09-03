@@ -230,6 +230,7 @@ mod tests {
     #[tokio::test]
     async fn backfill_reaches_users_on_a_database_that_already_has_policies() {
         let _guard = lock_env_async().await;
+        let _db_guard = crate::test_support::lock_db().await;
         std::env::set_var("JWT_SECRET", "seed-test-secret-at-least-16-chars");
         let Some(pool) = test_pool().await else {
             eprintln!("skipping: TEST_DATABASE_URL not set");

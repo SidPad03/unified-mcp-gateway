@@ -33,6 +33,10 @@ pub use errors::AppError;
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub jwt_secret: String,
+    /// What the listener actually bound to. The security-posture check reports
+    /// whether that is a public interface, which the server is the only
+    /// component that knows.
+    pub listen_addr: String,
     pub metrics: Arc<metrics::MetricsCollector>,
     pub audit: Option<Arc<audit::AuditRecorder>>,
     pub backend_manager: Arc<backends::BackendManager>,
@@ -44,7 +48,7 @@ pub struct AppState {
     pub update_check_cache:
         Arc<tokio::sync::Mutex<Option<(std::time::Instant, Vec<api::updates::GithubRelease>)>>>,
     /// Broadcast channel for live audit events → dashboard WebSocket clients
-    pub event_tx: broadcast::Sender<String>,
+    pub event_tx: broadcast::Sender<audit::LiveEvent>,
 }
 
 #[tokio::main]
@@ -90,17 +94,33 @@ async fn main() -> anyhow::Result<()> {
     db::seed::seed_defaults(&pool).await?;
 
     let metrics_collector = Arc::new(metrics::MetricsCollector::new());
-    let (event_tx, _) = broadcast::channel::<String>(512);
+    let (event_tx, _) = broadcast::channel::<audit::LiveEvent>(512);
     let audit_recorder = Arc::new(audit::AuditRecorder::new(pool.clone(), event_tx.clone()));
     let backend_manager = Arc::new(backends::BackendManager::new());
     let agent_registry = Arc::new(agent::AgentRegistry::new());
 
-    tracing::info!("Starting enabled backends...");
-    start_backends(&pool, &backend_manager).await;
+    let pool_for_discovery = pool.clone();
+    let manager_for_discovery = Arc::clone(&backend_manager);
+
+    // No agent can be connected to a process that has just started, whatever
+    // the row said when the last one stopped. Without this an agent backend
+    // whose Mac was off came back `healthy` after a restart, counted as healthy
+    // on the Backends page, and had its tools advertised over `tools/list`
+    // until someone tried to call one.
+    if let Err(e) = sqlx::query(
+        "UPDATE backends SET health_status = 'disconnected', last_health_check = NOW() \
+         WHERE transport = 'agent' AND health_status <> 'disconnected'",
+    )
+    .execute(&pool)
+    .await
+    {
+        tracing::warn!(error = %e, "Could not reset agent backend health on startup");
+    }
 
     let state = AppState {
         db: pool,
         jwt_secret,
+        listen_addr: listen_addr.clone(),
         metrics: metrics_collector,
         audit: Some(audit_recorder),
         backend_manager,
@@ -158,8 +178,24 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
-    tracing::info!("MCP Gateway Server listening on {}", listen_addr);
     let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
+    tracing::info!("MCP Gateway Server listening on {}", listen_addr);
+
+    // Discovery runs after the listener is up, not before it.
+    //
+    // `start_backends` walks the backends one at a time and waits on each. One
+    // backend that is *slow* rather than down therefore used to keep the
+    // process from ever binding: no dashboard, no /api/v1, no /metrics — and
+    // because the compose healthcheck curls /metrics, the dashboard container
+    // never started either. The whole deployment was down because one backend
+    // was slow to answer.
+    let discovery_pool = pool_for_discovery;
+    let discovery_manager = Arc::clone(&manager_for_discovery);
+    tokio::spawn(async move {
+        tracing::info!("Starting enabled backends...");
+        start_backends(&discovery_pool, &discovery_manager).await;
+    });
+
     axum::serve(listener, app).await?;
 
     Ok(())

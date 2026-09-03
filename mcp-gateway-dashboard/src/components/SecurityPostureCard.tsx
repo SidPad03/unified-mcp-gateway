@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, SecurityPosture } from '@/lib/api';
-import { RailList, RailRow, SectionHeader, Tone } from '@/components/ui';
+import { Banner, RailList, RailRow, SectionHeader, Tone } from '@/components/ui';
 
 interface Check {
   label: string;
@@ -28,14 +28,6 @@ function buildChecks(p: SecurityPosture): Check[] {
         : 'No seeded default awaiting rotation.',
     },
     {
-      label: 'Agent backends owned',
-      tone: p.unowned_agent_backends.length > 0 ? 'warn' : 'ok',
-      detail:
-        p.unowned_agent_backends.length > 0
-          ? `Unowned: ${p.unowned_agent_backends.join(', ')}. Assign an owner.`
-          : 'Every agent backend has an owner.',
-    },
-    {
       label: 'Active owners',
       tone: p.active_owner_count === 0 ? 'deny' : 'ok',
       detail:
@@ -48,15 +40,46 @@ function buildChecks(p: SecurityPosture): Check[] {
 
 export default function SecurityPostureCard() {
   const [posture, setPosture] = useState<SecurityPosture | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [error, setError] = useState('');
+  const [forbidden, setForbidden] = useState(false);
 
   useEffect(() => {
-    api.getSecurityPosture().then(setPosture).catch(() => setFailed(true));
+    let current = true;
+    api
+      .getSecurityPosture()
+      .then(p => {
+        if (current) setPosture(p);
+      })
+      .catch((e: Error) => {
+        if (!current) return;
+        // A non-owner is not entitled to the posture, so there is nothing to
+        // say to them. Anything else is a failure to read it, and a security
+        // checklist that deletes itself on failure is indistinguishable from
+        // one that checked and found nothing — which is the worst thing this
+        // particular card can do.
+        if (/forbidden|owner role/i.test(e.message)) setForbidden(true);
+        else setError(e.message || 'Could not read the security posture');
+      });
+    return () => {
+      current = false;
+    };
   }, []);
 
-  // Never claim a posture we couldn't read: hide on error (older server without
-  // the endpoint, or a non-owner who gets 403) and while loading.
-  if (failed || !posture) return null;
+  if (forbidden) return null;
+
+  if (error) {
+    return (
+      <section className="mb-3.5">
+        <SectionHeader className="mb-2">Security posture</SectionHeader>
+        <Banner tone="warn">
+          The security checks could not be read, so nothing here is a verdict. {error}
+        </Banner>
+      </section>
+    );
+  }
+
+  // Still loading. The card appears when it has something true to say.
+  if (!posture) return null;
 
   const checks = buildChecks(posture);
   const failing = checks.filter(c => c.tone !== 'ok').length;

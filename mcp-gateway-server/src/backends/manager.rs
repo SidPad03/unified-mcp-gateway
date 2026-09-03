@@ -142,6 +142,14 @@ impl BackendManager {
         );
 
         let mut cmd = Command::new(command);
+        // The child inherits this process's environment, and a backend is
+        // third-party code: strip the variables the gateway reads for itself
+        // before adding the backend's own. Without this an `npx`-fetched server
+        // could read JWT_SECRET and mint an owner token, or read DATABASE_URL
+        // and reach Postgres past auth, policy and the audit trail.
+        for key in crate::api::backends::GATEWAY_ONLY_ENV {
+            cmd.env_remove(key);
+        }
         cmd.args(&args)
             .envs(&env_map)
             .stdin(std::process::Stdio::piped())
@@ -941,7 +949,16 @@ impl BackendManager {
     }
 
     fn build_http_client(config: &serde_json::Value) -> Result<reqwest::Client, String> {
-        let mut builder = reqwest::Client::builder();
+        // reqwest defaults to no timeout at all. Every JSON-RPC call sets its
+        // own per-request deadline, but the SSE stream cannot — a per-request
+        // timeout would kill the long-lived stream it is opening — so the
+        // connect deadline lives on the client, where it covers every path.
+        // A backend that completes the TCP handshake and then never answers
+        // used to hang the caller forever, and on startup that meant the
+        // listener never bound.
+        let mut builder = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .pool_idle_timeout(std::time::Duration::from_secs(90));
 
         // Attach custom request headers (e.g. Authorization) to every outbound call.
         // HTTP/SSE backends have no subprocess, so the KV pairs the dashboard form
@@ -1150,12 +1167,16 @@ struct SseConnection {
 
 impl SseConnection {
     async fn connect(client: &reqwest::Client, url: &str) -> Result<Self, String> {
-        let response = client
-            .get(url)
-            .header("Accept", "text/event-stream")
-            .send()
-            .await
-            .map_err(|e| format!("SSE GET connect failed: {}", e))?;
+        // Bound the handshake only. `.timeout()` on the request would apply to
+        // the whole stream, which is meant to stay open; this covers just the
+        // wait for response headers, which is where a blackholed backend hangs.
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            client.get(url).header("Accept", "text/event-stream").send(),
+        )
+        .await
+        .map_err(|_| "SSE GET timed out waiting for response headers".to_string())?
+        .map_err(|e| format!("SSE GET connect failed: {}", e))?;
 
         if !response.status().is_success() {
             let status = response.status();

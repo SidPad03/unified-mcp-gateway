@@ -20,15 +20,21 @@ Generate one with `openssl rand -hex 32`.
 ### API keys (clients and agents)
 
 API keys are `mcpgw_`-prefixed and are what AI clients and remote agents use.
-The plaintext is shown **once**, at creation; only a hash is stored. Revoking a
-key takes effect immediately — the next request with it gets a 401.
+The plaintext is shown at creation. Two copies are stored: a SHA-256 hash, which
+is what authenticates a request, and a ChaCha20-Poly1305 ciphertext under a key
+derived from `JWT_SECRET`, which is what lets the dashboard rebuild a
+ready-to-paste client config afterwards —
+`POST /api/v1/api-keys/reveal/{user_id}` returns the plaintext to that user or
+to an owner. A database leak on its own does not recover a key; a leak of the
+database together with `JWT_SECRET` does. Revoking a key takes effect
+immediately — the next request with it gets a 401.
 
 Both credential types resolve to the same `Claims { sub, roles }`. On every
 request the server re-checks `is_active` and role membership **against the
 database**; it does not trust the token's contents alone. Deactivating a user
 therefore takes effect immediately, without waiting for token expiry.
 
-> API keys currently resolve to the full privileges of their owning user. A key
+> An API key resolves to the full privileges of its owning user. A key
 > created by an owner is an owner-level credential — scope key creation to the
 > least-privileged account that can do the job.
 
@@ -128,6 +134,15 @@ The classifier is best-effort. Override any tool's category via
 
 Every call — allowed or denied — is written to `audit_events` with its decision,
 the deciding policy, latency, and redacted request/response payloads.
+
+The one exception is the gateway's own `gateway_*` and `agent_*` control tools.
+They are policy-evaluated like everything else, and everything that writes also
+requires the `owner` role, but their calls go to the *server log* at INFO with
+the caller, the tool, the status and the duration rather than to the audit
+trail. The trail is about the traffic the operator's own tools carry. If you
+need a queryable record of who reconfigured the gateway, ship the server log
+somewhere you keep it. See
+[Self-Configuration Tools](self-configuration.md#they-are-invisible-on-the-gateway).
 
 The redactor strips bearer tokens, labeled credentials (`password`, `token`,
 `api_key`, `secret`, `authorization` — quoted or bare), raw `mcpgw_` keys, email

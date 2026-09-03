@@ -4,6 +4,268 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-09-03
+
+An audit pass over the numbers, the interface and the docs. Most of what follows
+is one of two shapes: a figure that disagreed with the same figure one page
+over, or a boundary that held on one surface and not on its twin.
+
+### Security
+
+- **`GET /api/v1/metrics/summary` is owner-only.** It took an authenticated
+  caller and discarded the claims, so any account — and any `mcpgw_` key —
+  read the whole deployment's call volume, error rate, latency percentiles,
+  user count and the names of its ten busiest tools. A non-owner whose own
+  traffic was 318 calls was shown 3,581. `GET /audit/stats` is the per-user view
+  of the same rows and was fixed for this exact leak in 1.0.0; this endpoint was
+  not fixed with it.
+
+- **The live feed is scoped to the caller, and re-checks the account.**
+  `/api/v1/ws/live` subscribed every socket to one global channel and forwarded
+  every frame, so any authenticated user watched every other user's tool names,
+  backends, applications and error messages in real time — and the dashboard's
+  Usage page folded those calls into counts the server had scoped to one user,
+  so the figure on screen climbed all session and snapped back on refresh. The
+  JWT branch was also a bare `decode`, skipping the `is_active` and role re-read
+  every REST request performs; because a socket authenticates once and is then
+  held, a deactivated account kept streaming for the token's remaining lifetime.
+  Both WebSocket endpoints now go through one `resolve_bearer`, shared with the
+  request extractor so the two cannot drift again.
+
+- **A stdio backend no longer inherits the gateway's own secrets.** A child
+  process inherits its parent's environment, and the gateway reads `JWT_SECRET`
+  and `DATABASE_URL` out of that same environment — so a third-party MCP server,
+  which is exactly what this product exists to put behind a gate, could mint an
+  HS256 owner token or connect to Postgres directly, past auth, policy and the
+  audit trail. A test reads `src/` and fails when the server learns to read a
+  variable nobody added to the strip list.
+
+- **`error_message` is redacted before it is stored.** The payload columns went
+  through the redactor and this one did not, though it is the only
+  payload-derived field any surface actually displays. The strings are built
+  from a backend's own response body — `Backend returned HTTP 401: {…}` — which
+  is where an upstream echoes back the credential the gateway just sent it. The
+  same field was already redacted on its way to the live feed, so the two
+  surfaces disagreed about whether it had been.
+
+- **Both redactors catch a credential nested inside a JSON string.** A tool
+  whose argument or result is itself JSON writes the separator as an escaped
+  quote, and the pattern could not cross it: `{"args":"{\"api_key\": \"sk-…\"}"}`
+  went through untouched. A scheme word before the value (`Basic YWRt…`) and
+  Base64 `=` padding were missed too. The server's redactor and the agent's now
+  share a corpus of the shapes a real gateway sees, so neither can drift.
+
+- **A non-owner cannot read a backend's command line or URL.** The redaction
+  stripped `env` and `headers` and stopped there — while this product's own
+  Connect flow writes `["-y", "mcp-remote", url, "--header", "Authorization:
+  Bearer …"]` into `args`, and an SSE URL can carry a session token in its query
+  string. The Backends page is a non-owner's landing route and every row expands
+  on click.
+
+- **An agent registration cannot take over a backend that is not an agent.**
+  `/agent/ws` accepts any active API key and then takes the `agent_id` verbatim
+  from the frame that follows. The upsert was keyed on name alone and forced
+  `transport = 'agent'`, so a register frame naming an existing stdio or HTTP
+  backend rewrote that row, destroyed its stored environment block and its
+  tokens, and repointed every call for that backend at the socket that sent the
+  frame. Binding an agent id to the key issued for it is a larger change and is
+  still to come.
+
+- **`PATCH /api/v1/tools/{id}` validates what it is given.** It accepted any
+  string as a risk category and would reclassify one of the gateway's own
+  internal tools — the two guards `gateway_set_tool_classification` already
+  applied. A category off the ladder matches no policy, so a rule scoped to
+  `destructive` silently stops governing the tool.
+
+### Fixed
+
+- **"Tools on this backend" is one number again.** It was written out by hand in
+  three places with three different filters: the Backends page excluded internal
+  tools, Metrics → Backend health excluded nothing, the Usage graph excluded
+  disabled tools instead. One connected Mac read 6, 15 and 15 on three pages of
+  the same gateway, and `filesystem` read 12, 12 and 11. Every caller now takes
+  the pair from one helper — `registered` and `enabled` — and the Usage node's
+  count is derived from the tool rows the same response carries, so its label
+  and its picture cannot disagree. The Backends page's headline figure now
+  counts what is actually behind the gate: disabling a backend used to leave it
+  where it was. This also replaced the `COUNT(*)`-per-backend loop with one
+  grouped query.
+
+- **`gateway_get_health` counts the tools the operator put there.** The one
+  gateway-wide tool total that never got the `is_internal` filter 1.2.1 promised
+  — 47 where the Metrics page one click away said 38, and nine higher per
+  connected Mac.
+
+- **The Security posture checklist exists.** The card called
+  `GET /api/v1/security/posture`, which the server has never served. The `catch`
+  written to avoid claiming a posture it could not read is what made the total
+  absence invisible: on a security product, an operator with an unrotated seeded
+  admin password read a Metrics page with nothing flagged, indistinguishable
+  from one that checked and found nothing. The endpoint now reports the three
+  signals the gateway can actually answer, and the card renders a warning rather
+  than deleting itself when the read fails.
+
+- **"Calls by risk" stops dropping a bucket and renormalising to 100%.** The
+  server reported an unreviewed tool's calls as `unknown`; the chart filtered a
+  whitelist that only knew `unclassified` and computed its percentages over the
+  survivors, so 6.5% of the traffic vanished from the bar with the remaining
+  slices still summing to a tidy 100%. Any category outside the six did the
+  same. The server now uses the word the classifier, the policy editor and the
+  risk ramp all use, and the chart draws whatever it is sent.
+
+- **A migration runs once.** There was no version table, so every block executed
+  on every boot. 006 reset the owner role's default policy, so an operator who
+  set it to `deny` found it back at `allow` after the next restart; 012 deleted
+  audit rows, so a backend named `gateway` lost its history every time the
+  container came up. 010 had solved this by hand with an `information_schema`
+  check and a comment explaining why; `run_migrations` now solves it for all of
+  them. An upgraded database runs everything one final time and then records it.
+
+- **`gateway` is a reserved backend name.** `api/mcp.rs` asserted it "is not a
+  name a backend can take"; neither write path checked, and the REST create
+  validated the name not at all.
+
+- **One slow backend no longer keeps the gateway from starting.** Discovery ran
+  serially and was awaited before the listener bound, and the SSE handshake was
+  the one outbound call with no timeout — on a client that set none either. A
+  backend that completed its TCP handshake and then went quiet meant no
+  dashboard, no `/api/v1` and no `/metrics`; because the compose healthcheck
+  curls `/metrics`, the dashboard container never started either. The listener
+  binds first and discovery is spawned behind it.
+
+- **An agent backend is `disconnected` after a restart.** Nothing wrote that
+  status when the *gateway* restarted, so a Mac that was switched off came back
+  `healthy`, counted as healthy on the Backends page, and had its whole tool set
+  advertised over `tools/list` until someone tried to call one.
+
+- **A reconnect no longer unregisters the connection that replaced it.** The
+  cleanup removed whatever handle held the agent id, so after a network flap the
+  Mac was genuinely connected while every call to it answered "Agent not
+  connected". Each connection now carries an epoch and cleanup compares it
+  first.
+
+- **The audit trail pages in a stable order.** `ORDER BY timestamp DESC` with no
+  tiebreaker over rows that share a millisecond let an offset page repeat a row
+  or skip one.
+
+- **Export exports what is on screen, and says when it is short.** The button
+  asked `/audit` for 10,000 events against a handler that clamps to 500, wrote
+  those 500 to the file, and dropped every active filter — next to a Clear
+  dialog that printed the *filtered* count beside an unconditional `TRUNCATE`.
+  `/audit/export` now takes the same filters and reports `{ total, truncated }`,
+  and the Clear dialog says plainly that every event goes.
+
+- **A failed request is not an empty ledger.** The Audit page rendered "No calls
+  recorded yet" and "0 events recorded" under its own error banner, and the
+  Usage page swallowed the failure entirely and drew "No usage data yet" — so an
+  unreachable gateway reported itself as a healthy idle one, on the one page a
+  non-owner can open. A first load that fails is now the page; a later failure
+  is a banner over figures marked stale.
+
+- **A stale response is discarded.** Three range buttons mean three requests in
+  flight and they do not return in order; on the Usage graph the five-second
+  poll made it routine rather than a race you had to force. Audit, Usage and
+  Metrics each carry a request-sequence guard.
+
+- **Searching the audit trail resets the page.** Every other filter did.
+  Searching from page 4 asked for offset 60 into a ten-row result, so the table
+  said "Nothing matches those filters" while the header above it counted the
+  matches — and the pager that would have explained it had just disappeared.
+
+- **The Usage graph is readable in the light theme.** Every node painted a
+  literal near-black gradient while the text inside it used the theme's ink, so
+  in light mode the page that answers "what is talking to what" was near-black
+  on near-black.
+
+- **Two tables on the Users page fit a phone.** Roles and API keys carried seven
+  and six unranked columns; at 375px they overflowed their container by 214 and
+  240 pixels, and the column that went was the one holding Edit, Delete and
+  Revoke. A table inside `overflow-x-auto` hides that from a document-overflow
+  check, which is why it survived.
+
+- **The documented reverse proxy routes `POST /mcp`.** `location ~ ^/(api|mcp)/`
+  needs a slash after the group and the gateway serves `/mcp` exactly, so the
+  request fell through to the dashboard and an MCP client was answered with
+  `index.html` and HTTP 200 — the failure `nginx.conf` already documents at
+  length for `/agent/ws`. The dashboard's own Connect dialog compounded it,
+  defaulting every generated client config to `https://localhost:8080/mcp`: the
+  dashboard's port, over a scheme it does not serve, at a path nginx did not
+  proxy. Both fixed, and `nginx.conf` gained the location.
+
+- **The host-migration runbook names a database that exists.** It ran `pg_dump
+  -U mcpgw mcpgw`, twenty lines after the backup section correctly uses
+  `mcpgateway`.
+
+- **`UPDATE_CHECK_DISABLED` reads its value, and compose passes it.** Presence
+  was the test, so setting it to `false` disabled the check. It, along with
+  `UPDATE_CHECK_REPO` and `GITHUB_TOKEN`, was documented as a deployment setting
+  that the compose file never handed to the server, so an air-gapped operator
+  who set it in `.env` kept calling GitHub.
+
+### Changed
+
+- **The Tools page says what its figures count.** Its headline read "Calls
+  routed · 24h" and summed the tools below it, which is a different number from
+  the Metrics page's figure under the identical label — 761 against 969 on the
+  same window. "Disconnected", sitting beside "Backends", counted tools. A tool
+  on a disabled backend read "Enabled".
+
+- **Settings draws the risk ramp everything else draws.** It carried a private
+  map painting `read` in the accent — the colour that means healthy everywhere
+  in this product — and `write`, `execute` and `unclassified` in one identical
+  grey, so a tool reclassified `write` → `execute` showed the same colour on
+  both sides of the arrow, in the table an operator uses to review the change.
+
+- **The volume chart's axis says which day.** Seven days buckets by hour, and
+  168 points all labelled `14:00` cannot place a spike. Its Y ticks also went
+  through `fmt` — left raw, the axis read `1203` beside a tooltip reading
+  `1,203`.
+
+- **A dead filter is gone.** The Audit page's Client dropdown was empty on every
+  deployment, because nothing writes `audit_events.client_id`, and the parameter
+  it sent had no counterpart on the server. Its status list also offered
+  `timeout`, which the recorder never writes.
+
+- Every page sets its own `<title>`, there is a skip link, and `Mono` — the
+  primitive every identifier goes through — carries `translate="no"`, so browser
+  auto-translate leaves tool and backend names alone.
+
+- Documentation corrections throughout. `SECURITY.md` described a `JWT_SECRET`
+  development default that does not exist and claimed only a hash of an API key
+  is stored, when an encrypted copy is stored and is revealable;
+  `authentication.md` said every call is audited, which 1.2.1 made false for the
+  gateway's own tools; `ARCHITECTURE.md` promised an `owner` check on the
+  `agent_*` namespace that has never existed there; `self-configuration.md`
+  contradicted itself within fifteen lines; `/audit/stats?backend=` was
+  documented as taking a UUID against SQL that matches a name; the policy
+  example carried a `priority` the endpoint drops on the floor, which is how a
+  deny rule created from the reference lands behind the seeded catch-all allow
+  and never fires.
+
+### Added
+
+- **`GET /api/v1/security/posture`** — owner-only, the signals behind the
+  Metrics page's checklist: whether the listener is on a public interface,
+  whether a seeded account still owes a first-login password change, and who
+  holds the owner role.
+
+- **`backends[].enabled_tool_count`** alongside `tool_count`, so a caller can
+  tell what a backend published from what a call can still reach.
+
+- **`truncated`** on both audit responses, so a client writing a file can tell a
+  complete export from a slice.
+
+- **`GET /api/v1/audit/export` takes the same filters as `GET /api/v1/audit`.**
+
+### Note for API callers
+
+Three response contracts moved, all of them because the old one was wrong:
+`metrics/summary` now requires the `owner` role, `calls_by_risk` reports an
+unreviewed tool as `unclassified` rather than `unknown`, and a non-owner no
+longer receives `command`, `args` or `url` in a backend's config. A backend
+named `gateway` can no longer be created, and `PATCH /tools/{id}` refuses a risk
+category that is not on the ladder.
+
 ## [1.2.1] - 2026-09-02
 
 ### Changed

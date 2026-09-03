@@ -183,73 +183,100 @@ where
             .strip_prefix("Bearer ")
             .ok_or_else(|| AppError::Unauthorized("Invalid authorization format".into()))?;
 
-        // API key path: tokens starting with "mcpgw_"
-        if token.starts_with("mcpgw_") {
-            return resolve_api_key(token, &app_state).await;
-        }
-
-        // JWT path
-        let token_data = decode::<Claims>(
-            token,
-            &DecodingKey::from_secret(app_state.jwt_secret.as_bytes()),
-            &Validation::default(),
-        )
-        .map_err(|_| AppError::Unauthorized("Invalid or expired token".into()))?;
-
-        let claims = token_data.claims;
-        let user_id: Uuid = claims
-            .sub
-            .parse()
-            .map_err(|_| AppError::Unauthorized("Invalid token subject".into()))?;
-
-        // Re-validate against the DB on every request so a revoked/deactivated
-        // user or a role change takes effect immediately instead of persisting
-        // for the token's lifetime (and surviving indefinitely via /refresh).
-        let user_row: Option<(bool, bool)> =
-            sqlx::query_as("SELECT is_active, must_change_password FROM users WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_optional(&app_state.db)
-                .await
-                .map_err(|e| AppError::Internal(e.to_string()))?;
-
-        let (is_active, must_change_password) =
-            user_row.ok_or_else(|| AppError::Unauthorized("User no longer exists".into()))?;
-        if !is_active {
-            return Err(AppError::Unauthorized("User account is disabled".into()));
-        }
-
-        // Load current roles from the DB rather than trusting the ones baked
-        // into the token.
-        let roles: Vec<(String,)> = sqlx::query_as(
-            "SELECT r.name FROM roles r JOIN user_roles ur ON r.role_id = ur.role_id WHERE ur.user_id = $1",
-        )
-        .bind(user_id)
-        .fetch_all(&app_state.db)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-        let role_names: Vec<String> = roles.into_iter().map(|(n,)| n).collect();
+        let (claims, must_change_password) = resolve_bearer(token, &app_state).await?;
 
         // First-login gate: a user still flagged must_change_password may only
         // call their own password-change endpoint until they rotate it. This
         // enforces the gate server-side so it can't be bypassed by ignoring the
         // dashboard screen and calling the API directly.
-        if must_change_password
-            && !is_self_password_change(&parts.method, parts.uri.path(), user_id)
-        {
-            return Err(AppError::Forbidden(
-                "You must change your password before continuing".into(),
-            ));
+        if must_change_password {
+            let user_id: Uuid = claims
+                .sub
+                .parse()
+                .map_err(|_| AppError::Unauthorized("Invalid token subject".into()))?;
+            if !is_self_password_change(&parts.method, parts.uri.path(), user_id) {
+                return Err(AppError::Forbidden(
+                    "You must change your password before continuing".into(),
+                ));
+            }
         }
 
-        Ok(Claims {
+        Ok(claims)
+    }
+}
+
+/// Resolve a raw bearer token — a JWT or an `mcpgw_` key — to live claims,
+/// plus whether the account still owes a first-login password change.
+///
+/// The two WebSocket endpoints take their token from a query parameter and so
+/// cannot go through the extractor above. Both used to `decode` the JWT and
+/// stop there, skipping the `is_active` and role re-read; a deactivated user's
+/// socket therefore kept streaming for the token's remaining lifetime, which is
+/// the one thing the per-request re-validation exists to prevent. Every caller
+/// now goes through this function so the two paths cannot drift again.
+pub(crate) async fn resolve_bearer(
+    token: &str,
+    state: &AppState,
+) -> Result<(Claims, bool), AppError> {
+    // API key path: tokens starting with "mcpgw_"
+    if token.starts_with("mcpgw_") {
+        // `resolve_api_key` already re-reads `users.is_active` and the roles.
+        // A key is not a first-login credential, so the gate does not apply.
+        return resolve_api_key(token, state).await.map(|c| (c, false));
+    }
+
+    // JWT path
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map_err(|_| AppError::Unauthorized("Invalid or expired token".into()))?;
+
+    let claims = token_data.claims;
+    let user_id: Uuid = claims
+        .sub
+        .parse()
+        .map_err(|_| AppError::Unauthorized("Invalid token subject".into()))?;
+
+    // Re-validate against the DB on every request so a revoked/deactivated
+    // user or a role change takes effect immediately instead of persisting
+    // for the token's lifetime (and surviving indefinitely via /refresh).
+    let user_row: Option<(bool, bool)> =
+        sqlx::query_as("SELECT is_active, must_change_password FROM users WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let (is_active, must_change_password) =
+        user_row.ok_or_else(|| AppError::Unauthorized("User no longer exists".into()))?;
+    if !is_active {
+        return Err(AppError::Unauthorized("User account is disabled".into()));
+    }
+
+    // Load current roles from the DB rather than trusting the ones baked
+    // into the token.
+    let roles: Vec<(String,)> = sqlx::query_as(
+        "SELECT r.name FROM roles r JOIN user_roles ur ON r.role_id = ur.role_id WHERE ur.user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    let role_names: Vec<String> = roles.into_iter().map(|(n,)| n).collect();
+
+    Ok((
+        Claims {
             sub: claims.sub,
             username: claims.username,
             roles: role_names,
             exp: claims.exp,
             iat: claims.iat,
             application: claims.application,
-        })
-    }
+        },
+        must_change_password,
+    ))
 }
 
 pub(crate) async fn resolve_api_key(raw_key: &str, state: &AppState) -> Result<Claims, AppError> {

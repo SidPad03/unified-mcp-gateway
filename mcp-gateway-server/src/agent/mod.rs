@@ -96,6 +96,15 @@ pub struct AgentEnvelope {
 struct AgentHandle {
     tx: mpsc::Sender<AgentEnvelope>,
     control_tx: mpsc::Sender<AgentControl>,
+    /// Which connection owns this entry.
+    ///
+    /// A Mac that reconnects after a network flap registers again while the
+    /// gateway still holds the half-open socket. The old connection's cleanup
+    /// then ran `unregister(agent_id)` and removed the *new* handle, so a
+    /// machine that was genuinely connected had every call to it answered
+    /// "Agent not connected" until it happened to register again. Cleanup now
+    /// compares this first.
+    epoch: Uuid,
 }
 
 pub enum AgentControl {
@@ -150,12 +159,17 @@ impl AgentRegistry {
         agent_id: String,
         tx: mpsc::Sender<AgentEnvelope>,
         control_tx: mpsc::Sender<AgentControl>,
+        epoch: Uuid,
     ) {
         tracing::info!(agent_id = %agent_id, "Agent registered in memory");
-        self.agents
-            .write()
-            .await
-            .insert(agent_id, AgentHandle { tx, control_tx });
+        self.agents.write().await.insert(
+            agent_id,
+            AgentHandle {
+                tx,
+                control_tx,
+                epoch,
+            },
+        );
     }
 
     /// Ask a connected agent to re-send its registration (tool list refresh).
@@ -171,9 +185,28 @@ impl AgentRegistry {
             .map_err(|_| format!("Agent '{}' connection closed", agent_id))
     }
 
-    async fn unregister(&self, agent_id: &str) {
-        tracing::info!(agent_id = %agent_id, "Agent unregistered from memory");
-        self.agents.write().await.remove(agent_id);
+    /// Remove this connection's entry, and only this connection's.
+    ///
+    /// Returns false when a newer connection has already taken the id, in which
+    /// case the caller must leave the backend's health alone too — the machine
+    /// is connected, just not on this socket.
+    async fn unregister(&self, agent_id: &str, epoch: Uuid) -> bool {
+        let mut agents = self.agents.write().await;
+        match agents.get(agent_id) {
+            Some(handle) if handle.epoch == epoch => {
+                agents.remove(agent_id);
+                tracing::info!(agent_id = %agent_id, "Agent unregistered from memory");
+                true
+            }
+            Some(_) => {
+                tracing::info!(
+                    agent_id = %agent_id,
+                    "A newer connection holds this agent id; leaving it registered"
+                );
+                false
+            }
+            None => false,
+        }
     }
 
     pub async fn is_connected(&self, agent_id: &str) -> bool {
@@ -298,9 +331,12 @@ async fn handle_agent_connection(state: AppState, mut socket: WebSocket, token: 
     let pending: Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
+    // Identifies this socket for the lifetime of the connection, so cleanup can
+    // tell "my entry" from "the entry a reconnect already replaced".
+    let epoch = Uuid::new_v4();
     state
         .agent_registry
-        .register(agent_id.clone(), request_tx, control_tx)
+        .register(agent_id.clone(), request_tx, control_tx, epoch)
         .await;
 
     tracing::info!(agent_id = %agent_id, backend_id = %backend_id, "Agent connected and ready");
@@ -396,14 +432,18 @@ async fn handle_agent_connection(state: AppState, mut socket: WebSocket, token: 
 
     // ── Cleanup ─────────────────────────────────────────────────────────
 
-    state.agent_registry.unregister(&agent_id).await;
-
-    let _ = sqlx::query(
-        "UPDATE backends SET health_status = 'disconnected', last_health_check = NOW() WHERE backend_id = $1",
-    )
-    .bind(backend_id)
-    .execute(&state.db)
-    .await;
+    // Only if this connection still owns the id. A reconnect that raced ahead
+    // of this cleanup has a live socket, and marking its backend disconnected
+    // would be a wrong verdict on the Backends page for as long as it stayed
+    // connected.
+    if state.agent_registry.unregister(&agent_id, epoch).await {
+        let _ = sqlx::query(
+            "UPDATE backends SET health_status = 'disconnected', last_health_check = NOW() WHERE backend_id = $1",
+        )
+        .bind(backend_id)
+        .execute(&state.db)
+        .await;
+    }
 
     // Fail all pending requests
     let mut pending_map = pending.lock().await;
@@ -416,6 +456,57 @@ async fn handle_agent_connection(state: AppState, mut socket: WebSocket, token: 
 
 // ── DB helpers ──────────────────────────────────────────────────────────
 
+/// Claim the `backends` row for a connecting agent.
+///
+/// The agent id arrives in a frame the gateway did not write, so it is a claim,
+/// not a fact, and two things follow from that.
+///
+/// The name is validated: `gateway` is what the audit trail files the gateway's
+/// own calls under, and a machine allowed to take it would have its history
+/// deleted by migration 012.
+///
+/// And `WHERE backends.transport = 'agent'` is what keeps the upsert from being
+/// a takeover. Without it a register frame naming an existing stdio or http
+/// backend rewrote that row to transport='agent', replaced its config —
+/// destroying the stored env block and the tokens in it, unrecoverably — and
+/// repointed every call for that backend at the socket that sent the frame.
+async fn upsert_agent_backend(
+    db: &sqlx::PgPool,
+    agent_id: &str,
+    config: &Value,
+) -> Result<Uuid, String> {
+    crate::api::backends::validate_backend_name(agent_id)?;
+
+    // One statement, so two concurrent registrations of the same agent can't
+    // both pass a SELECT and then collide on the unique name constraint (which
+    // would surface a raw Postgres 500).
+    let new_id = Uuid::new_v4();
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "INSERT INTO backends (backend_id, name, transport, config, risk_category, is_enabled, health_status, last_health_check) \
+         VALUES ($1, $2, 'agent', $3, 'external-api', TRUE, 'healthy', NOW()) \
+         ON CONFLICT (name) DO UPDATE SET \
+             config = EXCLUDED.config, is_enabled = TRUE, \
+             health_status = 'healthy', last_health_check = NOW() \
+         WHERE backends.transport = 'agent' \
+         RETURNING backend_id",
+    )
+    .bind(new_id)
+    .bind(agent_id)
+    .bind(config)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| format!("DB error: {}", e))?;
+
+    // Nothing came back: the conflicting row exists but is not an agent, so the
+    // DO UPDATE's WHERE filtered it out.
+    row.map(|(id,)| id).ok_or_else(|| {
+        format!(
+            "A backend named '{agent_id}' already exists on this gateway and is not an agent. \
+             Rename the agent, or remove that backend first."
+        )
+    })
+}
+
 async fn register_agent_in_db(
     state: &AppState,
     agent_id: &str,
@@ -427,24 +518,7 @@ async fn register_agent_in_db(
         "sub_backends": sub_backends,
     });
 
-    // Upsert by name in a single statement so two concurrent registrations of
-    // the same agent can't both pass a SELECT and then collide on the unique
-    // name constraint (which would surface a raw Postgres 500).
-    let new_id = Uuid::new_v4();
-    let (backend_id,): (Uuid,) = sqlx::query_as(
-        "INSERT INTO backends (backend_id, name, transport, config, risk_category, is_enabled, health_status, last_health_check) \
-         VALUES ($1, $2, 'agent', $3, 'external-api', TRUE, 'healthy', NOW()) \
-         ON CONFLICT (name) DO UPDATE SET \
-             transport = 'agent', config = EXCLUDED.config, is_enabled = TRUE, \
-             health_status = 'healthy', last_health_check = NOW() \
-         RETURNING backend_id",
-    )
-    .bind(new_id)
-    .bind(agent_id)
-    .bind(&config)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| format!("DB error: {}", e))?;
+    let backend_id = upsert_agent_backend(&state.db, agent_id, &config).await?;
 
     // Convert to DiscoveredTool and register using existing helper
     let discovered: Vec<crate::backends::DiscoveredTool> = tools
@@ -466,4 +540,104 @@ async fn register_agent_in_db(
     );
 
     Ok(backend_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::upsert_agent_backend;
+    use crate::test_support::lock_db;
+    use serde_json::json;
+
+    async fn test_pool() -> Option<sqlx::PgPool> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        crate::db::run_migrations(&pool)
+            .await
+            .expect("migrations should apply");
+        sqlx::query("DELETE FROM tool_registry")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM backends")
+            .execute(&pool)
+            .await
+            .unwrap();
+        Some(pool)
+    }
+
+    /// A register frame is an untrusted claim to a name.
+    ///
+    /// Any active API key opens `/agent/ws`, and the frame that follows names
+    /// the backend row to claim. Before the transport guard, naming an existing
+    /// stdio backend rewrote it to `transport = 'agent'` and replaced its config
+    /// — its command, its arguments and its environment, tokens included — with
+    /// the agent's, and every call for that backend was then routed to the
+    /// claiming socket.
+    #[tokio::test]
+    async fn an_agent_cannot_claim_a_backend_that_is_not_an_agent() {
+        let _guard = lock_db().await;
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+
+        let stored = json!({"command": "gitea-mcp", "env": {"GITEA_TOKEN": "sk-live-1234"}});
+        sqlx::query(
+            "INSERT INTO backends (backend_id, name, transport, config, is_enabled, health_status) \
+             VALUES ($1, 'gitea', 'stdio', $2, TRUE, 'healthy')",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(&stored)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let err = upsert_agent_backend(&pool, "gitea", &json!({"agent_id": "gitea"}))
+            .await
+            .expect_err("an agent must not be able to take a stdio backend's name");
+        assert!(err.contains("already exists"), "{err}");
+
+        let (transport, config): (String, serde_json::Value) =
+            sqlx::query_as("SELECT transport, config FROM backends WHERE name = 'gitea'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(transport, "stdio");
+        assert_eq!(config, stored, "the stored config must be untouched");
+    }
+
+    /// The name the audit trail already uses for the gateway's own calls.
+    #[tokio::test]
+    async fn an_agent_cannot_register_as_gateway() {
+        let _guard = lock_db().await;
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+        assert!(upsert_agent_backend(&pool, "gateway", &json!({}))
+            .await
+            .is_err());
+    }
+
+    /// Re-registration is the common case — every reconnect sends one — so the
+    /// same agent claiming its own row again has to keep working.
+    #[tokio::test]
+    async fn an_agent_reclaims_its_own_row() {
+        let _guard = lock_db().await;
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: TEST_DATABASE_URL not set");
+            return;
+        };
+        let first = upsert_agent_backend(&pool, "sids-mac", &json!({"agent_id": "sids-mac"}))
+            .await
+            .unwrap();
+        let second = upsert_agent_backend(&pool, "sids-mac", &json!({"agent_id": "sids-mac"}))
+            .await
+            .unwrap();
+        assert_eq!(first, second, "a reconnect must keep the same backend_id");
+    }
 }

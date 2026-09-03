@@ -81,7 +81,14 @@ export const api = {
   // Audit
   getAuditEvents: (params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
-    return request<{ events: AuditEvent[]; total: number }>(`/audit${qs}`);
+    return request<AuditPage>(`/audit${qs}`);
+  },
+  /** The whole trail under the same filters, for the Export button. `/audit`
+   *  clamps `limit` to 500; this one carries up to 10,000 and says when the
+   *  result is short of `total`. */
+  exportAuditEvents: (params?: Record<string, string>) => {
+    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+    return request<AuditPage>(`/audit/export${qs}`);
   },
   getAuditStats: () => request<AuditStats>('/audit/stats'),
   clearAudit: () => request<{ status: string }>('/audit', { method: 'DELETE' }),
@@ -208,7 +215,21 @@ export interface Backend {
   health_status: string;
   last_health_check?: string;
   created_at: string;
+  /** Tools this backend published, excluding the gateway's own control tools.
+   *  The same noun the Metrics page's Backend health panel draws. */
   tool_count: number;
+  /** The subset a call can still reach — `tool_count` minus the tools that are
+   *  disabled, and 0 when the backend itself is disabled. This is what "behind
+   *  the gate" means, and it is always <= `tool_count`. */
+  enabled_tool_count: number;
+}
+
+export interface AuditPage {
+  events: AuditEvent[];
+  /** Every event matching the filter, not the number returned. */
+  total: number;
+  /** `total` is larger than `events.length` — this response is a slice. */
+  truncated: boolean;
 }
 
 export interface AuditEvent {
@@ -331,7 +352,6 @@ export interface SecurityPosture {
   listen_addr: string;
   listen_addr_public: boolean;
   admin_password_change_pending: boolean;
-  unowned_agent_backends: string[];
   active_owner_count: number;
   owners: SecurityPostureOwner[];
 }

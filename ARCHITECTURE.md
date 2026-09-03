@@ -22,9 +22,13 @@ clients and MCP tool servers. Three components + Postgres.
 Alongside everything it routes, the gateway offers a `gateway_*` namespace that
 configures the gateway itself, and each connected agent offers an `agent_*`
 mirror for its own machine. They are not a side channel: they go through the
-same policy engine and carry categories from the same risk ladder, with an
-additional `owner` check on everything that writes. They are, however,
-**invisible on the gateway** — `tool_registry.is_internal` keeps them off the
+same policy engine and carry categories from the same risk ladder. Every
+`gateway_*` tool that writes carries an additional `owner` check, applied in
+`mcp.rs` exactly as `require_admin` applies it for REST. The `agent_*` mirror
+does not: it is governed by policy, and by `agent.expose_control_tools` on the
+Mac itself, which is the last word for whoever owns that machine.
+
+They are, however, **invisible on the gateway** — `tool_registry.is_internal` keeps them off the
 Tools page and out of the counts, and their calls are written to the server log
 instead of the audit trail, so the trail stays about the traffic the operator's
 own tools carry. `Settings → Gateway tools` withdraws the namespace entirely.

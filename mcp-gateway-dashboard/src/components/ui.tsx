@@ -161,8 +161,22 @@ export function Label({ children, className }: { children: ReactNode; className?
 }
 
 /** An identifier — a tool name, an agent id, a host, a hash. Always mono. */
+/**
+ * An identifier: a tool name, a backend name, an agent id, a key prefix, a hash.
+ *
+ * `translate="no"` because every one of these is a verbatim token that has to
+ * survive being pasted back into a config file. Browser auto-translate happily
+ * turns `read_file` into `leer_archivo` on a page it decides is English, and
+ * the operator then cannot find the tool. Setting it on the primitive covers
+ * every identifier in the product at once, which is the only way this stays
+ * true.
+ */
 export function Mono({ children, className }: { children: ReactNode; className?: string }) {
-  return <span className={clsx('font-mono tabular-nums', className)}>{children}</span>;
+  return (
+    <span translate="no" className={clsx('font-mono tabular-nums', className)}>
+      {children}
+    </span>
+  );
 }
 
 /* ── Numbers ───────────────────────────────────────────────────────────── */

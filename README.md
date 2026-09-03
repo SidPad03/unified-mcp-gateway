@@ -357,6 +357,9 @@ All endpoints under `/api/v1`. Auth via `Authorization: Bearer <jwt_or_api_key>`
 | `MCPGW_ADMIN_PASSWORD` | `admin` | Initial `admin` password. If unset, defaults to `admin` and a password change is forced on first login. Set it to choose your own initial password (no forced change). |
 | `LISTEN_ADDR` | `0.0.0.0:3200` | Server listen address |
 | `RUST_LOG` | `mcp_gateway_server=info,tower_http=debug` | Log level filter |
+| `UPDATE_CHECK_DISABLED` | unset | Any truthy value turns off the dashboard's release check, for an air-gapped deployment. `0`, `false`, `off` and an empty value leave it on. |
+| `UPDATE_CHECK_REPO` | `SidPad03/unified-mcp-gateway` | Check a different repository for releases |
+| `GITHUB_TOKEN` | unset | Raises GitHub's rate limit for the release check |
 
 ## Development
 

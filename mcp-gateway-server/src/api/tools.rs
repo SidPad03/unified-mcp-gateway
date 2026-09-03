@@ -164,6 +164,35 @@ async fn update_tool(
             .await?;
     }
     if let Some(risk_category) = &req.risk_category {
+        // The same two guards `gateway_set_tool_classification` applies, because
+        // this is the same operation through a different door.
+        //
+        // A category off the ladder matches no policy and is dropped from the
+        // charts, and reclassifying an internal tool down to `read` is exactly
+        // what the deny rules governing the gateway's own tools depend on not
+        // being possible.
+        if !crate::gateway_tools::RISK_CATEGORIES.contains(&risk_category.as_str()) {
+            return Err(AppError::BadRequest(format!(
+                "'{risk_category}' is not a risk category. Use one of {:?}",
+                crate::gateway_tools::RISK_CATEGORIES
+            )));
+        }
+
+        let internal: Option<(bool,)> =
+            sqlx::query_as("SELECT is_internal FROM tool_registry WHERE tool_id = $1")
+                .bind(id)
+                .fetch_optional(&state.db)
+                .await?;
+        match internal {
+            None => return Err(AppError::NotFound("No such tool".into())),
+            Some((true,)) => {
+                return Err(AppError::BadRequest(
+                    "That is one of the gateway's own tools. Their classifications are fixed, because a policy denying them is what keeps them governed.".into(),
+                ))
+            }
+            Some((false,)) => {}
+        }
+
         sqlx::query("UPDATE tool_registry SET risk_category = $1 WHERE tool_id = $2")
             .bind(risk_category)
             .bind(id)

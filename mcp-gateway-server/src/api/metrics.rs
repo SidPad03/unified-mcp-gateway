@@ -102,11 +102,20 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/metrics/summary", get(metrics_summary))
 }
 
+/// Owner-only, because every figure below is a deployment-wide aggregate.
+///
+/// `/audit/stats` is the per-user view of the same rows and scopes a non-owner
+/// to their own `sub`; this one cannot, because `total_backends`, `total_tools`
+/// and `active_policies` have no per-user meaning. Leaving it merely
+/// authenticated handed any account — and any `mcpgw_` key — the whole
+/// gateway's call volume and the names of its ten busiest tools.
 async fn metrics_summary(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
     Query(query): Query<MetricsQuery>,
 ) -> Result<Json<MetricsSummary>, AppError> {
+    super::auth::require_admin(&claims)?;
+
     let (range, interval, bucket) = resolve_range(query.range.as_deref());
 
     let (total_tool_calls,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audit_events")
@@ -186,9 +195,17 @@ async fn metrics_summary(
     .await
     .unwrap_or_default();
 
+    // `is_internal = FALSE` is not optional here: this is the same noun the
+    // Backends page draws, and without the filter a connected Mac read 15 tools
+    // on this panel and 6 one page over.
     let backend_health: Vec<(String, String, i64)> = sqlx::query_as(
-        "SELECT b.name, b.health_status, COUNT(t.tool_id) FROM backends b LEFT JOIN tool_registry t ON b.backend_id = t.backend_id GROUP BY b.name, b.health_status ORDER BY b.name"
-    ).fetch_all(&state.db).await.unwrap_or_default();
+        "SELECT b.name, b.health_status, COUNT(t.tool_id) FILTER (WHERE t.is_internal = FALSE) \
+         FROM backends b LEFT JOIN tool_registry t ON b.backend_id = t.backend_id \
+         GROUP BY b.name, b.health_status ORDER BY b.name",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
 
     let calls_by_risk: Vec<(Option<String>, i64)> = sqlx::query_as(&format!(
         "SELECT COALESCE(t.risk_category, a.risk_category) as risk, COUNT(*) \
@@ -246,7 +263,13 @@ async fn metrics_summary(
         calls_by_risk: calls_by_risk
             .into_iter()
             .map(|(risk_category, count)| RiskMetric {
-                risk_category: risk_category.unwrap_or_else(|| "unknown".into()),
+                // `unclassified` is the word the classifier, the policy editor,
+                // the risk ramp and `effective_risk` all use for a tool nobody
+                // has reviewed. Emitting `unknown` here put those calls in a
+                // bucket the chart's whitelist did not recognise, so they were
+                // dropped from the bar *and* from its percentage denominator.
+                risk_category: risk_category
+                    .unwrap_or_else(|| crate::api::mcp::DEFAULT_RISK.to_string()),
                 count,
             })
             .collect(),

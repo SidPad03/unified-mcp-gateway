@@ -14,9 +14,13 @@
 //!    — installing is `admin`, removing is `destructive` — so the operator's
 //!    existing RBAC governs them without knowing they are special. The mapping
 //!    lives in the server's `backends::classifier`.
-//! 2. **They are audited.** They arrive as ordinary tool calls, so the gateway
-//!    records them in the same trail as everything else, and this agent's own
-//!    Activity page shows them alongside real tool traffic.
+//! 2. **They are recorded, but not in the trail.** They arrive as ordinary tool
+//!    calls, and the gateway policy-evaluates them like any other — but it
+//!    marks them internal and writes each call to its *server* log at INFO with
+//!    the caller, the tool, the status and the duration, instead of to the
+//!    audit trail. The trail is about the traffic the operator's own tools
+//!    carry; `docker logs` is where "who reconfigured this Mac, and when" is
+//!    answered.
 //! 3. **They can be switched off.** `agent.expose_control_tools` in
 //!    `config.toml`, and the toggle in Settings, decide whether they are
 //!    registered at all. A machine that has them off cannot be configured from

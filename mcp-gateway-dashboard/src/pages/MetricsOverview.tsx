@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api, MetricsRange, MetricsSummary } from '@/lib/api';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { BarChart3, Eye, EyeOff, RotateCcw, Server, SlidersHorizontal } from 'lucide-react';
@@ -95,6 +95,8 @@ export default function MetricsOverview() {
   const [showCustomize, setShowCustomize] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(30);
   const [range, setRange] = useState<MetricsRange>(loadRange);
+  /** Monotonic id of the newest in-flight request; older ones are dropped. */
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     loadMetrics();
@@ -103,13 +105,20 @@ export default function MetricsOverview() {
   }, [refreshInterval, range]);
 
   const loadMetrics = async () => {
+    // The range picker and the refresh timer both fire this, and their
+    // responses do not return in order — a 24h refresh landing after a 30d
+    // switch repainted every figure under a picker still lit on 30d.
+    const seq = ++requestSeq.current;
     try {
-      setMetrics(await api.getMetricsSummary(range));
+      const next = await api.getMetricsSummary(range);
+      if (seq !== requestSeq.current) return;
+      setMetrics(next);
       setPageError('');
     } catch (e: any) {
+      if (seq !== requestSeq.current) return;
       setPageError(e.message || 'Failed to load metrics');
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   };
 
@@ -224,6 +233,11 @@ export default function MetricsOverview() {
         // server says which it sent rather than the client guessing from the
         // number of points.
         const byDay = metrics.volume_bucket === 'day';
+        // Seven days of hourly points is 168 of them, all labelled `14:00`. The
+        // axis has to say which day, or a spike cannot be attributed to one.
+        const multiDay =
+          !byDay &&
+          new Set(metrics.volume.map(v => new Date(v.bucket).toDateString())).size > 1;
         return (
           <ChartCard title={`Call volume · ${metrics.range}`} bleed>
             {metrics.volume.length === 0 ? (
@@ -244,18 +258,27 @@ export default function MetricsOverview() {
                   <XAxis
                     dataKey="bucket"
                     {...axisProps}
-                    tickFormatter={(v: string) =>
-                      byDay
-                        ? new Date(v).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-                        : new Date(v).toLocaleTimeString(undefined, { hour: '2-digit', hour12: false }) + ':00'
-                    }
-                    minTickGap={28}
+                    tickFormatter={(v: string) => {
+                      const d = new Date(v);
+                      if (byDay) {
+                        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                      }
+                      const hour =
+                        d.toLocaleTimeString(undefined, { hour: '2-digit', hour12: false }) + ':00';
+                      return multiDay
+                        ? `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${hour}`
+                        : hour;
+                    }}
+                    minTickGap={multiDay ? 56 : 28}
                   />
                   <YAxis
                     {...axisProps}
                     width={34}
                     domain={[0, ceiling]}
                     ticks={[0, ceiling / 4, ceiling / 2, (ceiling * 3) / 4, ceiling]}
+                    // Through `fmt`, like every other number here. Left raw,
+                    // the axis read `1203` beside a tooltip reading `1,203`.
+                    tickFormatter={(v: number) => fmt.compact(v)}
                     allowDecimals={false}
                   />
                   <Tooltip
@@ -364,9 +387,20 @@ export default function MetricsOverview() {
       /* Risk is ordinal, so it is one bar read left-to-right from safe to
          severe — not a donut of six equally loud hues. */
       case 'riskBreakdown': {
-        const ordered = ['read', 'write', 'execute', 'admin', 'destructive', 'unclassified']
-          .map(k => metrics.calls_by_risk.find(r => r.risk_category === k))
-          .filter(Boolean) as MetricsSummary['calls_by_risk'];
+        /* Ordered by the ramp, but nothing is dropped. The list used to be a
+           whitelist filtered with `.filter(Boolean)`, so any category the
+           server sent that was not one of these six — including the
+           `unclassified` bucket, which the API spelled `unknown` — vanished
+           from the bar *and* from the denominator underneath it, leaving the
+           percentages summing to a tidy 100% over a subset of the traffic. */
+        const RAMP = ['read', 'write', 'execute', 'admin', 'destructive', 'unclassified'];
+        const rank = (r: { risk_category: string }) => {
+          const i = RAMP.indexOf(r.risk_category);
+          return i === -1 ? RAMP.length : i;
+        };
+        const ordered = [...metrics.calls_by_risk]
+          .filter(r => r.count > 0)
+          .sort((a, b) => rank(a) - rank(b) || a.risk_category.localeCompare(b.risk_category));
         const total = ordered.reduce((s, r) => s + r.count, 0);
         return (
           <ChartCard title={`Calls by risk · ${metrics.range}`} className="h-full">

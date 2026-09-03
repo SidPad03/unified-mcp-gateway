@@ -43,8 +43,10 @@ import {
   Layers,
   ChevronRight,
   Laptop,
+  AlertCircle,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { Banner, Button } from '@/components/ui';
 
 // ── App metadata with proper names, colors, and icons ──────────────
 // color: brand accent — used for glow, handle dot, fallback icon tint. Must be visible on dark bg.
@@ -72,7 +74,7 @@ const APP_ICON_URLS: Record<string, string> = {
   clawbot: 'https://cdn.jsdelivr.net/gh/twitter/twemoji/assets/svg/1f980.svg',
 };
 
-const fallbackAppMeta = { label: '', color: '#6b7280', lineColor: undefined as string | undefined, iconBg: undefined as string | undefined, Icon: MessageSquare as LucideIcon };
+const fallbackAppMeta = { label: '', color: 'var(--text-3)', lineColor: undefined as string | undefined, iconBg: undefined as string | undefined, Icon: MessageSquare as LucideIcon };
 
 const getAppMeta = (key: string) => {
   const meta = APP_META[key];
@@ -117,17 +119,17 @@ function NodeShell({
           style={{ background: glowColor }}
         />
       )}
+      {/* Bound to the tokens, not to a literal near-black. The card used to be
+          a fixed dark gradient while the text inside it used `--text`, so in
+          the light theme every node label was near-black on near-black and the
+          page could not be read at all. */}
       <div
         className={clsx(
-          'relative px-4 py-3 rounded-panel min-w-[160px] border transition-all duration-200 group-hover:border-white/10 cursor-pointer',
-          selected && 'ring-1 ring-beam-edge/50',
+          'relative px-4 py-3 rounded-panel min-w-[160px] border cursor-pointer',
+          'bg-panel shadow-[var(--shadow-card)]',
+          'transition-[border-color,box-shadow] duration-200',
+          selected ? 'border-beam-edge ring-1 ring-beam-edge/50' : 'border-line hover:border-line-strong',
         )}
-        style={{
-          background: 'linear-gradient(135deg, rgba(15,15,23,0.95) 0%, rgba(22,22,31,0.9) 100%)',
-          borderColor: selected ? 'rgba(124,92,252,0.4)' : 'rgba(30,30,46,0.6)',
-          backdropFilter: 'blur(12px)',
-          boxShadow: '0 2px 16px rgba(0,0,0,0.4)',
-        }}
       >
         {children}
       </div>
@@ -636,17 +638,9 @@ function DetailPanel({
   };
 
   return (
-    <div
-      className="absolute top-2 right-2 bottom-2 w-80 z-20 rounded-card border overflow-hidden flex flex-col"
-      style={{
-        background: 'linear-gradient(180deg, rgba(15,15,23,0.98) 0%, rgba(10,10,15,0.98) 100%)',
-        borderColor: 'rgba(30,30,46,0.6)',
-        backdropFilter: 'blur(20px)',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-      }}
-    >
+    <div className="absolute top-2 right-2 bottom-2 w-80 z-20 rounded-card border border-line bg-high shadow-[var(--shadow-pop)] overflow-hidden flex flex-col">
       {/* Header */}
-      <div className="flex items-start justify-between p-4 border-b border-white/5">
+      <div className="flex items-start justify-between p-4 border-b border-line-soft">
         <div className="flex-1 min-w-0">{renderHeader()}</div>
         <button
           onClick={onClose}
@@ -676,12 +670,15 @@ function DetailPanel({
             {events.map((evt, idx) => (
               <div
                 key={evt.event_id}
-                className="px-3 py-2.5 rounded-row border border-white/[0.03] hover:border-white/[0.06] transition-all duration-300"
-                style={{
-                  background: idx === 0 ? 'rgba(124,92,252,0.06)' : 'rgba(255,255,255,0.02)',
-                  borderColor: idx === 0 ? 'rgba(124,92,252,0.15)' : undefined,
-                  animation: idx === 0 ? 'fadeSlideIn 0.3s ease' : undefined,
-                }}
+                className={clsx(
+                  'px-3 py-2.5 rounded-row border transition-colors duration-200',
+                  // The newest event is the one thing on this list that is
+                  // alive, so it carries the accent — the same signal the
+                  // status dot uses — rather than a violet nothing else uses.
+                  idx === 0
+                    ? 'bg-beam-wash border-beam-edge animate-rise'
+                    : 'bg-raised border-line-soft hover:border-line',
+                )}
               >
                 <div className="flex items-center gap-2">
                   {statusIcon(evt.status)}
@@ -755,6 +752,9 @@ interface Props {
 
 export default function UsageGraph({ isAdmin }: Props) {
   const [graphData, setGraphData] = useState<UsageGraphData | null>(null);
+  const [graphError, setGraphError] = useState('');
+  /** Monotonic id of the newest in-flight graph request; older ones are dropped. */
+  const graphSeq = useRef(0);
   const [connections, setConnections] = useState<ConnectionStatus[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string>('');
@@ -787,19 +787,29 @@ export default function UsageGraph({ isAdmin }: Props) {
   }, []);
 
   const loadGraph = useCallback(async () => {
+    // Three range buttons mean three requests in flight, and the 5s poll adds
+    // one every five seconds. They do not return in order: a 24h poll landing
+    // after a 30d load used to repaint the whole board with the wrong window
+    // while the picker stayed lit on 30d.
+    const seq = ++graphSeq.current;
     setLoading(true);
     try {
       const [data, conn] = await Promise.all([
         api.getUsageGraph(selectedUserId || undefined, range),
         api.getConnections(selectedUserId || undefined),
       ]);
+      if (seq !== graphSeq.current) return;
       setGraphData(data);
       setConnections(conn);
-    } catch (err) {
-      console.error('Failed to load usage graph:', err);
-      setGraphData(null);
+      setGraphError('');
+    } catch (err: any) {
+      if (seq !== graphSeq.current) return;
+      // Not `setGraphData(null)`. With no data the board renders its empty
+      // state, so an unreachable gateway reported a healthy idle one — on the
+      // one page a non-owner can open.
+      setGraphError(err?.message || 'Could not reach the gateway');
     } finally {
-      setLoading(false);
+      if (seq === graphSeq.current) setLoading(false);
     }
   }, [selectedUserId, range]);
 
@@ -938,14 +948,22 @@ export default function UsageGraph({ isAdmin }: Props) {
       setLiveMode('polling');
       setWsConnected(true); // show as connected (polling)
       pollTimer = setInterval(async () => {
+        const seq = ++graphSeq.current;
         try {
           const [data, conn] = await Promise.all([
             api.getUsageGraph(selectedUserId || undefined, range),
             api.getConnections(selectedUserId || undefined),
           ]);
+          if (seq !== graphSeq.current) return;
           setGraphData(data);
           setConnections(conn);
-        } catch { /* ignore */ }
+          setGraphError('');
+        } catch (err: any) {
+          // A poll that fails silently leaves the board frozen on stale numbers
+          // with the indicator still reading "auto-refresh".
+          if (seq !== graphSeq.current) return;
+          setGraphError(err?.message || 'Could not reach the gateway');
+        }
       }, 5000);
     }
 
@@ -1529,6 +1547,16 @@ export default function UsageGraph({ isAdmin }: Props) {
         </button>
       </div>
 
+      {/* Once there is something on screen the same failure is a banner: the
+          numbers are stale, not gone. */}
+      {graphError && graphData && (
+        <div className="px-4 pt-2 sm:px-5 lg:px-7">
+          <Banner tone="warn" onDismiss={() => setGraphError('')}>
+            These figures are stale — the last refresh failed. {graphError}
+          </Banner>
+        </div>
+      )}
+
       {/* ── Canvas ──────────────────────────────────────────────── */}
       <div className="flex-1 relative">
         {loading ? (
@@ -1538,6 +1566,22 @@ export default function UsageGraph({ isAdmin }: Props) {
                 <RefreshCw className="w-4 h-4 text-beam animate-spin" />
               </div>
               <p className="text-xs text-ink-4">Loading graph data...</p>
+            </div>
+          </div>
+        ) : graphError && !graphData ? (
+          /* A first load that fails is the page, not a banner: with nothing on
+             screen there is no stale figure to keep, and an empty state here
+             would assert an idle gateway that is in fact unreachable. */
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center max-w-sm px-6">
+              <div className="w-12 h-12 mx-auto rounded-panel bg-deny-wash border border-deny-edge flex items-center justify-center mb-3">
+                <AlertCircle className="w-5 h-5 text-deny" />
+              </div>
+              <p className="text-sm text-ink-2">The usage graph could not be loaded</p>
+              <p className="text-xs text-ink-4 mt-1 break-words">{graphError}</p>
+              <Button className="mt-4" onClick={loadGraph}>
+                Try again
+              </Button>
             </div>
           </div>
         ) : nodes.length === 0 ? (

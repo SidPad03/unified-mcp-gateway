@@ -102,11 +102,26 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # API + MCP endpoint
-    location ~ ^/(api|mcp)/ {
+    # The MCP endpoint. An exact match: the gateway serves `POST /mcp` with
+    # nothing after it, so a prefix rule that expects a trailing slash never
+    # fires and the request falls through to the dashboard, which answers an
+    # MCP client with index.html and HTTP 200.
+    location = /mcp {
         proxy_pass http://127.0.0.1:3200;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # The REST API, and the dashboard's live feed, which is a WebSocket under
+    # /api/v1/ws/live — hence the upgrade headers and the long read timeout.
+    location /api/ {
+        proxy_pass http://127.0.0.1:3200;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
     }
 
     # Agent WebSocket — needs upgrade headers and a long read timeout
@@ -186,12 +201,12 @@ dashboard.
 
 ```bash
 # on the source
-docker compose exec -T postgres pg_dump -U mcpgw mcpgw > mcpgw.sql
-cp .env mcpgw.env          # keep JWT_SECRET with the dump
+docker compose exec -T postgres pg_dump -U mcpgateway mcpgateway > mcpgateway.sql
+cp .env mcpgateway.env     # keep JWT_SECRET with the dump
 
 # on the target
 docker compose up -d postgres
-docker compose exec -T postgres psql -U mcpgw mcpgw < mcpgw.sql
+docker compose exec -T postgres psql -U mcpgateway mcpgateway < mcpgateway.sql
 docker compose up -d
 ```
 
@@ -215,8 +230,11 @@ The notice is shown to owners only, since `/settings` is an owner route.
 | Variable | Effect |
 |----------|--------|
 | `UPDATE_CHECK_REPO` | Check a different repo (default `SidPad03/unified-mcp-gateway`) |
-| `UPDATE_CHECK_DISABLED` | Set to anything to disable the check — for air-gapped deployments |
+| `UPDATE_CHECK_DISABLED` | Set to anything, including an empty string, to disable the check — for air-gapped deployments |
 | `GITHUB_TOKEN` | Optional; raises GitHub's rate limit for the check |
+
+Set them in the `.env` file beside `docker-compose.yml`; the compose file passes
+all three through to the server.
 
 If the check cannot reach GitHub it says so explicitly rather than reporting
 "up to date", so a stale deployment is never mistaken for a current one.

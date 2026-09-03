@@ -56,7 +56,7 @@ pub fn mcp_router() -> Router<AppState> {
 /// the value the classifier, the dashboard, and the policy editor all use, and
 /// treating an unreviewed tool as the *lowest* risk is the wrong direction for
 /// a gateway to fail.
-const DEFAULT_RISK: &str = "unclassified";
+pub(crate) const DEFAULT_RISK: &str = "unclassified";
 
 fn effective_risk(risk_category: Option<&str>) -> &str {
     risk_category.unwrap_or(DEFAULT_RISK)

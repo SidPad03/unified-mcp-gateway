@@ -55,7 +55,7 @@ pub struct ToolDef {
     pub input_schema: Value,
 }
 
-const RISK_CATEGORIES: [&str; 6] = [
+pub(crate) const RISK_CATEGORIES: [&str; 6] = [
     "read",
     "write",
     "execute",
@@ -1018,11 +1018,7 @@ async fn register_backend(state: &AppState, args: &Value) -> Result<Value, Strin
             "'transport' must be one of {REGISTERABLE_TRANSPORTS:?}"
         ));
     }
-    if name.contains("__") {
-        return Err(
-            "A backend name cannot contain '__' — that is the tool namespace separator".into(),
-        );
-    }
+    crate::api::backends::validate_backend_name(name)?;
     if transport == "stdio" && opt_str(args, "command").is_none() {
         return Err("A stdio backend needs a 'command'".into());
     }
@@ -1583,14 +1579,21 @@ async fn query_audit_log(state: &AppState, claims: &Claims, args: &Value) -> Res
     }))
 }
 
+/// The gateway's own snapshot of itself.
+///
+/// The tool counts carry `is_internal = FALSE` for the same reason every other
+/// operator-facing count does: the `gateway_*` and `agent_*` control tools are
+/// this product's plumbing, not the inventory somebody put behind it. Without
+/// the filter this was the one gateway-wide tool total that disagreed with the
+/// Metrics page, by nine per connected Mac.
 async fn health(state: &AppState) -> Result<Value, String> {
     let row: (i64, i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
         "SELECT \
            (SELECT COUNT(*) FROM backends), \
            (SELECT COUNT(*) FROM backends WHERE is_enabled = TRUE), \
            (SELECT COUNT(*) FROM backends WHERE is_enabled = TRUE AND health_status = 'healthy'), \
-           (SELECT COUNT(*) FROM tool_registry), \
-           (SELECT COUNT(*) FROM tool_registry WHERE is_enabled = TRUE), \
+           (SELECT COUNT(*) FROM tool_registry WHERE is_internal = FALSE), \
+           (SELECT COUNT(*) FROM tool_registry WHERE is_enabled = TRUE AND is_internal = FALSE), \
            (SELECT COUNT(*) FROM policies WHERE is_active = TRUE), \
            (SELECT COUNT(*) FROM users WHERE is_active = TRUE), \
            (SELECT COUNT(*) FROM audit_events WHERE timestamp > NOW() - INTERVAL '24 hours')",

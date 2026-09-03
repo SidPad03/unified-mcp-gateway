@@ -273,26 +273,20 @@ async fn usage_graph(
         })
         .collect();
 
-    // Backends
-    let backends: Vec<(String, String, String, i64)> = sqlx::query_as(
-        "SELECT b.name, b.transport, b.health_status, COUNT(t.tool_id)
-         FROM backends b LEFT JOIN tool_registry t ON t.backend_id = b.backend_id AND t.is_enabled = TRUE
+    // Backends. The count is filled in below from the tool rows this response
+    // actually carries, so a node's "N tools" is a statement about the picture
+    // expanding it will draw. It used to be its own query with its own filter —
+    // `is_enabled` but not `is_internal` — so a Mac's node claimed fifteen
+    // tools and drew six, on one screen.
+    let backends: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT b.name, b.transport, b.health_status
+         FROM backends b
          WHERE b.is_enabled = TRUE AND ($1::text IS NULL OR b.name = $1)
-         GROUP BY b.name, b.transport, b.health_status"
+         GROUP BY b.name, b.transport, b.health_status",
     )
     .bind(&backend_filter)
     .fetch_all(&state.db)
     .await?;
-
-    let backend_nodes: Vec<BackendNode> = backends
-        .into_iter()
-        .map(|(name, transport, health, tool_count)| BackendNode {
-            backend_name: name,
-            transport,
-            health_status: health,
-            tool_count,
-        })
-        .collect();
 
     // Tools: start from tool_registry (always visible), enrich with audit call counts + last_call
     let tool_rows: Vec<(
@@ -339,6 +333,29 @@ async fn usage_graph(
                 last_call: last_call.map(|t| t.to_rfc3339()),
             },
         )
+        .collect();
+
+    // Now the tools are known, so each backend node can carry the number of them
+    // it has. Derived rather than queried: a count and a picture that disagree
+    // on one screen is worse than either being wrong alone.
+    let mut drawn_per_backend: std::collections::HashMap<&str, i64> =
+        std::collections::HashMap::new();
+    for tool in &tools {
+        *drawn_per_backend
+            .entry(tool.backend_name.as_str())
+            .or_insert(0) += 1;
+    }
+    let backend_nodes: Vec<BackendNode> = backends
+        .into_iter()
+        .map(|(name, transport, health)| BackendNode {
+            tool_count: drawn_per_backend
+                .get(name.as_str())
+                .copied()
+                .unwrap_or_default(),
+            backend_name: name,
+            transport,
+            health_status: health,
+        })
         .collect();
 
     // Edges: app → backend
@@ -399,39 +416,20 @@ async fn usage_graph(
         })
         .collect();
 
-    // Edges: backend → tool (from registry + audit counts)
-    let backend_tool_edges: Vec<(String, String, i64, Option<chrono::DateTime<chrono::Utc>>)> =
-        sqlx::query_as(&format!(
-            "SELECT b.name as backend_name, t.tool_name,
-                    COALESCE(ae.cnt, 0) as call_count, ae.last_call
-             FROM tool_registry t
-             JOIN backends b ON t.backend_id = b.backend_id
-             LEFT JOIN (
-                 SELECT tool_name, COUNT(*) as cnt, MAX(timestamp) as last_call
-                 FROM audit_events
-                 WHERE ($1::uuid IS NULL OR user_id = $1)
-                   AND ($2::text IS NULL OR backend_name = $2)
-                   AND timestamp > NOW() - INTERVAL '{}'
-                 GROUP BY tool_name
-             ) ae ON ae.tool_name = t.tool_name
-             WHERE t.is_enabled = TRUE AND b.is_enabled = TRUE AND t.is_internal = FALSE
-               AND ($2::text IS NULL OR b.name = $2)
-             ORDER BY call_count DESC
-             LIMIT 50",
-            interval
-        ))
-        .bind(target_user)
-        .bind(&backend_filter)
-        .fetch_all(&state.db)
-        .await?;
-
-    let backend_to_tool: Vec<GraphEdge> = backend_tool_edges
-        .into_iter()
-        .map(|(backend, tool, cnt, last)| GraphEdge {
-            source: backend,
-            target: tool,
-            call_count: cnt,
-            last_call: last.map(|t| t.to_rfc3339()),
+    // Edges: backend → tool.
+    //
+    // Derived from the tool nodes rather than queried again. The two used to be
+    // separate statements over the same rows with different caps — 100 nodes,
+    // 50 edges — and different ordering, so past fifty tools the graph drew
+    // tool nodes with no line to the backend they belong to, and which ones
+    // floated changed between refreshes.
+    let backend_to_tool: Vec<GraphEdge> = tools
+        .iter()
+        .map(|tool| GraphEdge {
+            source: tool.backend_name.clone(),
+            target: tool.tool_name.clone(),
+            call_count: tool.call_count,
+            last_call: tool.last_call.clone(),
         })
         .collect();
 

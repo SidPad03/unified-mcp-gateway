@@ -252,7 +252,12 @@ export default function BackendConfig({ isAdmin }: Props) {
     return apiKeys.find(k => k.application === app && (!targetUserId || k.user_id === targetUserId));
   };
 
-  const getDefaultGatewayUrl = () => 'https://localhost:8080/mcp';
+  // The origin this dashboard is served from, which is where nginx proxies
+  // /mcp in the shipped compose file. The old fallback was
+  // `https://localhost:8080/mcp` — port 8080 is the *dashboard*, it serves
+  // plain HTTP, and every generated client config was therefore unusable on a
+  // fresh install.
+  const getDefaultGatewayUrl = () => `${window.location.origin}/mcp`;
 
   const getGatewayUrl = () => gatewayUrl || getDefaultGatewayUrl();
 
@@ -774,8 +779,11 @@ export default function BackendConfig({ isAdmin }: Props) {
           <div className="flex items-end justify-between gap-8 flex-wrap">
             <div>
               <Label>Tools behind the gate</Label>
+              {/* `enabled_tool_count`, not `tool_count`: "behind the gate" is
+                  what `tools/list` will serve, and disabling a 44-tool backend
+                  used to leave this figure where it was. */}
               <div className="text-2xl font-semibold tracking-[-0.02em] tabular-nums text-ink mt-1.5">
-                {fmt.count(backends.reduce((s, b) => s + b.tool_count, 0))}
+                {fmt.count(backends.reduce((s, b) => s + b.enabled_tool_count, 0))}
               </div>
             </div>
             <div className="flex items-end gap-7 flex-wrap">
@@ -916,7 +924,17 @@ export default function BackendConfig({ isAdmin }: Props) {
                 {isSelected && (
                   <div className="bg-inset border-y border-line-soft px-4 py-3.5">
                     <h4 className="text-xs font-medium text-ink-2 uppercase tracking-wider mb-2">Configuration</h4>
-                    {backend.transport === 'stdio' && (
+                    {/* The server strips the command line, the URL, the env and
+                        the headers for a non-owner — an argv routinely carries a
+                        credential. Say so, rather than drawing "Command:" with
+                        nothing after it: an absent field and an empty one look
+                        the same, and only one of them is a permission. */}
+                    {!isAdmin && (
+                      <p className="text-2xs text-ink-4 mb-3">
+                        The command, URL and environment are visible to owners only.
+                      </p>
+                    )}
+                    {isAdmin && backend.transport === 'stdio' && (
                       <div className="space-y-2 mb-3">
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-ink-3 w-16 shrink-0">Command:</span>
@@ -1030,7 +1048,7 @@ export default function BackendConfig({ isAdmin }: Props) {
                         )}
                       </div>
                     )}
-                    {backend.transport !== 'stdio' && backend.transport !== 'agent' && (
+                    {isAdmin && backend.transport !== 'stdio' && backend.transport !== 'agent' && (
                       <pre className="text-xs text-ink-2 bg-inset p-3 rounded-row overflow-auto max-h-48 font-mono mb-3">
                         {/* Read-only, so the placeholder can be prettied up here —
                             unlike the JSON editor, where it has to round-trip. */}
@@ -1144,7 +1162,7 @@ export default function BackendConfig({ isAdmin }: Props) {
                     'w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink focus:outline-none focus:border-beam-edge',
                     editingBackend && 'opacity-60 cursor-not-allowed'
                   )}
-                  placeholder="e.g. gitea, n8n-mcp, filesystem"
+                  placeholder="gitea"
                 />
               </div>
 
@@ -1188,7 +1206,7 @@ export default function BackendConfig({ isAdmin }: Props) {
                       value={stdioForm.command}
                       onChange={e => setStdioForm({ ...stdioForm, command: e.target.value })}
                       className="w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink font-mono focus:outline-none focus:border-beam-edge"
-                      placeholder="e.g. npx, go, node, python"
+                      placeholder="npx"
                     />
                   </div>
                   <div>
@@ -1227,7 +1245,7 @@ export default function BackendConfig({ isAdmin }: Props) {
                       value={httpForm.url}
                       onChange={e => setHttpForm({ ...httpForm, url: e.target.value })}
                       className="w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink font-mono focus:outline-none focus:border-beam-edge"
-                      placeholder="e.g. http://localhost:8080/mcp"
+                      placeholder="https://api.example.com/mcp"
                     />
                   </div>
                   {renderEnvFields('http')}

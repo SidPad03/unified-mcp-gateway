@@ -42,6 +42,13 @@ A tool call from an AI client travels:
 Tool names are namespaced as `{backend_name}__{original_tool_name}`, so two
 backends can each expose a `search` tool without colliding.
 
+The gateway's own `gateway_*` and `agent_*` tools take the same road as far as
+step 4 — same authentication, same policy engine, plus an `owner` check on every
+`gateway_*` tool that writes — and then diverge at step 5: they are marked
+internal, so the call goes to the server log at INFO instead of to
+`audit_events`, and they are left out of every operator-facing count. See
+[Self-Configuration Tools](self-configuration.md#they-are-invisible-on-the-gateway).
+
 ## Backend transports
 
 | Transport | How the server reaches it |

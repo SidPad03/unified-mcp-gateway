@@ -345,12 +345,24 @@ export default function UserManagement() {
                 </td>
                 <td className="px-2.5 sm:px-4 py-3">
                   <div className="flex items-center justify-end gap-1.5">
+                    {/* A user with no roles is not an owner. Falling back to
+                        `'owner'` made the selector say the most privileged role
+                        in the system, contradicting the Role column on the same
+                        row, which correctly showed nothing. Native `<select>`
+                        needs an explicit background and colour or Windows dark
+                        mode paints its own. */}
                     <select
-                      value={user.roles[0] || 'owner'}
+                      value={user.roles[0] ?? ''}
                       onChange={e => updateRole(user.user_id, e.target.value)}
                       aria-label={`Role for ${user.username}`}
-                      className="text-xs px-2 py-1 bg-raised border border-line rounded-control text-ink-2 max-w-[70px] sm:max-w-none"
+                      className="text-xs px-2 py-1 bg-raised text-ink-2 border border-line rounded-control max-w-[70px] sm:max-w-none"
+                      style={{ backgroundColor: 'var(--raised)', color: 'var(--text-2)' }}
                     >
+                      {user.roles.length === 0 && (
+                        <option value="" disabled>
+                          no role
+                        </option>
+                      )}
                       {roles.map(r => <option key={r.role_id} value={r.name}>{r.name}</option>)}
                     </select>
                     <button
@@ -389,28 +401,30 @@ export default function UserManagement() {
             Roles
           </h3>
         </div>
-        <table className="w-full">
+        {/* Seven columns at 375px is a 590px scroller, and the last of them
+            holds Edit and Delete — the only way to act on a role. The columns
+            are ranked so the two that matter are never the ones cut. */}
+        <table className="w-full border-collapse">
           <thead>
-            <tr className="border-b border-line">
-              <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Name</th>
-              <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Description</th>
-              <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Default</th>
-              <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Users</th>
-              <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Policies</th>
-              <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Type</th>
-              <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Actions</th>
+            <tr>
+              <Th>Name</Th>
+              <Th>Default</Th>
+              <Th hide="sm">Users</Th>
+              <Th hide="md">Policies</Th>
+              <Th hide="lg">Type</Th>
+              <Th hide="xl">Description</Th>
+              <Th align="right">Actions</Th>
             </tr>
           </thead>
           <tbody>
             {roles.map(role => (
-              <tr key={role.role_id} className="border-b border-line-soft hover:bg-raised transition-colors">
-                <td className="px-2.5 sm:px-4 py-3">
+              <tr key={role.role_id} className="hover:bg-raised transition-colors">
+                <Td>
                   <span className={clsx('inline-flex px-2 py-0.5 text-xs font-medium rounded-full border capitalize', getRoleColor(role.name))}>
                     {role.name}
                   </span>
-                </td>
-                <td className="px-2.5 sm:px-4 py-3 text-sm text-ink-2">{role.description || '—'}</td>
-                <td className="px-2.5 sm:px-4 py-3">
+                </Td>
+                <Td>
                   <span className={clsx(
                     'text-xs px-1.5 py-0.5 rounded-control font-medium',
                     role.default_policy === 'allow'
@@ -419,16 +433,17 @@ export default function UserManagement() {
                   )}>
                     {role.default_policy === 'allow' ? 'Allow all' : 'Deny all'}
                   </span>
-                </td>
-                <td className="px-2.5 sm:px-4 py-3 text-sm text-ink-2">{role.user_count}</td>
-                <td className="px-2.5 sm:px-4 py-3 text-sm text-ink-2">{role.policies.length} active</td>
-                <td className="px-2.5 sm:px-4 py-3">
+                </Td>
+                <Td hide="sm">{fmt.count(role.user_count)}</Td>
+                <Td hide="md">{fmt.count(role.policies.length)} active</Td>
+                <Td hide="lg">
                   <span className={clsx('text-xs px-1.5 py-0.5 rounded-control', role.is_system ? 'bg-high text-ink-2' : 'bg-beam-wash text-beam')}>
                     {role.is_system ? 'system' : 'custom'}
                   </span>
-                </td>
-                <td className="px-2.5 sm:px-4 py-3">
-                  <div className="flex items-center gap-1">
+                </Td>
+                <Td hide="xl">{role.description || '—'}</Td>
+                <Td align="right">
+                  <div className="flex items-center justify-end gap-1">
                     <button
                       onClick={() => openRoleEdit(role)}
                       className="p-1.5 text-ink-3 hover:text-ink-2 hover:bg-high rounded-control transition-colors"
@@ -442,15 +457,31 @@ export default function UserManagement() {
                         className="p-1.5 text-ink-3 hover:text-deny hover:bg-deny-wash/10 rounded-control transition-colors"
                         title="Delete role"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
-                </td>
+                </Td>
               </tr>
             ))}
+            {/* "No roles defined" is a claim. It used to be shown while the
+                request was still in flight and again after it failed, so a
+                gateway with four roles asserted it had none. */}
             {roles.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-ink-3 text-sm">No roles defined</td></tr>
+              <TableMessage colSpan={7}>
+                {loading ? (
+                  <Loading label="Loading roles..." />
+                ) : pageError ? (
+                  <EmptyState
+                    icon={Shield}
+                    title="Roles could not be read"
+                    message="This is a failed request, not an empty list."
+                    action={<Button onClick={loadData}>Try again</Button>}
+                  />
+                ) : (
+                  <EmptyState icon={Shield} title="No roles defined" />
+                )}
+              </TableMessage>
             )}
           </tbody>
         </table>
@@ -465,22 +496,25 @@ export default function UserManagement() {
               API keys
             </h3>
           </div>
-          <table className="w-full">
+          {/* Ranked, so Revoke is never the column that gets cut. */}
+          <table className="w-full border-collapse">
             <thead>
-              <tr className="border-b border-line">
-                <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Prefix</th>
-                <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Name</th>
-                <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">User</th>
-                <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Created</th>
-                <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Last used</th>
-                <th className="text-left px-2.5 sm:px-4 py-3 text-xs font-medium text-ink-3 uppercase tracking-wider">Actions</th>
+              <tr>
+                <Th>Prefix</Th>
+                <Th hide="sm">Name</Th>
+                <Th hide="md">User</Th>
+                <Th hide="lg">Last used</Th>
+                <Th hide="xl">Created</Th>
+                <Th align="right">Actions</Th>
               </tr>
             </thead>
             <tbody>
               {apiKeys.map(k => (
-                <tr key={k.key_id} className="border-b border-line-soft hover:bg-raised transition-colors">
-                  <td className="px-2.5 sm:px-4 py-3 text-sm text-ink-2 font-mono">{k.key_prefix}...</td>
-                  <td className="px-2.5 sm:px-4 py-3 text-sm text-ink">
+                <tr key={k.key_id} className="hover:bg-raised transition-colors">
+                  <Td>
+                    <Mono>{k.key_prefix}...</Mono>
+                  </Td>
+                  <Td hide="sm" className="text-ink">
                     {editingKeyId === k.key_id ? (
                       <form onSubmit={e => { e.preventDefault(); saveKeyName(); }} className="flex items-center gap-1.5">
                         <input
@@ -501,12 +535,12 @@ export default function UserManagement() {
                     ) : (
                       k.name
                     )}
-                  </td>
-                  <td className="px-2.5 sm:px-4 py-3 text-sm text-ink-2">{k.username}</td>
-                  <td className="px-2.5 sm:px-4 py-3 text-sm text-ink-2">{new Date(k.created_at).toLocaleDateString()}</td>
-                  <td className="px-2.5 sm:px-4 py-3 text-sm text-ink-2">{k.last_used ? new Date(k.last_used).toLocaleString() : 'Never'}</td>
-                  <td className="px-2.5 sm:px-4 py-3">
-                    <div className="flex items-center gap-1">
+                  </Td>
+                  <Td hide="md">{k.username}</Td>
+                  <Td hide="lg">{k.last_used ? fmt.dateTime(k.last_used) : 'Never'}</Td>
+                  <Td hide="xl">{fmt.dateTime(k.created_at)}</Td>
+                  <Td align="right">
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => startRenameKey(k)}
                         className="p-1.5 text-ink-3 hover:text-ink-2 hover:bg-high rounded-control transition-colors"
@@ -521,7 +555,7 @@ export default function UserManagement() {
                         Revoke
                       </button>
                     </div>
-                  </td>
+                  </Td>
                 </tr>
               ))}
             </tbody>
@@ -549,7 +583,7 @@ export default function UserManagement() {
                     value={keyName}
                     onChange={e => setKeyName(e.target.value)}
                     className="w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink focus:outline-none focus:border-beam-edge"
-                    placeholder="e.g. claude-desktop"
+                    placeholder="claude-desktop"
                   />
                 </div>
                 {error && (
@@ -575,9 +609,9 @@ export default function UserManagement() {
               </div>
             ) : (
               <div className="space-y-4">
-                <div className="flex items-start gap-2 px-3 py-2 bg-yellow-500/10 border border-yellow-500/20 rounded-row">
-                  <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-yellow-300">Copy this key now. It will not be shown again.</p>
+                <div className="flex items-start gap-2 px-3 py-2 bg-warn-wash border border-warn-edge rounded-row">
+                  <AlertTriangle className="w-4 h-4 text-warn mt-0.5 shrink-0" aria-hidden="true" />
+                  <p className="text-xs text-warn">Copy this key now. It will not be shown again.</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <code className="flex-1 px-3 py-2 bg-inset border border-line rounded-row text-xs text-beam font-mono break-all select-all">
@@ -621,7 +655,7 @@ export default function UserManagement() {
                   value={roleForm.name}
                   onChange={e => setRoleForm({ ...roleForm, name: e.target.value })}
                   className="w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink focus:outline-none focus:border-beam-edge"
-                  placeholder="e.g. analyst"
+                  placeholder="analyst"
                 />
               </div>
               <div>
@@ -631,7 +665,7 @@ export default function UserManagement() {
                   value={roleForm.description}
                   onChange={e => setRoleForm({ ...roleForm, description: e.target.value })}
                   className="w-full px-3 py-2 bg-inset border border-line rounded-row text-sm text-ink focus:outline-none focus:border-beam-edge"
-                  placeholder="e.g. Read-only analyst"
+                  placeholder="Read-only analyst"
                 />
               </div>
               <div>
@@ -879,12 +913,12 @@ export default function UserManagement() {
                   </div>
 
                   {deleteConfirm.impact.orphaned_users.length > 0 && (
-                    <div className="mt-2 px-3 py-2 bg-yellow-500/10 border border-yellow-500/20 rounded-row">
+                    <div className="mt-2 px-3 py-2 bg-warn-wash border border-warn-edge rounded-row">
                       <div className="flex items-start gap-2">
-                        <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
+                        <AlertTriangle className="w-4 h-4 text-warn mt-0.5 shrink-0" aria-hidden="true" />
                         <div>
-                          <p className="text-xs text-yellow-300 font-medium">Users left with no roles</p>
-                          <p className="text-xs text-yellow-300/70 mt-0.5">
+                          <p className="text-xs text-warn font-medium">Users left with no roles</p>
+                          <p className="text-xs text-ink-2 mt-0.5">
                             {deleteConfirm.impact.orphaned_users.join(', ')} will have no role assigned and may lose access.
                           </p>
                         </div>

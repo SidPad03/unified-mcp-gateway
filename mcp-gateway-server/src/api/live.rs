@@ -48,27 +48,40 @@ pub async fn live_ws_handler(
 }
 
 async fn handle_live_connection(state: AppState, mut socket: WebSocket, token: String) {
-    // Authenticate: try API key first, then JWT
-    let auth_result = if token.starts_with("mcpgw_") {
-        crate::api::auth::resolve_api_key(&token, &state).await
-    } else {
-        // JWT path
-        jsonwebtoken::decode::<crate::api::auth::Claims>(
-            &token,
-            &jsonwebtoken::DecodingKey::from_secret(state.jwt_secret.as_bytes()),
-            &jsonwebtoken::Validation::default(),
-        )
-        .map(|data| data.claims)
-        .map_err(|_| crate::AppError::Unauthorized("Invalid or expired token".into()))
-    };
-
-    if auth_result.is_err() {
+    // Authenticate through the same path every REST request uses, so a
+    // deactivated account or a role change takes effect here too. A bare
+    // `decode` used to be enough to open this socket, and a socket is opened
+    // once and then held, so a revoked user kept streaming for the token's
+    // remaining lifetime.
+    let Ok((claims, must_change_password)) = crate::api::auth::resolve_bearer(&token, &state).await
+    else {
         let _ = socket
             .send(Message::Text(r#"{"error":"unauthorized"}"#.into()))
             .await;
         let _ = socket.close().await;
         return;
+    };
+
+    // A first-login account has not finished authenticating yet; it may change
+    // its own password and nothing else.
+    if must_change_password {
+        let _ = socket
+            .send(Message::Text(
+                r#"{"error":"password change required"}"#.into(),
+            ))
+            .await;
+        let _ = socket.close().await;
+        return;
     }
+
+    // The channel carries every user's calls, so each subscriber is filtered to
+    // what it is allowed to see. Without this, any authenticated account read
+    // the whole deployment's tool names, backends and error messages in real
+    // time — data the REST audit endpoint refuses it — and the Usage page
+    // counted other people's calls into a graph the server had scoped to one
+    // user, so the figure on screen drifted upward until the next refresh.
+    let is_owner = claims.roles.iter().any(|r| r == "owner");
+    let own_id: Option<uuid::Uuid> = claims.sub.parse().ok();
 
     let mut rx = state.event_tx.subscribe();
 
@@ -82,8 +95,11 @@ async fn handle_live_connection(state: AppState, mut socket: WebSocket, token: S
             // Incoming broadcast event → forward to client
             result = rx.recv() => {
                 match result {
-                    Ok(json) => {
-                        if socket.send(Message::Text(json)).await.is_err() {
+                    Ok(event) => {
+                        if !is_owner && event.user_id != own_id {
+                            continue;
+                        }
+                        if socket.send(Message::Text(event.json)).await.is_err() {
                             break;
                         }
                     }
