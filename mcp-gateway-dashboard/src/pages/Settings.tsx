@@ -9,6 +9,7 @@ import clsx from 'clsx';
 // tool reclassified write → execute showed the same colour on both sides of the
 // arrow in the very table an operator uses to review the change.
 import { PageHeader, RISK_LEVELS, riskColor } from '@/components/ui';
+import HomepageWidgetCard from '@/components/HomepageWidgetCard';
 
 const RISK_CATEGORIES = RISK_LEVELS as readonly string[];
 
@@ -387,6 +388,10 @@ No other text.`
           </p>
         </div>
       )}
+
+      {/* Homepage widget — owner-only: it reads and issues a deployment-wide
+          credential, and the figures it previews are owner-only too. */}
+      {isOwner && <HomepageWidgetCard />}
 
       {/* AI Risk Classification Section */}
       <div className="bg-panel border border-line rounded-card p-6 mb-6">

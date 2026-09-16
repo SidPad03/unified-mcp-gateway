@@ -51,12 +51,19 @@ The namespaces cannot collide with a backend's tools, which are always
   tokens.
 - **HTTP / streamable-http backends:** each POST is answered with either a JSON
   object or a one-shot SSE stream, decided per response, so the client advertises
-  both media types and parses whichever comes back.
-- **SSE backends:** the `endpoint` URL announced by the (untrusted) backend is
-  validated against the backend's own origin before the gateway POSTs to it with
-  the stored `Authorization` header. A cross-origin or scheme-downgraded endpoint
-  is refused, which blocks both credential exfiltration and SSRF into internal
-  targets.
+  both media types and parses whichever comes back. A stateful server's session
+  is kept per backend (`BackendManager::http_sessions`) and reopened once on a
+  refusal — `400`/`404`, or the Go SDK's `200` + JSON-RPC error, which is only
+  trusted on a request that carried no session so a call that may have run is
+  never replayed.
+- **SSE backends:** events are decoded to the SSE spec (`SseDecoder`: CRLF, LF
+  and CR endings, split reads). The `endpoint` announced by the (untrusted)
+  backend is resolved against the stream URL and the result must share its
+  origin before the gateway POSTs to it with the stored `Authorization` header,
+  which blocks both credential exfiltration and SSRF into internal targets.
+- **Stats token:** `GET /api/v1/stats` accepts a `mcpgw_stats…` token that is
+  not an API key and authenticates nowhere else, so an external dashboard never
+  holds a credential that can call tools. Owner-issued, stored as a SHA-256.
 - **Audit storage:** payloads pass through a redactor before they are written to
   `audit_events`, covering bearer tokens, labeled credentials (quoted or bare), and
   raw `mcpgw_`-prefixed gateway keys.

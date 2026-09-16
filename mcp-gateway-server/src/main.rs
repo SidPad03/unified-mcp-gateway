@@ -220,7 +220,9 @@ async fn start_backends(pool: &sqlx::PgPool, manager: &Arc<backends::BackendMana
         let result = match transport.as_str() {
             "stdio" => manager.spawn_backend(backend_id, &name, &config).await,
             "streamable-http" => {
-                backends::BackendManager::discover_http_tools(&name, &config).await
+                manager
+                    .discover_http_tools(backend_id, &name, &config)
+                    .await
             }
             "sse" => backends::BackendManager::discover_sse_tools(&name, &config).await,
             "agent" => {

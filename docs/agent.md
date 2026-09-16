@@ -81,7 +81,7 @@ See [Self-Configuration Tools](self-configuration.md) for the full list.
 
 | Page | What it shows |
 |------|---------------|
-| **Overview** | Connection state, tools registered, backends up, calls per hour, and whatever is currently broken |
+| **Overview** | Connection state, tools registered, backends up, calls per hour, and whatever is currently broken. **Tools** counts your servers' tools only, not the agent's own `agent_*` control tools |
 | **Backends** | Every local MCP server: status, PID, uptime, restarts, tools, last error |
 | **Activity** | Tool calls as they happen — time, tool, backend, duration, and the error if there was one |
 | **Logs** | The agent's own log and every backend's stderr, merged, filterable, exportable |
@@ -98,6 +98,24 @@ the backend `agent`.
 Closing the window does not quit the app — the Mac's MCP servers stay connected
 and the app moves to the menu bar. The popover shows status and the actions you
 are most likely to want; **Quit** stops the backends, and says so the first time.
+
+### Notifications
+
+Most of the time the app is an icon in the menu bar, so it tells you when
+something goes wrong rather than waiting for you to look. **Settings →
+Notifications** has a switch for each:
+
+| Notify me when | On by default | What triggers it |
+|----------------|---------------|------------------|
+| Local MCP servers stop working | Yes | A server fails to start or exits on its own, and when a reported failure recovers. A server failing over and over — or crashing again moments after it comes back — is reported at most once every ten minutes |
+| The gateway connection is lost | Yes | The gateway has been unreachable for **30 seconds** — a redeploy, a Wi-Fi hop or waking from sleep says nothing — and again when it reconnects |
+| Tool calls fail | No | Calls routed to this Mac that end in an error, grouped into at most one notification a minute |
+| An update is available | Yes | Once per new version, with an **Install** button; and if an install fails |
+
+Clicking a notification opens the page that explains it. macOS asks for
+permission after you sign in; if you said no, the pane links to System Settings,
+and **Send a test notification** shows what one looks like. Nothing is sent
+before you have signed in.
 
 ### Start at login
 
@@ -176,6 +194,7 @@ That is deliberate: it never installs something it cannot verify.
 | "The application is damaged" on first launch | Gatekeeper quarantine. Right-click → Open, or `xattr -dr com.apple.quarantine` — see [Install](#install) |
 | A backend says **Failed** with "No such file or directory" | The command is not on your login shell's `PATH`. The app reads `PATH` from your login shell at launch, so a tool installed since then needs the app restarted |
 | A backend keeps crashing | Open **Logs** and filter to that backend — its stderr is there, which is usually enough to see why |
+| An HTTP server from the Go, Python or TypeScript SDK fails with `400`, `406` or "invalid during session initialization" | Fixed: the app now sends the `Accept` header these servers require and joins the session they open. Update the app |
 | Backend stays `disconnected` in the dashboard | The machine name does not match the gateway-side backend name, or the app is not running |
 | Repeated auth failures | The API key was revoked in the dashboard. Sign out and sign in again |
 | TLS errors against a self-signed certificate | **Settings → Gateway → Skip TLS certificate verification.** Only on a network you trust |

@@ -288,6 +288,7 @@ Full documentation: [docs/agent.md](docs/agent.md). Design and rationale:
 
 ### Observability
 - **Prometheus metrics** at `/metrics` — call counts, latency histograms, error rates, backend health
+- **Homepage widget** — tools, backends and 24-hour calls on a [Homepage](https://gethomepage.dev) dashboard, read with a token that opens nothing else ([setup](docs/homepage.md))
 - **Metrics dashboard** with charts for volume, latency, and per-tool breakdowns
 - **Usage graphs** with time-series analysis
 
@@ -298,6 +299,7 @@ Full documentation: [docs/agent.md](docs/agent.md). Design and rationale:
 - Backends added, edited and deleted live, with a supervisor that restarts crashed ones
 - Live view of connection state, tool calls, merged logs, audit and usage
 - Auto-reconnect with exponential backoff
+- macOS notifications when a local server fails or crashes, the gateway is unreachable for 30 seconds, or an update is ready — each switchable, tool-call errors opt-in
 - Start at login, and signed self-updates from GitHub Releases
 
 ### Dashboard Pages
@@ -311,7 +313,7 @@ Full documentation: [docs/agent.md](docs/agent.md). Design and rationale:
 | Audit | Chronological event feed with drill-down details |
 | Metrics | Charts for call volume, latency, error rates and backend health, over 24h, 7d or 30d |
 | Users | Users and roles, with per-user API keys |
-| Settings | Gateway URL, AI risk classification, version and update check |
+| Settings | Gateway URL, gateway tools, the Homepage widget, AI risk classification, version and update check |
 
 ## API Reference
 
@@ -329,6 +331,8 @@ All endpoints under `/api/v1`. Auth via `Authorization: Bearer <jwt_or_api_key>`
 | GET | `/audit` | Query audit events |
 | GET | `/audit/stats` | Aggregated audit statistics |
 | GET | `/metrics/summary` | Metrics dashboard data |
+| GET | `/stats` | Flat summary for Homepage and other dashboards (stats token or owner) |
+| GET/POST/DELETE | `/stats/token` | The read-only stats token |
 | GET | `/usage/*` | Usage analytics |
 | GET/POST | `/users` | User management |
 | GET/POST | `/roles` | Role management |
@@ -407,6 +411,7 @@ Full documentation lives in [docs/](docs/):
 | [Authentication & Authorization](docs/authentication.md) | JWTs, API keys, roles, policy engine |
 | [API Reference](docs/api-reference.md) | Every REST, MCP, and WebSocket endpoint |
 | [Self-Configuration Tools](docs/self-configuration.md) | The `gateway_*` and `agent_*` namespaces, and what guards them |
+| [Homepage Widget](docs/homepage.md) | A Homepage dashboard tile, and the read-only token behind it |
 | [MCP Gateway Agent](docs/agent.md) | Installing, configuring, and running the agent |
 | [Agent Architecture](docs/agent-architecture.md) | The agent↔server WebSocket protocol |
 

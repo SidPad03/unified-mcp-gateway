@@ -48,7 +48,18 @@ pub struct ConnectionStatus {
     pub attempt: u32,
     pub last_error: Option<String>,
     pub retry_in_ms: Option<u64>,
+    /// Tools from this Mac's MCP servers in the last registration.
+    ///
+    /// The agent's own `agent_*` control tools are not in this figure. They
+    /// travel in the same `register` frame, but they are the gateway's plumbing
+    /// rather than tools anyone put on this Mac, and the gateway already keeps
+    /// them off every page that counts tools. Counting them here made Overview
+    /// read 60 on a Mac whose servers offered 51, and made the number move when
+    /// Remote control was switched although no server had changed.
     pub registered_tools: usize,
+    /// The `agent_*` tools that went out with that registration: the catalog's
+    /// size while Remote control is on, zero while it is off.
+    pub control_tools: usize,
 }
 
 impl Default for ConnectionStatus {
@@ -63,12 +74,14 @@ impl Default for ConnectionStatus {
             last_error: None,
             retry_in_ms: None,
             registered_tools: 0,
+            control_tools: 0,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Stats {
+    /// See [`ConnectionStatus::registered_tools`]: the servers' tools only.
     pub tools_registered: usize,
     pub backends_ready: usize,
     pub backends_total: usize,
@@ -358,6 +371,7 @@ impl AgentState {
         // classifies, audits and governs them with the same machinery. They are
         // appended rather than mixed in because they belong to no sub-backend —
         // `ready_sub_backends` deliberately does not mention them.
+        let backend_count = tools.len();
         let control_count = if expose_control {
             let control = crate::control::catalog();
             let n = control.len();
@@ -366,7 +380,6 @@ impl AgentState {
         } else {
             0
         };
-        let count = tools.len();
 
         let frame = AgentMessage::Register {
             agent_id,
@@ -378,9 +391,13 @@ impl AgentState {
         if writer.send(frame).await.is_err() {
             return false;
         }
-        self.update_connection(|c| c.registered_tools = count).await;
+        self.update_connection(|c| {
+            c.registered_tools = backend_count;
+            c.control_tools = control_count;
+        })
+        .await;
         tracing::info!(
-            tool_count = count,
+            tool_count = backend_count,
             control_tools = control_count,
             "Registered tools with the gateway"
         );
@@ -572,6 +589,37 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("command"), "{err}");
         assert!(state.config().await.backends.is_empty());
+    }
+
+    /// The figure on Overview and in the menu bar is this Mac's tools. The
+    /// control tools still go out in the frame — the gateway routes and polices
+    /// them — they just are not counted as tools someone put here.
+    #[tokio::test]
+    async fn the_tool_count_leaves_out_the_control_tools() {
+        let state = state().await;
+        assert!(state.config().await.agent.expose_control_tools);
+        let (tx, mut rx) = mpsc::channel::<String>(4);
+        state.set_writer(Some(tx)).await;
+
+        assert!(state.send_register().await);
+
+        let frame: serde_json::Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        let sent = frame["tools"].as_array().expect("a tools array").len();
+        let control = crate::control::catalog().len();
+        assert!(control > 0);
+        assert_eq!(sent, control, "no servers, so the frame is the catalog");
+
+        let snapshot = state.snapshot().await;
+        assert_eq!(snapshot.stats.tools_registered, 0);
+        assert_eq!(snapshot.connection.registered_tools, 0);
+        assert_eq!(snapshot.connection.control_tools, control);
+
+        // Switching Remote control off withdraws them without moving the count.
+        state.set_expose_control_tools(false).await.unwrap();
+        let _ = rx.try_recv();
+        let snapshot = state.snapshot().await;
+        assert_eq!(snapshot.stats.tools_registered, 0);
+        assert_eq!(snapshot.connection.control_tools, 0);
     }
 
     #[tokio::test(start_paused = true)]

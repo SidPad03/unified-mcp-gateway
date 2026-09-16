@@ -157,8 +157,18 @@ struct Running {
 
 impl Running {
     async fn shutdown(&mut self) {
+        // Stop routing first. Ending the session before this left a window of
+        // up to five seconds in which a call could still reach the client, be
+        // refused for want of the session just ended, and open a new one that
+        // nothing would ever end.
+        let client = self.backend.client().await;
         self.backend.set_client(None).await;
         self.hooks.routes.remove_backend(&self.backend.name).await;
+        // A stateful HTTP server is holding a session for this backend; say it
+        // is finished rather than leave it to time out.
+        if let Some(Client::Http(client)) = client {
+            client.end_session().await;
+        }
         if let Some(mut child) = self.child.take() {
             let _ = child.kill().await;
         }
@@ -275,7 +285,16 @@ async fn start_http(
 ) -> Result<Running, String> {
     let client = backends::http::HttpClient::new(config)?;
     client.initialize().await?;
-    let tools = backends::parse_tools(&client.list_tools().await?, &config.name);
+    // The supervisor retries a failed start with backoff, forever; a session
+    // opened by each attempt's handshake has to be ended by that attempt.
+    let listed = match client.list_tools().await {
+        Ok(listed) => listed,
+        Err(error) => {
+            client.end_session().await;
+            return Err(error);
+        }
+    };
+    let tools = backends::parse_tools(&listed, &config.name);
 
     become_ready(backend, hooks, Client::Http(client), tools, None).await;
 

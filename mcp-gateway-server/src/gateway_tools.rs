@@ -1175,10 +1175,10 @@ async fn test_connectivity(state: &AppState, args: &Value) -> Result<Value, Stri
         // process, which is a restart, not a test. Ask the process that is
         // already up instead.
         "stdio" => state.backend_manager.probe(&backend.id).await,
+        // Not `discover_http_tools`: that hands its session to the backend's
+        // calls and ends the one they were using.
         "streamable-http" => {
-            crate::backends::BackendManager::discover_http_tools(name, &backend.config)
-                .await
-                .map(|tools| tools.len())
+            crate::backends::BackendManager::probe_http_tools(name, &backend.config).await
         }
         "sse" => crate::backends::BackendManager::discover_sse_tools(name, &backend.config)
             .await
@@ -1269,7 +1269,7 @@ async fn stop_server(state: &AppState, args: &Value) -> Result<Value, String> {
     .await
     .map_err(|e| e.to_string())?;
 
-    stop_and_withdraw(state, backend.id, &backend.transport).await;
+    stop_and_withdraw(state, backend.id).await;
 
     Ok(json!({
         "name": name,

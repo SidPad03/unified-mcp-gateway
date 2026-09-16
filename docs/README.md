@@ -21,6 +21,7 @@ and other MCP clients) and your MCP tool servers, providing:
 | [Authentication & Authorization](authentication.md) | JWTs, API keys, roles, and the policy engine |
 | [API Reference](api-reference.md) | Every REST endpoint under `/api/v1`, plus the MCP and WebSocket endpoints |
 | [Self-Configuration Tools](self-configuration.md) | The `gateway_*` and `agent_*` namespaces: configuring the gateway and its agents through MCP |
+| [Homepage Widget](homepage.md) | Tools, backends and 24-hour call counts on a Homepage dashboard, with a read-only token |
 | [MCP Gateway Agent](agent.md) | Installing and using the macOS agent app |
 | [Agent Architecture](agent-architecture.md) | The agent↔server WebSocket protocol, supervision, and connection lifecycle |
 | [Agent Desktop App](agent-desktop-app.md) | The agent app's design, the defects it fixes, and the decisions behind it |

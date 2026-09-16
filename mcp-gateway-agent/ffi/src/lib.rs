@@ -92,6 +92,9 @@ struct Tick {
     logs: Vec<core::LogLine>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     calls: Vec<core::ToolCall>,
+    /// What the app may turn into a notification. See `core::alerts`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    alerts: Vec<core::alerts::Alert>,
 }
 
 /// The one task that talks to Swift.
@@ -107,6 +110,9 @@ async fn emitter(state: Arc<core::AgentState>, sink: EventSink) {
     let mut log_cursor = 0u64;
     let mut call_cursor = 0u64;
     let last_generation = AtomicU64::new(0);
+    // Fed every tick, snapshot or not: its timers — the grace period on a lost
+    // connection, the batching of failed calls — only fire when asked.
+    let mut alert_tracker = core::alerts::AlertTracker::new();
 
     loop {
         ticker.tick().await;
@@ -123,7 +129,9 @@ async fn emitter(state: Arc<core::AgentState>, sink: EventSink) {
             None
         };
 
-        if snapshot.is_none() && logs.is_empty() && calls.is_empty() {
+        let alerts = alert_tracker.update(snapshot.as_ref(), &calls, std::time::Instant::now());
+
+        if snapshot.is_none() && logs.is_empty() && calls.is_empty() && alerts.is_empty() {
             continue;
         }
 
@@ -131,6 +139,7 @@ async fn emitter(state: Arc<core::AgentState>, sink: EventSink) {
             snapshot,
             logs,
             calls,
+            alerts,
         };
         if let Ok(payload) = serde_json::to_string(&tick) {
             sink.emit(&payload);

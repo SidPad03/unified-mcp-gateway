@@ -82,12 +82,26 @@ These are properties the server enforces, not merely recommendations:
   routinely carry tokens.
 - **streamable-http backends** — the client advertises both `application/json`
   and `text/event-stream` and parses whichever the server returns, because a
-  streamable-http server chooses per response.
-- **SSE backends** — the `endpoint` URL announced by the (untrusted) backend is
-  validated against the backend's own origin before the gateway POSTs to it
-  carrying the stored `Authorization` header. Cross-origin and scheme-downgraded
-  endpoints are refused, blocking both credential exfiltration and SSRF into
-  internal targets.
+  streamable-http server chooses per response. A stateful server's
+  `Mcp-Session-Id` is kept per backend and sent with every call. A refusal for
+  want of a session — `400`/`404`, or the Go SDK's `200` with `method … is
+  invalid during session initialization` — buys one `initialize` and one retry;
+  the JSON-RPC wording only counts on a request that carried no session, so a
+  call that may have run is never replayed. Stopping or deleting the backend
+  `DELETE`s its session.
+- **SSE backends** — events are decoded per the SSE spec: CRLF, LF and CR line
+  endings, and reads that split a line or a character. The `endpoint` URL
+  announced by the (untrusted) backend is resolved against the stream URL
+  (RFC 3986, as the SDK clients do) and the *result* must be on the backend's
+  own origin before the gateway POSTs to it carrying the stored `Authorization`
+  header. Cross-origin, protocol-relative, userinfo and scheme-downgraded
+  endpoints are all refused, blocking both credential exfiltration and SSRF into
+  internal targets. A refused POST fails the call at once with its status, and
+  the stream is closed when the call ends.
+- **Redirects** — HTTP and SSE backends are followed through a redirect only
+  within their own origin. The configured headers ride on every request, and a
+  cross-origin redirect would otherwise carry any of them that is not
+  `Authorization` to the new host.
 - **Audit storage** — payloads pass through a redactor before being written,
   covering bearer tokens, labeled credentials (quoted or bare), and raw
   `mcpgw_`-prefixed gateway keys.

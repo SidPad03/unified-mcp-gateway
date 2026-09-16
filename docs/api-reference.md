@@ -279,6 +279,66 @@ Same shape, every field optional. Returns the full settings object.
 
 ---
 
+## Stats
+
+A flat summary for dashboards other than this one — written for
+[Homepage](homepage.md)'s `customapi` widget. Every figure is a top-level key.
+
+### `GET /api/v1/stats` — **stats token or owner**
+
+`Authorization: Bearer <stats token>`, or an owner's JWT or API key. Any other
+account gets `403`. Sent with `Cache-Control: no-store`.
+
+```json
+{
+  "tools": 49,
+  "tools_registered": 53,
+  "backends": 7,
+  "backends_enabled": 6,
+  "backends_healthy": 5,
+  "backends_unhealthy": 1,
+  "agents_connected": 1,
+  "calls_24h": 1284,
+  "errors_24h": 12,
+  "denied_24h": 3,
+  "error_rate_24h": 0.0093,
+  "avg_latency_ms_24h": 184.2,
+  "last_call_at": "2026-09-16T18:42:07.727348+00:00",
+  "version": "1.2.2"
+}
+```
+
+`tools` is callable now (enabled, on an enabled backend); `backends_unhealthy`
+is enabled and neither `healthy` nor `idle`; `error_rate_24h` is a fraction.
+Control tools and their calls are in none of the figures. Field-by-field
+definitions are in [homepage.md](homepage.md#fields).
+
+### `GET /api/v1/stats/token` — **owner**
+
+```json
+{ "configured": true, "prefix": "mcpgw_statsWt8aS", "created_at": "…", "created_by": "admin", "last_used_at": "…" }
+```
+
+`last_used_at` is updated at most once a minute.
+
+### `POST /api/v1/stats/token` — **owner**
+
+Issues a token, replacing any existing one, which stops working immediately.
+The token is in this response only; the gateway stores its SHA-256.
+
+```json
+{ "token": "mcpgw_stats…", "prefix": "mcpgw_statsWt8aS", "created_at": "…" }
+```
+
+A stats token authenticates `GET /api/v1/stats` and nothing else: it is not an
+API key, and every other endpoint, `/mcp` included, answers `401`.
+
+### `DELETE /api/v1/stats/token` — **owner**
+
+`{ "revoked": true }`, or `false` when there was none.
+
+---
+
 ## Security
 
 ### `GET /api/v1/security/posture` — **owner**

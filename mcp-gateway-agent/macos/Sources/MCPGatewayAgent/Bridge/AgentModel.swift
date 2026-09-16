@@ -39,6 +39,7 @@ final class AgentModel {
     var lastError: String?
 
     let updater = Updater()
+    let notifier = Notifier.shared
 
     // ── Internals ───────────────────────────────────────────────────────
 
@@ -96,6 +97,7 @@ final class AgentModel {
         }
 
         account = SignedInAccount.load()
+        wireNotifications()
 
         // One read, not two. On an ad-hoc signed build every read of this item
         // can raise "MCP Gateway Agent wants to use your confidential
@@ -113,7 +115,42 @@ final class AgentModel {
         }
 
         await refresh()
+        if isSignedIn {
+            await notifier.requestAuthorizationIfNeeded()
+            announcePendingUpdate()
+        }
         updateChecks = Task { [updater] in await updater.checkPeriodically() }
+    }
+
+    /// An update found while signed out was not announced, and the updater
+    /// does not check again while it holds one — so say it now. Once per
+    /// version, as ever.
+    private func announcePendingUpdate() {
+        if case let .available(release) = updater.state {
+            notifier.updateAvailable(release.version)
+        }
+    }
+
+    /// Route the core's alerts and the updater's news to notifications, and a
+    /// notification's Install button back to the updater.
+    private func wireNotifications() {
+        notifier.start()
+        updater.onEvent = { [weak self] event in
+            guard let self, self.isSignedIn else { return }
+            switch event {
+            case let .available(release): self.notifier.updateAvailable(release.version)
+            case let .failed(message): self.notifier.updateFailed(message)
+            }
+        }
+        notifier.onInstallUpdate = { [weak self] in
+            guard let self else { return }
+            switch self.updater.state {
+            case let .available(release), let .readyToInstall(release):
+                Task { await self.updater.requestUpdate(release) }
+            default:
+                AppDelegate.shared?.showMainWindow(page: nil)
+            }
+        }
     }
 
     /// Move a plaintext key out of a `config.toml` written by the old terminal
@@ -185,6 +222,11 @@ final class AgentModel {
             merge(calls)
             callRevision &+= 1
         }
+        // Not before sign-in: the first-run window is on screen, and nothing
+        // is meant to be connected yet.
+        if let alerts = tick.alerts, !alerts.isEmpty, isSignedIn {
+            notifier.handle(alerts, gatewayUrl: snapshot?.connection.gatewayUrl ?? "")
+        }
     }
 
     /// A completed call arrives again with its duration filled in, so records
@@ -240,6 +282,9 @@ final class AgentModel {
             )
             try await bridge.send(.setApiKey(result.apiKey))
             await refreshSnapshot()
+            // The moment there is something to report on.
+            await notifier.requestAuthorizationIfNeeded()
+            announcePendingUpdate()
 
             // Come back to the front. The browser took focus to run the sign-in
             // and does not hand it back, and the activation policy is synced

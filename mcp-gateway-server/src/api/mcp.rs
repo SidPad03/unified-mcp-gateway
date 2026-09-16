@@ -528,12 +528,10 @@ async fn handle_tools_call(
 
                 match config_row {
                     Some((config,)) => {
-                        crate::backends::BackendManager::call_http_tool(
-                            &config,
-                            original_name,
-                            &arguments,
-                        )
-                        .await
+                        state
+                            .backend_manager
+                            .call_http_tool(*backend_id, &config, original_name, &arguments)
+                            .await
                     }
                     None => Err("Backend config not found".into()),
                 }

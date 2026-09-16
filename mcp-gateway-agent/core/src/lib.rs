@@ -24,6 +24,7 @@
 //! `secs % 86400` on the UNIX epoch and rendered UTC time-of-day as if it were
 //! local — defect #7 in the design doc.)
 
+pub mod alerts;
 pub mod backends;
 pub mod config;
 pub mod control;

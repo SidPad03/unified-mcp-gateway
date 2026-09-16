@@ -45,6 +45,16 @@ final class Updater {
     private(set) var state: State = .idle
     private(set) var lastChecked: Date?
 
+    /// What the notifier hears about: a release it has not announced, and an
+    /// install that went wrong. A failed *check* is not in it — see
+    /// `checkInBackground`.
+    enum Event {
+        case available(Release)
+        case failed(String)
+    }
+
+    @ObservationIgnored var onEvent: ((Event) -> Void)?
+
     /// Where CI publishes the manifest. Overridable in Info.plist so a fork does
     /// not have to patch source.
     private var appcastURL: URL? {
@@ -123,6 +133,9 @@ final class Updater {
             state =
                 Self.isNewer(release.version, than: currentVersion)
                 ? .available(release) : .upToDate
+            if case .available = state {
+                onEvent?(.available(release))
+            }
         } catch {
             state = announceFailure ? .failed(error.localizedDescription) : .idle
         }
@@ -157,7 +170,7 @@ final class Updater {
 
     private func downloadAndStage(_ release: Release) async {
         guard let publicKey else {
-            state = .failed(
+            fail(
                 "This build has no update signing key, so it cannot install updates. "
                     + "Download the new version from GitHub instead."
             )
@@ -166,14 +179,14 @@ final class Updater {
         guard let url = URL(string: release.url),
             let signature = Data(base64Encoded: release.signature)
         else {
-            state = .failed("The update manifest is malformed.")
+            fail("The update manifest is malformed.")
             return
         }
         // The signature proves what was downloaded; https bounds who can even
         // offer a download. A manifest pointing at http:// or file:// has no
         // honest reason to exist.
         guard url.scheme?.lowercased() == "https" else {
-            state = .failed("The update manifest does not point at an https URL. Nothing was installed.")
+            fail("The update manifest does not point at an https URL. Nothing was installed.")
             return
         }
 
@@ -184,7 +197,7 @@ final class Updater {
             guard publicKey.isValidSignature(signature, for: archive) else {
                 // Not a download error. Either the archive was tampered with or
                 // it was signed by a different key, and both mean stop.
-                state = .failed("The update's signature did not verify. It has not been installed.")
+                fail("The update's signature did not verify. It has not been installed.")
                 return
             }
 
@@ -193,7 +206,7 @@ final class Updater {
             state = .readyToInstall(release)
             promptToRestart()
         } catch {
-            state = .failed(error.localizedDescription)
+            fail(error.localizedDescription)
         }
     }
 
@@ -224,8 +237,16 @@ final class Updater {
             // what makes updating one click rather than two.
             relaunch()
         } catch {
-            state = .failed(error.localizedDescription)
+            fail(error.localizedDescription)
         }
+    }
+
+    /// An install that went wrong: shown in the Updates pane, and announced,
+    /// because the person who pressed Install from a notification or the menu
+    /// bar is not necessarily looking at that pane.
+    private func fail(_ message: String) {
+        state = .failed(message)
+        onEvent?(.failed(message))
     }
 
     /// Download → verify → unpack → check, everything that can happen quietly

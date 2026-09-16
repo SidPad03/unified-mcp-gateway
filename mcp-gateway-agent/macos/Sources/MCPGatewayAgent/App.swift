@@ -90,13 +90,25 @@ struct MCPGatewayAgentApp: App {
 /// highlight it while the menu is open — a coloured icon does neither and looks
 /// broken half the time.
 private struct TrayIcon: View {
+    @Environment(\.openWindow) private var openWindow
+
     var body: some View {
-        if let image = NSImage(named: "agent-tray-Template") {
-            Image(nsImage: image)
-        } else {
-            // Only reachable in a development build run outside the .app
-            // bundle. Still the same mark — the app never shows two logos.
-            BrandMark(size: 16, weight: 2.2)
+        Group {
+            if let image = NSImage(named: "agent-tray-Template") {
+                Image(nsImage: image)
+            } else {
+                // Only reachable in a development build run outside the .app
+                // bundle. Still the same mark — the app never shows two logos.
+                BrandMark(size: 16, weight: 2.2)
+            }
+        }
+        // The menu-bar icon is the one view that exists for the whole life of
+        // the app, window or no window — including after a login-item launch
+        // that closed the window before it drew. That makes it the place to
+        // lend `openWindow` to code that is not a view, like a notification
+        // being clicked.
+        .onAppear {
+            AppDelegate.openMainWindow = { openWindow(id: "main") }
         }
     }
 }
@@ -111,10 +123,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let confirmedQuitKey = "com.mcpgateway.agent.confirmedQuit"
 
+    /// Opens the main window scene. Lent by `TrayIcon`, which has the
+    /// environment action; static because the icon can appear before this
+    /// delegate has finished launching.
+    static var openMainWindow: (() -> Void)?
+
     /// Set by the updater immediately before it quits us so the staged swap
     /// script can run. The quit warning does not apply when the app is about to
     /// reopen itself.
     var isRelaunchingForUpdate = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Before launch finishes, so a notification click that is what
+        // launched the app has somewhere to go.
+        Notifier.shared.start()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
@@ -178,6 +201,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             url.host == "auth", url.path == "/callback"
         else { return }
         model?.handleCallbackURL(url)
+    }
+
+    /// Bring the window forward, on `page` if one is given — what clicking a
+    /// notification does.
+    ///
+    /// The window may be open, closed, or never have been created (a login-item
+    /// launch closes it before it draws). The page is written to the same
+    /// stored selection the sidebar reads, so it is right whichever of those
+    /// it turns out to be.
+    func showMainWindow(page: Page?) {
+        if let page {
+            UserDefaults.standard.set(page.rawValue, forKey: "selectedPage")
+        }
+        NSApp.setActivationPolicy(.regular)
+        if let window = NSApp.windows.first(where: { window in
+            window.canBecomeMain && !(window is NSPanel)
+                && window.identifier?.rawValue.hasPrefix("main") == true
+        }) {
+            window.makeKeyAndOrderFront(nil)
+        } else if let open = Self.openMainWindow {
+            open()
+        } else {
+            // A reopen event: the same path as clicking the Dock icon, which
+            // SwiftUI answers by bringing the window scene back.
+            NSWorkspace.shared.open(Bundle.main.bundleURL)
+        }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     /// Reopening from the Dock or Spotlight brings the window back.

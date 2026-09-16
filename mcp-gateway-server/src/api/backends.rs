@@ -321,7 +321,10 @@ pub(crate) async fn start_and_register(
                 .await
         }
         "streamable-http" => {
-            crate::backends::BackendManager::discover_http_tools(name, config).await
+            state
+                .backend_manager
+                .discover_http_tools(backend_id, name, config)
+                .await
         }
         "sse" => crate::backends::BackendManager::discover_sse_tools(name, config).await,
         "agent" => return Ok(None),
@@ -362,10 +365,10 @@ pub(crate) async fn start_and_register(
 ///
 /// The tools are disabled rather than deleted, so re-enabling the backend does
 /// not lose a hand-set risk classification.
-pub(crate) async fn stop_and_withdraw(state: &AppState, backend_id: Uuid, transport: &str) {
-    if transport == "stdio" {
-        state.backend_manager.stop_backend(&backend_id).await;
-    }
+pub(crate) async fn stop_and_withdraw(state: &AppState, backend_id: Uuid) {
+    // Every transport: a stdio backend has a process to stop, and a stateful
+    // streamable-http one has a session to end.
+    state.backend_manager.stop_backend(&backend_id).await;
     let _ = sqlx::query("UPDATE tool_registry SET is_enabled = FALSE WHERE backend_id = $1")
         .bind(backend_id)
         .execute(&state.db)
@@ -572,7 +575,7 @@ async fn update_backend(
             let config = req.config.as_ref().unwrap_or(&current_config);
             let _ = start_and_register(&state, id, &name, &transport, config).await;
         } else {
-            stop_and_withdraw(&state, id, &transport).await;
+            stop_and_withdraw(&state, id).await;
         }
     }
     if let Some(config) = &req.config {

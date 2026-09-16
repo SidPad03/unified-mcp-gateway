@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 /// The Settings window — the standard ⌘, one, reached from the app menu or the
 /// menu-bar popover.
@@ -14,12 +15,14 @@ struct PreferencesView: View {
                 .tabItem { Label("Gateway", systemImage: "network") }
             GeneralPane()
                 .tabItem { Label("General", systemImage: "gearshape") }
+            NotificationsPane()
+                .tabItem { Label("Notifications", systemImage: "bell.badge") }
             UpdatesPane()
                 .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
             AboutPane()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 520, height: 420)
+        .frame(width: 520, height: 460)
     }
 }
 
@@ -215,6 +218,139 @@ private struct GeneralPane: View {
     private func reveal() {
         guard let path = model.config?.configPath else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+}
+
+// ── Notifications ───────────────────────────────────────────────────────
+
+private struct NotificationsPane: View {
+    @Environment(AgentModel.self) private var model
+
+    @AppStorage(Notifier.Category.backends.defaultsKey) private var backends = true
+    @AppStorage(Notifier.Category.connection.defaultsKey) private var connection = true
+    @AppStorage(Notifier.Category.toolErrors.defaultsKey) private var toolErrors = false
+    @AppStorage(Notifier.Category.updates.defaultsKey) private var updates = true
+
+    @State private var authorization: UNAuthorizationStatus?
+    @State private var sentTest = false
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("macOS permission") {
+                    HStack(spacing: 8) {
+                        Text(permissionLabel)
+                            .font(.system(size: Typo.caption))
+                            .foregroundStyle(permissionTint)
+                        switch authorization {
+                        case .notDetermined:
+                            Button("Allow…") {
+                                Task {
+                                    await model.notifier.requestAuthorizationIfNeeded()
+                                    await refreshAuthorization()
+                                }
+                            }
+                            .controlSize(.small)
+                        case .denied:
+                            Button("Open System Settings") { openNotificationSettings() }
+                                .controlSize(.small)
+                        default:
+                            EmptyView()
+                        }
+                    }
+                }
+                if authorization == .denied {
+                    Text(
+                        "Notifications for MCP Gateway Agent are turned off in System Settings → "
+                            + "Notifications. The switches below take effect once they are allowed there."
+                    )
+                    .font(.system(size: Typo.caption))
+                    .foregroundStyle(Palette.warn)
+                }
+            }
+
+            Section("Notify me when") {
+                row(.backends, isOn: $backends)
+                row(.connection, isOn: $connection)
+                row(.toolErrors, isOn: $toolErrors)
+                row(.updates, isOn: $updates)
+            }
+
+            Section {
+                HStack {
+                    Text("Clicking a notification opens the page that explains it.")
+                        .font(.system(size: Typo.caption))
+                        .foregroundStyle(Palette.text3)
+                    Spacer()
+                    Button(sentTest ? "Sent" : "Send a test notification") {
+                        Task {
+                            await model.notifier.sendTest()
+                            await refreshAuthorization()
+                            sentTest = true
+                            try? await Task.sleep(for: .seconds(2))
+                            sentTest = false
+                        }
+                    }
+                    .disabled(!model.notifier.canNotify || authorization == .denied)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .task { await refreshAuthorization() }
+        // Coming back from System Settings, where the answer may have changed.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await refreshAuthorization() }
+        }
+    }
+
+    private func row(_ category: Notifier.Category, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(category.title)
+                Text(category.detail)
+                    .font(.system(size: Typo.caption))
+                    .foregroundStyle(Palette.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onChange(of: isOn.wrappedValue) { _, enabled in
+            // Switching one on is the natural moment for macOS to ask.
+            guard enabled else { return }
+            Task {
+                await model.notifier.requestAuthorizationIfNeeded()
+                await refreshAuthorization()
+            }
+        }
+    }
+
+    private var permissionLabel: String {
+        guard model.notifier.canNotify else { return "Unavailable outside the app bundle" }
+        switch authorization {
+        case .none: return "Checking…"
+        case .notDetermined: return "Not asked yet"
+        case .denied: return "Turned off"
+        case .authorized, .provisional, .ephemeral: return "Allowed"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    private var permissionTint: Color {
+        switch authorization {
+        case .denied: Palette.deny
+        case .authorized, .provisional, .ephemeral: Palette.beam
+        default: Palette.text3
+        }
+    }
+
+    private func refreshAuthorization() async {
+        authorization = await model.notifier.authorizationStatus()
+    }
+
+    private func openNotificationSettings() {
+        let id = Bundle.main.bundleIdentifier ?? "com.mcpgateway.agent"
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(id)") {
+            NSWorkspace.shared.open(url)
+        }
     }
 }
 

@@ -59,6 +59,11 @@ The gateway POSTs MCP JSON-RPC to a URL. It advertises both `application/json`
 and `text/event-stream` and parses whichever the server returns, because a
 streamable-http server chooses per response.
 
+Stateless and stateful servers both work. A stateful server — the official Go,
+Python and TypeScript SDKs all default to one — hands out an `Mcp-Session-Id`
+at `initialize`; the gateway keeps it for that backend, sends it with every call,
+and opens a new one when the server says the old one is gone.
+
 ```json
 {
   "name": "my-api-server",
@@ -73,7 +78,9 @@ streamable-http server chooses per response.
 ### `sse` — Server-Sent Events
 
 For MCP servers predating the streamable-HTTP spec. The gateway opens a
-long-lived SSE stream and POSTs requests to the endpoint that stream announces.
+long-lived SSE stream and POSTs requests to the endpoint that stream announces —
+typically a relative path such as `/messages/?session_id=…`, which is resolved
+against `url`. Set `url` to the stream itself (`…/sse`), not the messages path.
 
 ```json
 {
@@ -89,6 +96,9 @@ long-lived SSE stream and POSTs requests to the endpoint that stream announces.
 > The announced endpoint is validated against the backend's own origin before
 > the gateway POSTs to it with your stored `Authorization` header. A backend that
 > returns a cross-origin or scheme-downgraded endpoint is refused.
+
+> A `url` that answers `400`, `405` or `406` to a `GET` is usually a
+> streamable-http server; the error says so. Register it with that transport.
 
 ### `agent` — remote machine over WebSocket
 

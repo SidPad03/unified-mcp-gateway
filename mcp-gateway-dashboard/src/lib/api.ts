@@ -131,6 +131,14 @@ export const api = {
   getMetricsSummary: (range?: MetricsRange) =>
     request<MetricsSummary>(`/metrics/summary${range ? `?range=${range}` : ''}`),
 
+  // The flat summary external dashboards read (Homepage's `customapi` widget),
+  // and the read-only token they read it with. All owner-only from here; the
+  // token itself opens `/stats` and nothing else.
+  getStats: () => request<GatewayStats>('/stats'),
+  getStatsToken: () => request<StatsTokenStatus>('/stats/token'),
+  createStatsToken: () => request<CreatedStatsToken>('/stats/token', { method: 'POST' }),
+  revokeStatsToken: () => request<{ revoked: boolean }>('/stats/token', { method: 'DELETE' }),
+
   getSettings: () => request<GatewaySettings>('/settings'),
   updateSettings: (body: Partial<GatewaySettings>) =>
     request<GatewaySettings>('/settings', { method: 'PATCH', body: JSON.stringify(body) }),
@@ -327,6 +335,42 @@ export type MetricsRange = '24h' | '7d' | '30d';
 export interface GatewaySettings {
   /** Whether the gateway offers its own `gateway_*` tools over MCP. */
   gateway_tools_enabled: boolean;
+}
+
+/** `GET /stats` — flat on purpose, so a widget maps each figure by name. */
+export interface GatewayStats {
+  /** Callable now: enabled tools on enabled backends ("Tools behind the gate"). */
+  tools: number;
+  tools_registered: number;
+  backends: number;
+  backends_enabled: number;
+  backends_healthy: number;
+  /** Enabled and not answering — "Needs attention". */
+  backends_unhealthy: number;
+  agents_connected: number;
+  calls_24h: number;
+  errors_24h: number;
+  denied_24h: number;
+  /** A fraction in 0..1. */
+  error_rate_24h: number;
+  avg_latency_ms_24h: number;
+  last_call_at?: string | null;
+  version: string;
+}
+
+export interface StatsTokenStatus {
+  configured: boolean;
+  prefix?: string | null;
+  created_at?: string | null;
+  created_by?: string | null;
+  last_used_at?: string | null;
+}
+
+export interface CreatedStatsToken {
+  /** Shown once; the gateway keeps only its hash. */
+  token: string;
+  prefix: string;
+  created_at: string;
 }
 
 export interface SecurityPostureOwner {

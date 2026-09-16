@@ -687,7 +687,9 @@ pub async fn test_connection(config: &LocalBackendConfig) -> Result<TestResult, 
     } else {
         let client = http::HttpClient::new(config)?;
         client.initialize().await?;
-        parse_tools(&client.list_tools().await?, &config.name)
+        let listed = client.list_tools().await;
+        client.end_session().await;
+        parse_tools(&listed?, &config.name)
     };
 
     Ok(TestResult {

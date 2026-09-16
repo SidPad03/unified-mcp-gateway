@@ -4,6 +4,109 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **SSE backends built on the official Python SDK connect (#12).** Every one of
+  them failed discovery with `Timeout (15s) waiting for SSE endpoint event`. The
+  gateway found events by splitting the stream on `"\n\n"`, and sse-starlette,
+  which the Python SDK streams through, ends every line in CRLF — `"\r\n\r\n"`
+  contains no `"\n\n"`, so the `endpoint` event the server sent at once was never
+  seen. Events are now decoded to the SSE spec: CRLF, LF and lone-CR line
+  endings, a line ending split across two reads, and a multi-byte character split
+  across two reads (which used to become two U+FFFDs). Checked against `mcp`
+  1.30 and 2.2 byte for byte, and end to end through a running gateway.
+
+  Found on the way through the same code:
+  - A tool call over SSE left its stream open for as long as the backend stayed
+    up. The reader only noticed the call had finished when it next handed an
+    event on, and a stream carrying nothing but keep-alive comments never gave it
+    one. The stream now closes with the call.
+  - The reply to a request was the first message with any `id`, which a
+    server-to-client `ping` or `roots/list` also has. Replies are matched by id.
+  - A POST the server refused — an expired session, a mistyped path — surfaced
+    thirty seconds later as a timeout. It now fails at once, with the status.
+  - The announced endpoint is resolved against the stream URL the way the SDK
+    clients resolve it, and the origin check runs on the *result*, so a
+    protocol-relative `//host/` or a userinfo `https://vendor@host/` is refused
+    like any other cross-origin endpoint.
+  - A `url` that is really a streamable-http server now says so, instead of only
+    that it waited.
+
+- **Stateful streamable-http servers on the Go SDK accept tool calls (#13).**
+  #10 fixed discovery; every `tools/call` still failed with `method "tools/call"
+  is invalid during session initialization`. The gateway retried inside a
+  session only on `400` or `404`, and the Go SDK refuses a session-less request
+  with `200 OK` and a JSON-RPC error instead. That refusal now buys the same one
+  handshake and one retry. The wording is only trusted on a request that carried
+  no session — a stateful server cannot have run a request it refused for want of
+  one, whereas a session-flavoured error on a request already inside a session is
+  more likely the tool's own, and replaying it would run the tool twice. A
+  stateless server whose error merely mentions a session gets that error back,
+  not a complaint about a missing header.
+
+  The session is also **kept**. It used to be opened for one call and abandoned,
+  so a stateful backend cost three extra round trips per call and was left
+  holding a dead session every time until its idle timeout. Discovery's session
+  is now the one calls use, a session the server has forgotten (a restart, an
+  expiry) is replaced without failing the call, a backend edited to a new URL or
+  credential starts a fresh one, and stopping or deleting the backend `DELETE`s
+  it. Every JSON-RPC request now carries its own id — calls sharing a session
+  with the same id would have had their replies crossed by the SDKs, which route
+  a reply by id — and `gateway_test_backend_connectivity` runs in a session of
+  its own rather than replacing the one live calls are using.
+
+- **An HTTP or SSE backend's redirect cannot carry its headers to another
+  host.** Every request sends the backend's configured headers, and the HTTP
+  client stripped only `Authorization` and `Cookie` when a redirect left the
+  host — an `X-API-Key` went along to wherever a `307` pointed. Redirects are now
+  followed only within the backend's own origin (`/mcp` → `/mcp/` still works);
+  one that leaves it is returned as the answer.
+
+- **The Mac agent speaks to HTTP servers built on the official SDKs.** The same
+  gaps as #13, and more: the agent's HTTP client sent no `Accept` header (the Go
+  SDK answers `400`, Python `406`), could not read a reply sent as an event
+  stream, and had no notion of a session. Verified against Go SDK 1.8, Python
+  FastMCP 1.30 and the TypeScript SDK 1.30.
+
+- **The agent's Tools figure counts your tools.** Overview and the menu bar
+  counted the nine `agent_*` control tools alongside the servers' own, so a Mac
+  whose servers offered 51 tools read 60, and the number moved when Remote
+  control was switched although no server had changed. The control tools are
+  still registered, routed and governed; they are just not counted, which is how
+  the gateway has treated them since 1.2.1.
+
+### Added
+
+- **Homepage widget.** `GET /api/v1/stats` is a flat summary — tools, backends,
+  healthy and unhealthy backends, connected Macs, and calls, errors, denials,
+  error rate and latency over the last 24 hours — made for
+  [Homepage](https://gethomepage.dev)'s `customapi` widget and readable by any
+  dashboard. **Settings → Homepage widget** issues the token it is read with and
+  writes the `services.yaml` entry, with the fields you pick and `display: list`
+  once there are more than Homepage's block view shows. See
+  [docs/homepage.md](docs/homepage.md).
+
+  The token is its own credential, not an API key, because the key an operator
+  would otherwise paste into a dashboard's YAML can call every tool behind the
+  gateway. A `mcpgw_stats…` token reads `/api/v1/stats` and is refused by every
+  other endpoint, `/mcp` included; there is one at a time, only its SHA-256 is
+  stored, and the audit redactor catches it like a key. Owners can also read the
+  endpoint with their own session; anyone else gets `403`. The figures agree with
+  the Backends and Metrics pages by construction — each is tested against the
+  helper those pages use.
+
+- **macOS notifications from the agent.** A local server that fails to start or
+  crashes, and its recovery; the gateway unreachable for 30 seconds, and the
+  reconnect; an update ready to install (with an **Install** button) or an
+  install that failed; and, opt-in, failed tool calls grouped to at most one
+  notification a minute. Each has a switch in **Settings → Notifications**, and a
+  click opens the page that explains it. The rules — the grace period that keeps
+  a redeploy or a wake from sleep quiet, the ten-minute throttle on a server
+  failing in a loop — live in the Rust core (`core::alerts`) and are tested on
+  the Linux runner with everything else.
+
 ## [1.2.2] - 2026-09-03
 
 An audit pass over the numbers, the interface and the docs. Most of what follows

@@ -471,6 +471,7 @@ async fn server_status(state: &Arc<AgentState>, args: &Value) -> Result<Value, S
             "state": connection.state,
             "connected_since": connection.connected_since,
             "registered_tools": connection.registered_tools,
+            "control_tools": connection.control_tools,
             "last_error": connection.last_error,
         },
         "count": servers.len(),

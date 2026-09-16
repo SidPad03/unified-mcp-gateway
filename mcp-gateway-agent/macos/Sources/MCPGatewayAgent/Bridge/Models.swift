@@ -92,6 +92,12 @@ struct ConnectionStatus: Codable, Sendable {
     /// mode is never swallowed.
     var readableError: String? {
         guard let lastError else { return nil }
+        return Self.readable(lastError, gatewayUrl: gatewayUrl)
+    }
+
+    /// The rewrite behind `readableError`, for an error that did not come with
+    /// a connection status — the one a notification carries.
+    static func readable(_ lastError: String, gatewayUrl: String) -> String {
         let text = lastError.lowercased()
 
         if text.contains("unknownissuer") || text.contains("invalid peer certificate")
@@ -246,12 +252,35 @@ struct ToolCall: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
+/// Something the core decided is worth telling the user about. Mirrors
+/// `alerts::Alert`; whether it becomes a notification is the app's call.
+struct Alert: Codable, Sendable, Equatable {
+    enum Kind: String, Codable, Sendable {
+        case backendFailed = "backend_failed"
+        case backendCrashed = "backend_crashed"
+        case backendRecovered = "backend_recovered"
+        case connectionLost = "connection_lost"
+        case connectionRestored = "connection_restored"
+        case callsFailed = "calls_failed"
+    }
+
+    var kind: Kind
+    /// The backend, or the tool of the latest failed call; empty for the
+    /// connection.
+    var subject: String
+    var detail: String?
+    /// Restarts for a crashed backend, failed calls in a batch, reconnect
+    /// attempts for a lost connection.
+    var count: Int
+}
+
 /// One batch from the emitter task. Everything is optional — a tick that only
 /// carries log lines omits the rest.
 struct Tick: Codable, Sendable {
     var snapshot: Snapshot?
     var logs: [LogLine]?
     var calls: [ToolCall]?
+    var alerts: [Alert]?
 }
 
 // ── Command payloads ────────────────────────────────────────────────────
