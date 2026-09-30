@@ -7,9 +7,17 @@
 # Xcode, CI does exactly what you can run locally, and the whole packaging step
 # is a script you can read rather than a project file you cannot diff.
 #
-#   ./build.sh                      # host architecture, ad-hoc signed
+#   ./build.sh                      # host architecture, best identity available
 #   ./build.sh --universal          # arm64 + x86_64 (needs both rust std libs)
 #   ./build.sh --version 1.2.3 --dmg
+#   ./build.sh --universal --dmg --notarize   # what a release does
+#
+# Signs with a Developer ID Application certificate when the keychain has one
+# (or APPLE_SIGNING_IDENTITY names one), else the local dev identity, else
+# ad-hoc. --notarize submits the result to Apple and staples the ticket; it
+# needs a Developer ID identity plus credentials, either NOTARY_PROFILE (a
+# `xcrun notarytool store-credentials` profile) or APPLE_ID, APPLE_PASSWORD
+# (an app-specific password) and APPLE_TEAM_ID.
 #
 set -euo pipefail
 
@@ -20,6 +28,7 @@ REPO_ROOT="$(cd ../.. && pwd)"
 VERSION=""
 UNIVERSAL=0
 MAKE_DMG=0
+NOTARIZE=0
 CONFIGURATION="release"
 
 say() { printf '\033[1;35m▸\033[0m %s\n' "$*"; }
@@ -74,9 +83,10 @@ while [[ $# -gt 0 ]]; do
     --version) VERSION="$2"; shift 2 ;;
     --universal) UNIVERSAL=1; shift ;;
     --dmg) MAKE_DMG=1; shift ;;
+    --notarize) NOTARIZE=1; shift ;;
     --debug) CONFIGURATION="debug"; shift ;;
     --make-dev-identity) make_dev_identity; exit 0 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -91,6 +101,56 @@ fi
 APP_NAME="MCP Gateway Agent"
 BUILD_DIR="$AGENT_ROOT/build"
 APP="$BUILD_DIR/$APP_NAME.app"
+
+# ── 0. Signing identity ─────────────────────────────────────────────────
+#
+# Resolved before anything is built, so a release that cannot be notarized fails
+# in seconds rather than after the Rust and Swift compiles. Why the identity
+# matters beyond Gatekeeper is explained above the signing step (§5).
+#
+# Order: an explicit APPLE_SIGNING_IDENTITY wins, then a Developer ID
+# Application certificate in the keychain, then the local dev identity, then
+# ad-hoc. A found Developer ID is used by its SHA-1 hash rather than its name,
+# because a renewed certificate leaves two identities with the same name and
+# codesign refuses an ambiguous one.
+DEV_IDENTITY="MCP Gateway Agent (local dev)"
+APPLE_IDENTITY=0
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+  IDENTITY="$APPLE_SIGNING_IDENTITY"
+  IDENTITY_NAME="$APPLE_SIGNING_IDENTITY"
+  APPLE_IDENTITY=1
+else
+  found="$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep -m1 '"Developer ID Application: ' || true)"
+  if [[ -n "$found" ]]; then
+    IDENTITY="$(awk '{print $2}' <<<"$found")"
+    IDENTITY_NAME="$(sed 's/.*"\(.*\)"$/\1/' <<<"$found")"
+    APPLE_IDENTITY=1
+  elif security find-certificate -c "$DEV_IDENTITY" >/dev/null 2>&1; then
+    IDENTITY="$DEV_IDENTITY"
+    IDENTITY_NAME="$DEV_IDENTITY"
+  else
+    IDENTITY="-"
+    IDENTITY_NAME="ad-hoc"
+  fi
+fi
+
+if [[ $NOTARIZE -eq 1 ]]; then
+  if [[ $APPLE_IDENTITY -ne 1 ]]; then
+    echo "error: --notarize needs a Developer ID Application certificate." >&2
+    echo "  None is in the keychain and APPLE_SIGNING_IDENTITY is not set." >&2
+    exit 1
+  fi
+  if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+    NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+  elif [[ -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
+    NOTARY_AUTH=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID")
+  else
+    echo "error: --notarize needs credentials: NOTARY_PROFILE, or all of" >&2
+    echo "  APPLE_ID, APPLE_PASSWORD (app-specific) and APPLE_TEAM_ID." >&2
+    exit 1
+  fi
+fi
 
 # ── 1. The Rust core ────────────────────────────────────────────────────
 
@@ -248,21 +308,23 @@ fi
 # Gatekeeper), but a self-signed certificate costs nothing and fixes the Keychain
 # half on its own. Create one with `./build.sh --make-dev-identity`.
 #
-# Order: an explicit APPLE_SIGNING_IDENTITY wins, then the local dev identity if
-# it exists, then ad-hoc.
-DEV_IDENTITY="MCP Gateway Agent (local dev)"
-if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
-  IDENTITY="$APPLE_SIGNING_IDENTITY"
-elif security find-certificate -c "$DEV_IDENTITY" >/dev/null 2>&1; then
-  IDENTITY="$DEV_IDENTITY"
-else
-  IDENTITY="-"
+# The identity itself was chosen in §0.
+#
+# Notarization also requires a secure timestamp, which means a round trip to
+# Apple's timestamp server. Only an Apple-issued identity can get one, and a
+# debug build has no use for it, so it is asked for only when it counts.
+if [[ "$IDENTITY" == "-" ]]; then
   say "No stable signing identity; using ad-hoc."
   say "  macOS will re-ask for Keychain access after every build."
   say "  Run './build.sh --make-dev-identity' once to stop that."
 fi
-say "Signing with identity: $IDENTITY"
-codesign --force --deep --options runtime \
+SIGN_FLAGS=""
+if [[ $APPLE_IDENTITY -eq 1 ]] && [[ "$CONFIGURATION" == "release" || $NOTARIZE -eq 1 ]]; then
+  SIGN_FLAGS="--timestamp"
+fi
+say "Signing with identity: $IDENTITY_NAME"
+# shellcheck disable=SC2086
+codesign --force --deep --options runtime $SIGN_FLAGS \
   --sign "$IDENTITY" \
   --identifier com.mcpgateway.agent \
   "$APP"
@@ -280,7 +342,55 @@ if [[ $MAKE_DMG -eq 1 ]]; then
   hdiutil create -volname "$APP_NAME" -srcfolder "$staging" \
     -ov -format ULFO "$DMG" >/dev/null
   rm -rf "$staging"
+  # The image is signed as well as the app inside it. Gatekeeper checks the
+  # container a user downloads before it checks anything in it.
+  if [[ $APPLE_IDENTITY -eq 1 ]]; then
+    # shellcheck disable=SC2086
+    codesign --force $SIGN_FLAGS --sign "$IDENTITY" "$DMG"
+  fi
   say "$DMG"
+fi
+
+# ── 7. Notarization ─────────────────────────────────────────────────────
+#
+# Gatekeeper opens a downloaded app without a warning only once Apple has
+# notarized it. The disk image is what people download, so it is what gets
+# submitted, and notarizing it covers the app inside too. That is why the app
+# in build/ can be stapled afterwards: it becomes the update archive, and a
+# stapled ticket lets it pass Gatekeeper with no network. Without --dmg the
+# bundle is zipped and submitted on its own.
+#
+# `notarytool submit --wait` can finish without error on a submission Apple
+# rejected, so the verdict is read from its JSON rather than its exit code, and
+# a rejection prints Apple's log, which names the file and the reason.
+notarize() {
+  local out id status
+  say "Submitting $(basename "$1") for notarization (usually a few minutes)"
+  out="$(xcrun notarytool submit "$1" "${NOTARY_AUTH[@]}" --wait --output-format json)" || true
+  id="$(plutil -extract id raw -o - - <<<"$out" 2>/dev/null || true)"
+  status="$(plutil -extract status raw -o - - <<<"$out" 2>/dev/null || true)"
+  if [[ "$status" != "Accepted" ]]; then
+    echo "error: notarization of $(basename "$1") did not succeed (${status:-no response})." >&2
+    echo "$out" >&2
+    [[ -n "$id" ]] && xcrun notarytool log "$id" "${NOTARY_AUTH[@]}" >&2
+    exit 1
+  fi
+  say "Notarized: $id"
+}
+
+if [[ $NOTARIZE -eq 1 ]]; then
+  if [[ $MAKE_DMG -eq 1 ]]; then
+    notarize "$DMG"
+    xcrun stapler staple "$DMG"
+  else
+    zip="$BUILD_DIR/$APP_NAME-notarize.zip"
+    ditto -c -k --keepParent "$APP" "$zip"
+    notarize "$zip"
+    rm -f "$zip"
+  fi
+  xcrun stapler staple "$APP"
+  # Gatekeeper's own verdict, the one a user's Mac will reach.
+  spctl --assess --type execute --verbose=2 "$APP"
 fi
 
 say "Done: $APP"

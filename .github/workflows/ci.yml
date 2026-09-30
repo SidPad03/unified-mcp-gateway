@@ -519,6 +519,7 @@ jobs:
       TAP_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
       VERSION: ${{ needs.version.outputs.version }}
       ARCHIVE: ${{ needs.agent.outputs.archive }}
+      NOTARIZED: ${{ needs.agent.outputs.notarized }}
     steps:
       - name: Download the app
         uses: actions/download-artifact@v4
@@ -535,16 +536,28 @@ jobs:
             const version = process.env.VERSION;
             const { owner, repo } = context.repo;
 
+            // Said per build rather than written down once: a release cut
+            // before the signing secrets exist is still ad-hoc, and telling
+            // its users they need no workaround would be wrong.
+            const install = process.env.NOTARIZED === 'true'
+              ? [
+                  `Signed with a Developer ID and notarized by Apple: open the disk image,`,
+                  `drag the app to Applications, and launch it.`,
+                ]
+              : [
+                  `The app is ad-hoc signed rather than notarized, so the first launch needs one extra step:`,
+                  `**right-click the app and choose Open**, then confirm. macOS remembers the choice.`,
+                  '(Or run `xattr -dr com.apple.quarantine "/Applications/MCP Gateway Agent.app"`.)',
+                  ``,
+                  `Updates after that install themselves — the quarantine flag is not applied to them.`,
+                ];
+
             const body = [
               `MCP Gateway Agent v${version} — universal (Apple Silicon and Intel), macOS 26 or later.`,
               ``,
               `## Installing`,
               ``,
-              `The app is ad-hoc signed rather than notarized, so the first launch needs one extra step:`,
-              `**right-click the app and choose Open**, then confirm. macOS remembers the choice.`,
-              '(Or run `xattr -dr com.apple.quarantine "/Applications/MCP Gateway Agent.app"`.)',
-              ``,
-              `Updates after that install themselves — the quarantine flag is not applied to them.`,
+              ...install,
               ``,
               `## Setting it up`,
               ``,

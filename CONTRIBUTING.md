@@ -54,8 +54,9 @@ cargo test --workspace
 ```
 
 `build.sh` takes `--universal` (both architectures — needs rustup targets),
-`--dmg`, and `--debug`. Without a signing identity it signs ad-hoc, which is
-what CI does too.
+`--dmg`, `--notarize`, and `--debug`. It signs with a Developer ID Application
+certificate if your keychain has one, and otherwise ad-hoc, which is what CI
+does for a pull request too.
 
 ## Code Style
 

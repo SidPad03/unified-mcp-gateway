@@ -184,12 +184,15 @@ Or download `MCP-Gateway-Agent-<version>.dmg` from the
 [latest agent release](https://github.com/SidPad03/unified-mcp-gateway/releases)
 and drag it to Applications. Updating is then yours to do.
 
-### First launch: macOS blocks it once
+### First launch
 
-The app is ad-hoc signed rather than notarized, so Gatekeeper refuses it the
-first time and says it cannot be opened because Apple cannot check it for
-malicious software. Right-clicking and choosing Open does not get past this on
-current macOS. What does:
+Releases are signed with a Developer ID and notarized by Apple, so the app opens
+like any other download.
+
+Older releases, and builds made without a Developer ID certificate, are ad-hoc
+signed instead. Gatekeeper refuses those the first time and says Apple cannot
+check the app for malicious software. Right-clicking and choosing Open does not
+get past this on current macOS. What does:
 
 1. Open the app, and dismiss the warning.
 2. Go to **System Settings**, then **Privacy & Security**.
@@ -216,10 +219,10 @@ so the first time the app reads it macOS asks:
 Type your login password and click **Always Allow**, not Allow. Allow answers
 for that single read, so you would be asked again on the next launch.
 
-Expect it once more after an update. Keychain access is granted to a code
-signature, and an ad-hoc signature differs in every build, so macOS sees each new
-version as a different application asking for the first time. Signing with a
-Developer ID certificate is what removes the prompt for good.
+Keychain access is granted to a code signature. A Developer ID signature stays
+the same from one release to the next, so updates do not ask again. An ad-hoc
+signature differs in every build, so on an ad-hoc build macOS sees each new
+version as a different application and asks once more.
 
 ### Set up
 
