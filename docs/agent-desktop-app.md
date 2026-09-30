@@ -352,9 +352,10 @@ app                          browser                     gateway
   That is the right way round: it never silently installs something unverified.
 - **Gatekeeper.** Without Developer ID signing + notarization, a downloaded DMG
   is quarantined and macOS says the app is damaged. In-place updates are
-  unaffected (no quarantine attribute is applied), but first install is not. CI
-  signs and notarizes when `APPLE_*` secrets exist and falls back to ad-hoc
-  signing with a documented right-click → Open otherwise. See D1.
+  unaffected (no quarantine attribute is applied), but first install is not.
+  Release builds are Developer ID signed and notarized; a build without the
+  `APPLE_*` secrets falls back to ad-hoc signing with a documented
+  right-click → Open. See D1.
 
 ---
 
@@ -373,8 +374,9 @@ app                          browser                     gateway
 3. `macos/build.sh --universal --dmg` does the whole build: cargo for both
    targets, `lipo`, `swift build --arch arm64 --arch x86_64`, icon generation,
    bundle assembly, `Info.plist` patching, `codesign`, `hdiutil`.
-4. Optional: import the Apple certificate into a temporary keychain, notarize,
-   staple. Both gated on the secrets existing — and gated via **job-level** env,
+4. Import the Developer ID certificate into a temporary keychain, and on a
+   release pass `--notarize`, which has `build.sh` submit the DMG and staple the
+   ticket to the DMG and the app. Both gated on the secrets existing — and gated via **job-level** env,
    because a step-level `env:` is not in scope for that step's own `if:`, which
    is a quiet way to write a gate that never fires.
 5. Publish `agent-v<version>` with the DMG and the update archive, then
@@ -481,16 +483,18 @@ deleting first would strand anyone still on the TUI with a self-update that 404s
 
 ## 15. Decisions
 
-- **D1 — Signing: ad-hoc, no Apple Developer Program.** The DMG is ad-hoc signed.
-  First install needs right-click → Open (or `xattr -dr com.apple.quarantine`),
-  documented in the README, `docs/agent.md`, and the release notes. Auto-updates
-  after that are unaffected — the updater replaces the bundle directly and no
-  quarantine attribute is applied. The workflow is written so that adding
-  `APPLE_CERTIFICATE` / `APPLE_SIGNING_IDENTITY` / `APPLE_ID` / `APPLE_PASSWORD`
-  / `APPLE_TEAM_ID` later switches on notarization with no rewrite.
-  One consequence worth knowing: keychain access is granted to a *signature*, and
-  an ad-hoc signature differs in every build, so macOS may re-prompt for
-  Keychain access after an update. "Always Allow" settles it.
+- **D1 — Signing: Developer ID and notarization.** Originally the DMG was ad-hoc
+  signed, because there was no Apple Developer Program membership: first install
+  needed right-click → Open (or `xattr -dr com.apple.quarantine`), and because
+  keychain access is granted to a *signature* and an ad-hoc signature differs in
+  every build, macOS re-prompted for Keychain access after updates. With a
+  membership, releases are signed with a Developer ID Application certificate
+  and notarized, which removes both. `build.sh` picks the Developer ID identity
+  up from the keychain on its own and notarizes with `--notarize`; CI switches it
+  on when `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_ID` /
+  `APPLE_PASSWORD` / `APPLE_TEAM_ID` exist (`APPLE_SIGNING_IDENTITY` is
+  optional), and falls back to ad-hoc without them. The release notes say which
+  one a given build is.
 - **D2 — Stop publishing the agent Docker image.** `mcp-gateway-agent/Dockerfile`
   and the agent rows in the `build` / `merge` / `prune` matrices are gone.
   Existing `sidpad03/mcp-gateway-agent` tags are left on Docker Hub (the prune

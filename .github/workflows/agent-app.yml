@@ -44,6 +44,11 @@ on:
       archive:
         description: Filename of the update archive inside the artifact.
         value: ${{ jobs.build.outputs.archive }}
+      notarized:
+        description: >-
+          'true' when the build was Developer ID signed and notarized, so the
+          release notes can say whether the first launch needs a workaround.
+        value: ${{ jobs.build.outputs.notarized }}
   workflow_dispatch:
     inputs:
       version:
@@ -70,6 +75,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       archive: ${{ steps.archive.outputs.archive }}
+      notarized: ${{ steps.build.outputs.notarized }}
     # Hoisted to the job so the `if:` conditions below can see them. A step-level
     # `env:` is not in scope for that step's own `if:`, which is a quiet way to
     # write a gate that never fires.
@@ -103,10 +109,11 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Agent version: ${VERSION}"
 
-      # ── Apple signing (optional) ───────────────────────────────────────
-      # Decision D1: the app ships ad-hoc signed. These steps are present but
-      # gated, so adding the secrets later switches on real signing and
-      # notarization with no rewrite of this file.
+      # ── Apple signing ──────────────────────────────────────────────────
+      # Gated on the secrets, so a fork or a pull request without them still
+      # builds, ad-hoc signed. With APPLE_CERTIFICATE present, build.sh finds
+      # the imported Developer ID identity on its own; APPLE_SIGNING_IDENTITY
+      # is only needed to pick one when the .p12 holds several.
       - name: Import the Developer ID certificate
         if: env.APPLE_CERTIFICATE != ''
         env:
@@ -120,22 +127,46 @@ jobs:
           echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
             -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          # The G2 intermediate that issued the certificate. A runner image is
+          # not guaranteed to carry it, and without it codesign cannot build the
+          # chain to Apple's root.
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" \
+            https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$PASSWORD" "$KEYCHAIN"
           security list-keychain -d user -s "$KEYCHAIN" login.keychain
           rm -f "$RUNNER_TEMP/cert.p12"
 
       # ── Build ──────────────────────────────────────────────────────────
+      # Notarization happens inside build.sh, not in a step of its own, so a
+      # release build here and `build.sh --notarize` on a Mac are the same
+      # thing. It runs only for a release: every submission waits on Apple,
+      # and a pull request build is never downloaded by anyone but its author.
       - name: Build the app
+        id: build
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          RELEASE: ${{ inputs.release }}
           # Embedding the public key is what lets a build install its own
           # updates. Without the secret the app reports updates and declines to
           # install them, which is the right way round.
           MCPGA_UPDATE_PUBLIC_KEY: ${{ secrets.MCPGA_UPDATE_PUBLIC_KEY }}
         run: |
+          NOTARIZE_FLAG=""
+          if [ "$RELEASE" = "true" ] && [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_ID" ]; then
+            NOTARIZE_FLAG="--notarize"
+          fi
+          # shellcheck disable=SC2086
           mcp-gateway-agent/macos/build.sh \
             --version "${{ steps.version.outputs.version }}" \
-            --universal --dmg
+            --universal --dmg $NOTARIZE_FLAG
+          if [ -n "$NOTARIZE_FLAG" ]; then
+            echo "notarized=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notarized=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # `lipo` lists slices in the order they were combined, not a fixed one.
       # The old check grepped `-info` output for the literal string
@@ -151,23 +182,10 @@ jobs:
               || { echo "::error::the binary has no $want slice (found: $ARCHS)"; exit 1; }
           done
 
-      - name: Notarize
-        if: env.APPLE_ID != '' && inputs.release
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          DMG="mcp-gateway-agent/build/MCP-Gateway-Agent-${VERSION}.dmg"
-          xcrun notarytool submit "$DMG" \
-            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" --wait
-          xcrun stapler staple "$DMG"
-
       # ── Update archive ─────────────────────────────────────────────────
       # The updater replaces the bundle in place from a .app.tar.gz; the .dmg is
-      # only for a first install.
+      # only for a first install. On a notarized build the bundle tarred here
+      # already carries its stapled ticket.
       - name: Install the signing dependency
         if: env.SIGNING_KEY != ''
         run: python3 -m pip install --quiet --break-system-packages cryptography

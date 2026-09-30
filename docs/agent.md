@@ -18,10 +18,14 @@ Download `MCP-Gateway-Agent-<version>.dmg` from the
 [latest agent release](https://github.com/SidPad03/unified-mcp-gateway/releases),
 open it, and drag the app to Applications.
 
-> **First launch needs one extra step.** The app is ad-hoc signed rather than
-> notarized, so Gatekeeper will say it "cannot be opened". **Right-click the app
-> and choose Open**, then confirm — macOS remembers the choice and will not ask
-> again. From the command line the equivalent is:
+Releases are signed with a Developer ID and notarized by Apple, so the first
+launch needs nothing special.
+
+> **An ad-hoc build needs one extra step.** Older releases, and builds made
+> without a Developer ID certificate, are not notarized, so Gatekeeper will say
+> the app "cannot be opened". **Right-click the app and choose Open**, then
+> confirm — macOS remembers the choice and will not ask again. From the command
+> line the equivalent is:
 >
 > ```bash
 > xattr -dr com.apple.quarantine "/Applications/MCP Gateway Agent.app"
@@ -191,7 +195,7 @@ That is deliberate: it never installs something it cannot verify.
 
 | Symptom | Cause |
 |---------|-------|
-| "The application is damaged" on first launch | Gatekeeper quarantine. Right-click → Open, or `xattr -dr com.apple.quarantine` — see [Install](#install) |
+| "The application is damaged" on first launch | An ad-hoc build under Gatekeeper quarantine. Right-click → Open, or `xattr -dr com.apple.quarantine` — see [Install](#install) |
 | A backend says **Failed** with "No such file or directory" | The command is not on your login shell's `PATH`. The app reads `PATH` from your login shell at launch, so a tool installed since then needs the app restarted |
 | A backend keeps crashing | Open **Logs** and filter to that backend — its stderr is there, which is usually enough to see why |
 | An HTTP server from the Go, Python or TypeScript SDK fails with `400`, `406` or "invalid during session initialization" | Fixed: the app now sends the `Accept` header these servers require and joins the session they open. Update the app |
@@ -199,7 +203,7 @@ That is deliberate: it never installs something it cannot verify.
 | Repeated auth failures | The API key was revoked in the dashboard. Sign out and sign in again |
 | TLS errors against a self-signed certificate | **Settings → Gateway → Skip TLS certificate verification.** Only on a network you trust |
 | Reconnect loop | The gateway is accepting then closing the socket; check the server logs and the reverse proxy's WebSocket configuration |
-| macOS asks about Keychain access after an update | Expected with ad-hoc signing — the signature changes with every build. Choose **Always Allow** |
+| macOS asks about Keychain access after an update | Expected once when moving from an ad-hoc build to a Developer ID one, and after every update of an ad-hoc build — its signature changes with every build. Choose **Always Allow** |
 
 Everything the agent logs, including each backend's stderr, is on the **Logs**
 page. Secrets are redacted there using the same rules as the server's audit
